@@ -1,0 +1,9 @@
+# build output (пересобирается)
+bin/
+obj/
+.vs/
+*.user
+# портативный self-contained бандл (~79 МБ) — артефакт, пересобирается: dotnet publish -r win-x64 --self-contained
+dist/
+# конфиг с секретами (пароль БД, токен LLM) — НЕ коммитить; задаётся через Бэк-офис
+config.json

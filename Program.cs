@@ -1,0 +1,847 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Runtime.Loader;
+using System.Text;
+using System.Text.Json;
+using Npgsql;
+
+// ARMGov standalone dashboard (MVP, redesign) — read-only viewer over DRX DB.
+// 3 процесса: поручения / обращения-рассмотрение / НПА(тематика). Direct PG, SELECT-only.
+class Program
+{
+    // Вендоренные сборки (Npgsql + Microsoft.Extensions.Logging.Abstractions) лежат рядом с exe —
+    // резолвер грузит их из папки приложения, привязки к стенду нет (портируется на любую машину).
+    static readonly string Bin = AppContext.BaseDirectory;
+    // Подключения и параметры берутся из config.json рядом с exe (редактируются в разделе «Бэк-офис»).
+    // Секретов (пароль БД, токен LLM) в исходнике НЕТ — они только в config.json (в .gitignore) или в env.
+    // Env-override (удобно для Docker): ARMGOV_PREFIX / ARMGOV_DB_PASSWORD / ARMGOV_LLM_TOKEN.
+    static AppConfig Conf = new();
+    static string Cs => $"Host={Conf.Db.Host};Port={Conf.Db.Port};Database={Conf.Db.Database};Username={Conf.Db.Username};Password={Conf.Db.Password};SSL Mode=Prefer;Trust Server Certificate=true;Timeout=15;Command Timeout=120";
+    static string Prefix => string.IsNullOrWhiteSpace(Conf.Prefix) ? "http://localhost:5080/" : Conf.Prefix;
+    static string RxBase => Conf.RxBase;
+    static string LlmUrl => Conf.Llm.Url;
+    static string LlmModel => Conf.Llm.Model;
+    static string LlmToken => Conf.Llm.Token;
+    static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromSeconds(150) };
+
+    // ---------- конфигурация ----------
+    public class AppConfig
+    {
+        public string Prefix { get; set; } = "http://localhost:5080/";
+        public string RxBase { get; set; } = "http://172.16.96.98/Client/#/";
+        public DbCfg Db { get; set; } = new();
+        public LlmCfg Llm { get; set; } = new();
+    }
+    public class DbCfg { public string Host { get; set; } = "192.168.52.18"; public string Port { get; set; } = "5432"; public string Database { get; set; } = "DirRX412OGVGenAI"; public string Username { get; set; } = "admin"; public string Password { get; set; } = ""; }
+    public class LlmCfg { public string Url { get; set; } = "https://llm.ario.directum360.ru/v1/chat/completions"; public string Model { get; set; } = "Qwen/Qwen3.6-35B-A3B"; public string Token { get; set; } = ""; }
+    static string CfgPath => Path.Combine(AppContext.BaseDirectory, "config.json");
+    static readonly JsonSerializerOptions JsonCfg = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
+    static void LoadConfig()
+    {
+        var c = new AppConfig();
+        try { if (File.Exists(CfgPath)) c = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(CfgPath), JsonCfg) ?? new(); }
+        catch (Exception ex) { Console.WriteLine("config.json load error: " + ex.Message); }
+        var p = Environment.GetEnvironmentVariable("ARMGOV_PREFIX"); if (!string.IsNullOrEmpty(p)) c.Prefix = p;
+        var pw = Environment.GetEnvironmentVariable("ARMGOV_DB_PASSWORD"); if (!string.IsNullOrEmpty(pw)) c.Db.Password = pw;
+        var tk = Environment.GetEnvironmentVariable("ARMGOV_LLM_TOKEN"); if (!string.IsNullOrEmpty(tk)) c.Llm.Token = tk;
+        Conf = c;
+    }
+    static void SaveConfig() => File.WriteAllText(CfgPath, JsonSerializer.Serialize(Conf, JsonCfg));
+
+    // Определения процессов: ключ -> (имя, SQL-условие отбора задач t.*)
+    class Proc { public string Key, Name, Where; }
+    static readonly List<Proc> Procs = new()
+    {
+        new Proc{ Key="poruchenia", Name="Поручения", Where="t.discriminator='c290b098-12c7-487d-bb38-73e2c98f9789'" },
+        new Proc{ Key="appeals", Name="Обращения граждан", Where="t.discriminator='4ef03457-8b42-4239-a3c5-d4d05e61f0b6'" },
+        new Proc{ Key="npa", Name="НПА (регламентирующие)", Where="(t.subject ilike '%НПА%' or t.subject ilike '%регламент%' or t.subject ilike '%правов%акт%' or t.subject ilike '%нормативн%')" },
+    };
+    static Proc P(string key) => Procs.FirstOrDefault(p => p.Key == key);
+
+    static readonly Dictionary<string, string> StageNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["d238ef51-607e-46a5-b86a-ede4482f7f19"] = "Исполнение",
+        ["ab2c30c0-072f-4595-ac10-312f59223cda"] = "Контроль / приёмка",
+        ["ef79164b-2ce7-451b-9ba6-eb59dd9a4a74"] = "Доработка",
+        ["50e39d87-4fc6-4847-8bad-20847b9ba020"] = "Прочее",
+    };
+    static string StageName(string disc, int idx) =>
+        disc == null ? "—" : (StageNames.TryGetValue(disc, out var n) ? n : "Этап " + (idx + 1));
+
+    static void Main()
+    {
+        AssemblyLoadContext.Default.Resolving += (ctx, name) =>
+        {
+            var p = Path.Combine(Bin, name.Name + ".dll");
+            return File.Exists(p) ? ctx.LoadFromAssemblyPath(p) : null;
+        };
+        LoadConfig();
+        Serve();
+    }
+
+    static void Serve()
+    {
+        var l = new HttpListener();
+        l.Prefixes.Add(Prefix);
+        l.Start();
+        Console.WriteLine("ARMGov dashboard -> " + Prefix);
+        while (true)
+        {
+            HttpListenerContext ctx = null;
+            try { ctx = l.GetContext(); } catch { break; }
+            try { Handle(ctx); }
+            catch (Exception ex) { try { Write(ctx, 500, "application/json", "{\"error\":" + JsonSerializer.Serialize(ex.Message) + "}"); } catch { } }
+        }
+    }
+
+    static void Handle(HttpListenerContext ctx)
+    {
+        var path = ctx.Request.Url.AbsolutePath.TrimEnd('/');
+        var q = ctx.Request.QueryString;
+        switch (path)
+        {
+            case "/api/processes": J(ctx, BuildProcesses()); return;
+            case "/api/overview": J(ctx, BuildOverview()); return;
+            case "/api/process": J(ctx, BuildProcess(q["key"])); return;
+            case "/api/process/stuck": J(ctx, BuildStuck(q["key"])); return;
+            case "/api/process/workload": J(ctx, BuildWorkload(q["key"])); return;
+            case "/api/process/departments": J(ctx, BuildDepartments(q["key"])); return;
+            case "/api/process/dept-tasks": J(ctx, BuildDeptTasks(q["key"], q["dept"])); return;
+            case "/api/task":
+                if (long.TryParse(q["id"], out var tid)) { J(ctx, BuildTask(tid)); return; }
+                Write(ctx, 400, "application/json", "{\"error\":\"bad id\"}"); return;
+            case "/api/performer":
+                if (long.TryParse(q["id"], out var pid)) { J(ctx, BuildPerformer(pid, q["key"])); return; }
+                Write(ctx, 400, "application/json", "{\"error\":\"bad id\"}"); return;
+            case "/api/ai/summary": J(ctx, BuildAiSummary(q["force"] == "1")); return;
+            case "/api/ai/chat": J(ctx, BuildAiChat(ReadBody(ctx))); return;
+            case "/api/config":
+                if (ctx.Request.HttpMethod == "POST") { J(ctx, SaveConfigFromBody(ReadBody(ctx))); return; }
+                J(ctx, GetConfigMasked()); return;
+            case "/api/config/test": J(ctx, TestConfig()); return;
+        }
+        if (path == "" || path == "/index.html")
+        {
+            var html = Path.Combine(AppContext.BaseDirectory, "index.html");
+            if (File.Exists(html)) Write(ctx, 200, "text/html; charset=utf-8", File.ReadAllText(html, Encoding.UTF8));
+            else Write(ctx, 404, "text/plain", "index.html not found");
+            return;
+        }
+        // static (tokens.css / styles.css и пр.)
+        var fname = path.TrimStart('/');
+        if (fname.Length > 0 && !fname.Contains(".."))
+        {
+            var fp = Path.Combine(AppContext.BaseDirectory, fname.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(fp))
+            {
+                var ct = fname.EndsWith(".css") ? "text/css" : fname.EndsWith(".svg") ? "image/svg+xml" : fname.EndsWith(".js") ? "application/javascript" : "application/octet-stream";
+                Write(ctx, 200, ct + "; charset=utf-8", File.ReadAllText(fp, Encoding.UTF8)); return;
+            }
+        }
+        Write(ctx, 404, "text/plain", "not found");
+    }
+
+    static void J(HttpListenerContext ctx, object o) => Write(ctx, 200, "application/json; charset=utf-8", JsonSerializer.Serialize(o));
+    static void Write(HttpListenerContext ctx, int code, string ct, string body)
+    {
+        var b = Encoding.UTF8.GetBytes(body);
+        ctx.Response.StatusCode = code; ctx.Response.ContentType = ct;
+        ctx.Response.AddHeader("Cache-Control", "no-store");
+        ctx.Response.ContentLength64 = b.Length;
+        ctx.Response.OutputStream.Write(b, 0, b.Length); ctx.Response.OutputStream.Close();
+    }
+
+    static string Sev(int h) => h >= 75 ? "green" : (h >= 50 ? "amber" : "red");
+
+    // ---------- общие куски SQL ----------
+    static string AsgJoin(Proc p) => $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}";
+
+    // ---------- /api/processes ----------
+    static object BuildProcesses()
+    {
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        var list = new List<object>();
+        foreach (var p in Procs)
+        {
+            long total = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where}");
+            long inwork = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where} and t.status::text='InProcess'");
+            long completed = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where} and t.status::text='Completed'");
+            long activeAsg = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='InProcess'");
+            long overdueAsg = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='InProcess' and a.deadline is not null and a.deadline<now()");
+            int health = activeAsg > 0 ? (int)Math.Round(100.0 * (1.0 - (double)overdueAsg / activeAsg)) : 100;
+            var tr = Trend(c, p);
+            int redM = tr.AsEnumerable().Reverse().Take(4).Count(o => { var d = (dynamic)o; int t2 = (int)d.ontime + (int)d.overdue; return t2 > 0 && (100.0 * (int)d.ontime / t2) < 50; });
+            list.Add(new { key = p.Key, name = p.Name, total, inwork, completed, overdue = overdueAsg, health, severity = Sev(health), chronic = redM >= 3, trend = tr });
+        }
+        return new { generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), processes = list };
+    }
+
+    // ---------- /api/overview (Уровень 0 — стратегический обзор + машиночитаемый агрегат) ----------
+    static object BuildOverview()
+    {
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        long regOnTime = 0, regBreached = 0, regLong = 0;
+        var procs = new List<object>();
+        var bottlenecks = new List<dynamic>();   // ранжир (процесс, этап) по медиане возраста активных
+        var burning = new List<dynamic>();
+
+        foreach (var p in Procs)
+        {
+            // базовые счётчики
+            long total = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where}");
+            long inwork = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where} and t.status::text='InProcess'");
+            long overdueAsg = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='InProcess' and a.deadline is not null and a.deadline<now()");
+            long activeAsg = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='InProcess'");
+            int health = activeAsg > 0 ? (int)Math.Round(100.0 * (1.0 - (double)overdueAsg / activeAsg)) : 100;
+
+            // пропускная способность (как дисциплина в тренде): доля «в срок» среди всех заданий,
+            // чей норматив уже наступил (завершено в срок ÷ (в срок + просрочено, включая активные просроченные)).
+            long onTime = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='Completed' and a.completed is not null and a.deadline is not null and a.completed<=a.deadline");
+            long breached = ScalarL(c, $"select count(*) {AsgJoin(p)} and ((a.status::text='Completed' and a.completed is not null and a.deadline is not null and a.completed>a.deadline) or (a.status::text='InProcess' and a.deadline is not null and a.deadline<now()))");
+            long rated = onTime + breached;
+            int thrPct = rated > 0 ? (int)Math.Round(100.0 * onTime / rated) : 100;
+
+            // долгострои > 3 дней
+            long lng = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='InProcess' and a.deadline is not null and a.deadline < now() - interval '3 days'");
+
+            // узкое горлышко процесса: этап с макс. медианой возраста активных заданий
+            string bnStage = null; double bnMed = 0; long bnQueue = 0;
+            using (var cmd = new NpgsqlCommand(
+                "select a.discriminator::text disc, " +
+                "percentile_cont(0.5) within group (order by extract(epoch from (now()-a.created))/86400.0) med, " +
+                "count(*) queue " +
+                $"{AsgJoin(p)} and a.status::text='InProcess' group by a.discriminator order by med desc nulls last", c))
+            using (var r = cmd.ExecuteReader())
+            {
+                int idx = 0;
+                while (r.Read())
+                {
+                    var disc = r.IsDBNull(0) ? null : r.GetString(0);
+                    double med = r.IsDBNull(1) ? 0 : Math.Round(r.GetDouble(1), 1);
+                    long queue = r.GetInt64(2);
+                    string sname = StageName(disc, idx++);
+                    if (bnStage == null) { bnStage = sname; bnMed = med; bnQueue = queue; }
+                    bottlenecks.Add(new { processKey = p.Key, process = p.Name, stage = sname, medianDays = med, queue });
+                }
+            }
+
+            var trend = Trend(c, p);
+            procs.Add(new
+            {
+                key = p.Key, name = p.Name, total, inwork, health, severity = Sev(health),
+                throughputPct = thrPct, overdue = overdueAsg, longRunners = lng,
+                bottleneckStage = bnStage ?? "—", bottleneckMedianDays = bnMed, trend
+            });
+            burning.Add(new { processKey = p.Key, process = p.Name, severity = Sev(health), overdue = overdueAsg, health, thrPct, bnStage = bnStage ?? "—" });
+
+            regOnTime += onTime; regBreached += breached; regLong += lng;
+        }
+
+        long regRated = regOnTime + regBreached;
+        int regThr = regRated > 0 ? (int)Math.Round(100.0 * regOnTime / regRated) : 100;
+        var bnTop = bottlenecks.OrderByDescending(b => (double)b.medianDays).Take(5).ToList();
+        var top1 = bnTop.Count > 0 ? bnTop[0] : null;
+
+        // «что горит» — сортировка по тяжести (severity red>amber>green, затем по числу просроченных)
+        Func<string, int> sevRank = s => s == "red" ? 0 : (s == "amber" ? 1 : 2);
+        var whatsBurning = burning
+            .OrderBy(b => sevRank((string)b.severity)).ThenByDescending(b => (long)b.overdue)
+            .Select(b => (object)new
+            {
+                processKey = (string)b.processKey,
+                process = (string)b.process,
+                severity = (string)b.severity,
+                headline = ((long)b.overdue > 0 ? (long)b.overdue + " просрочено · " : "") + "узкое: " + (string)b.bnStage + (((int)b.thrPct) < 50 ? " · пропускная " + (int)b.thrPct + "%" : "")
+            }).ToList();
+
+        return new
+        {
+            generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+            region = new
+            {
+                throughput = new { pct = regThr, onTimeTotal = regOnTime, ratedTotal = regRated, color = Sev(regThr) },
+                bottleneck = top1 == null ? null : new { process = (string)top1.process, processKey = (string)top1.processKey, stage = (string)top1.stage, medianDays = (double)top1.medianDays, queue = (long)top1.queue },
+                longRunners = new { count = regLong, thresholdDays = 3 }
+            },
+            bottlenecksTop = bnTop.Select(b => (object)new { processKey = (string)b.processKey, process = (string)b.process, stage = (string)b.stage, medianDays = (double)b.medianDays, queue = (long)b.queue }).ToList(),
+            whatsBurning,
+            processes = procs
+        };
+    }
+
+    static List<object> Trend(NpgsqlConnection c, Proc p)
+    {
+        var pts = new List<object>();
+        using var cmd = new NpgsqlCommand(
+            "select to_char(date_trunc('month',a.deadline),'YYYY-MM') m, " +
+            "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline) ontime, " +
+            "count(*) filter (where (a.status::text='Completed' and a.completed is not null and a.completed>a.deadline) or (a.status::text='InProcess' and a.deadline<now())) overdue " +
+            $"{AsgJoin(p)} and a.deadline is not null group by 1 order by 1", c);
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) pts.Add(new { month = r.GetString(0), ontime = (int)r.GetInt64(1), overdue = (int)r.GetInt64(2) });
+        return pts;
+    }
+
+    // ---------- /api/process ----------
+    static object BuildProcess(string key)
+    {
+        var p = P(key); if (p == null) return new { error = "unknown process" };
+        using var c = new NpgsqlConnection(Cs); c.Open();
+
+        long total = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where}");
+        long inwork = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where} and t.status::text='InProcess'");
+        long completed = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where} and t.status::text='Completed'");
+        long overdueAsg = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='InProcess' and a.deadline is not null and a.deadline<now()");
+        double avgCycle = ScalarD(c, $"select coalesce(avg(extract(epoch from (coalesce(a.completed,now())-a.created))/86400.0),0) {AsgJoin(p)}");
+        double p95Route = ScalarD(c, $"select coalesce(percentile_cont(0.95) within group (order by extract(epoch from (coalesce(a.completed,now())-a.created))/86400.0),0) {AsgJoin(p)}");
+
+        // Этапы: P50/P95 (по завершённым) + active/overdue/atRisk (по InProcess vs P50/P95)
+        var stages = new List<dynamic>();
+        using (var cmd = new NpgsqlCommand(
+            "select a.discriminator::text disc, " +
+            "percentile_cont(0.5) within group (order by extract(epoch from (a.completed-a.created))/86400.0) filter (where a.status::text='Completed' and a.completed is not null) p50, " +
+            "percentile_cont(0.95) within group (order by extract(epoch from (a.completed-a.created))/86400.0) filter (where a.status::text='Completed' and a.completed is not null) p95, " +
+            "count(*) filter (where a.status::text='InProcess') active, " +
+            "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline<now()) overdue, " +
+            "count(*) filter (where a.status::text='Completed') done, " +
+            "count(*) total, min(a.created) seq " +
+            $"{AsgJoin(p)} group by a.discriminator order by min(a.created)", c))
+        using (var r = cmd.ExecuteReader())
+        {
+            int i = 0;
+            while (r.Read())
+            {
+                stages.Add(new
+                {
+                    disc = r.IsDBNull(0) ? null : r.GetString(0),
+                    name = StageName(r.IsDBNull(0) ? null : r.GetString(0), i++),
+                    p50 = r.IsDBNull(1) ? 0.0 : Math.Round(r.GetDouble(1), 1),
+                    p95 = r.IsDBNull(2) ? 0.0 : Math.Round(r.GetDouble(2), 1),
+                    active = (int)r.GetInt64(3),
+                    overdue = (int)r.GetInt64(4),
+                    done = (int)r.GetInt64(5),
+                    total = (int)r.GetInt64(6)
+                });
+            }
+        }
+
+        // Гистограмма длительности маршрута (по задачам: max(completed|now)-min(created))
+        var hist = RouteHistogram(c, p);
+
+        // Deadline-risk: активные задания по близости срока (интуитивно для руководителя):
+        //   просрочено = срок прошёл; критично = срок ≤3 дн; под риском = срок ≤7 дн; в норме = дальше/без срока.
+        int rNorm = 0, rRisk = 0, rCrit = 0, rOver = 0;
+        using (var cmd = new NpgsqlCommand(
+            "select a.deadline " +
+            $"{AsgJoin(p)} and a.status::text='InProcess'", c))
+        using (var r = cmd.ExecuteReader())
+        {
+            var now = DateTime.Now;
+            while (r.Read())
+            {
+                if (r.IsDBNull(0)) { rNorm++; continue; }
+                double days = (r.GetDateTime(0) - now).TotalDays;
+                if (days < 0) rOver++;
+                else if (days <= 3) rCrit++;
+                else if (days <= 7) rRisk++;
+                else rNorm++;
+            }
+        }
+
+        // Топы исполнителей: негативные (просрочка) и позитивные (вовремя завершено)
+        var topNeg = TopPerformers(c, p, true);
+        var topPos = TopPerformers(c, p, false);
+
+        // ----- A. Хронические отклонения: индекс состояния по месяцам + флаг хронического -----
+        var trend = Trend(c, p);
+        var healthTrend = trend.Select(o => {
+            var d = (dynamic)o; int on = (int)d.ontime, ov = (int)d.overdue, tot = on + ov;
+            int hh = tot > 0 ? (int)Math.Round(100.0 * on / tot) : 100;
+            return (object)new { month = (string)d.month, health = hh, severity = Sev(hh) };
+        }).ToList();
+        int redMonths = healthTrend.Reverse<object>().Take(4).Count(o => ((dynamic)o).health < 50);
+        bool chronic = redMonths >= 3;
+
+        // ----- B. Возвраты + избыточность маршрута -----
+        long rwTotal = 0, rwTasks = 0;
+        using (var cmd = new NpgsqlCommand(
+            "select count(*) total, count(*) filter (where rep>1) rw from (" +
+            "select t.id, coalesce(max(c.cnt),1) rep from sungero_wf_task t " +
+            "join (select task, discriminator, count(*) cnt from sungero_wf_assignment group by task, discriminator) c on c.task=t.id " +
+            $"where {p.Where} group by t.id) z", c))
+        using (var r = cmd.ExecuteReader()) { if (r.Read()) { rwTotal = r.GetInt64(0); rwTasks = r.GetInt64(1); } }
+        int reworkPct = rwTotal > 0 ? (int)Math.Round(100.0 * rwTasks / rwTotal) : 0;
+
+        var variants = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "select route, count(*) cnt from (" +
+            "select a.task, string_agg(a.discriminator::text,'|' order by a.created) route " +
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task) v " +
+            "group by route order by cnt desc limit 6", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read())
+            {
+                var discs = (r.IsDBNull(0) ? "" : r.GetString(0)).Split('|');
+                var names = discs.Select((dv, ix) => StageName(dv, ix)).ToArray();
+                variants.Add(new { route = string.Join(" → ", names), count = (int)r.GetInt64(1) });
+            }
+        long repeatPerf = ScalarL(c,
+            "select count(*) from (select a.task, a.performer from sungero_wf_assignment a " +
+            $"join sungero_wf_task t on t.id=a.task where {p.Where} and a.performer is not null " +
+            "group by a.task, a.performer having count(distinct a.discriminator)>1) z");
+
+        // ----- D. Содержательность согласования: время до решения + формальные (<1 дня) -----
+        long fTotal = 0, fFormal = 0; double fAvgH = 0;
+        using (var cmd = new NpgsqlCommand(
+            "select count(*) total, count(*) filter (where extract(epoch from (a.completed-a.created))/3600.0 < 24) formal, " +
+            "coalesce(avg(extract(epoch from (a.completed-a.created))/3600.0),0) avgh " +
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} and a.status::text='Completed' and a.completed is not null", c))
+        using (var r = cmd.ExecuteReader()) { if (r.Read()) { fTotal = r.GetInt64(0); fFormal = r.GetInt64(1); fAvgH = r.GetDouble(2); } }
+        int formalPct = fTotal > 0 ? (int)Math.Round(100.0 * fFormal / fTotal) : 0;
+
+        // ----- B. Карта возвратов («битва правок»): кто инициирует Доработку -----
+        const string DorabotkaDisc = "ef79164b-2ce7-451b-9ba6-eb59dd9a4a74";
+        var returnAuthors = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "select a.author, coalesce(r.name::text,'(неизвестно)'), count(*) cnt " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            "left join sungero_core_recipient r on r.id=a.author " +
+            $"where {p.Where} and a.discriminator='{DorabotkaDisc}' and a.author is not null " +
+            "group by a.author, r.name order by cnt desc limit 8", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) returnAuthors.Add(new { id = r.GetInt64(0), name = r.GetString(1), value = (int)r.GetInt64(2) });
+        long returnsTotal = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.discriminator='{DorabotkaDisc}'");
+
+        // ----- B. Время и качество решения: медиана цикла + open→decide (MarkRead) + «пустые» -----
+        double decMedian = ScalarD(c, $"select coalesce(percentile_cont(0.5) within group (order by extract(epoch from (a.completed-a.created))/3600.0),0) from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} and a.status::text='Completed' and a.completed is not null");
+        double openDecMedian = 0; long openDecN = 0, instant = 0;
+        using (var cmd = new NpgsqlCommand(
+            "select coalesce(percentile_cont(0.5) within group (order by mins),0) med, count(*) n, count(*) filter (where mins < 5) inst from (" +
+            "select extract(epoch from (a.completed - mr.first_read))/60.0 mins " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            "join (select entityid, min(historydate) first_read from sungero_wf_workflowhistory where operation='MarkRead' group by entityid) mr on mr.entityid=a.id " +
+            $"where {p.Where} and a.status::text='Completed' and a.completed is not null and mr.first_read<=a.completed) z", c))
+        using (var r = cmd.ExecuteReader()) if (r.Read()) { openDecMedian = Math.Round(r.GetDouble(0), 1); openDecN = r.GetInt64(1); instant = r.GetInt64(2); }
+
+        return new
+        {
+            key = p.Key, name = p.Name, chronic,
+            kpi = new { total, inwork, completed, overdue = overdueAsg, avgCycleDays = Math.Round(avgCycle, 1), p95RouteDays = Math.Round(p95Route, 1) },
+            stages = stages.Select(s => new { s.name, s.p50, s.p95, s.active, s.overdue, s.done, s.total }).ToList(),
+            routeHist = hist,
+            trend, healthTrend,
+            risk = new { normal = rNorm, atRisk = rRisk, critical = rCrit, overdue = rOver },
+            rework = new { tasksTotal = rwTotal, tasksRework = rwTasks, pct = reworkPct },
+            variants, repeatPerformer = repeatPerf,
+            formal = new { completedTotal = fTotal, formalCount = fFormal, formalPct, avgDecisionHours = Math.Round(fAvgH, 1) },
+            returnsTotal, returnAuthors,
+            decision = new { medianHours = Math.Round(decMedian, 1), openToDecideMedianMin = openDecMedian, sample = openDecN, instantCount = instant, instantThresholdMin = 5 },
+            topNeg, topPos
+        };
+    }
+
+    static List<object> RouteHistogram(NpgsqlConnection c, Proc p)
+    {
+        // длительность задачи = max(completed|now)-min(created) по её заданиям, в днях; корзины
+        var buckets = new (string label, int lo, int hi)[]
+        { ("0–7", 0, 7), ("8–30", 8, 30), ("31–90", 31, 90), ("91–180", 91, 180), ("180+", 181, int.MaxValue) };
+        var counts = new int[buckets.Length];
+        using var cmd = new NpgsqlCommand(
+            "select extract(epoch from (max(coalesce(a.completed,now()))-min(a.created)))/86400.0 dur " +
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task", c);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            double d = r.IsDBNull(0) ? 0 : r.GetDouble(0);
+            for (int i = 0; i < buckets.Length; i++) if (d >= buckets[i].lo && d <= buckets[i].hi) { counts[i]++; break; }
+        }
+        var res = new List<object>();
+        for (int i = 0; i < buckets.Length; i++) res.Add(new { bucket = buckets[i].label + " дн", count = counts[i] });
+        return res;
+    }
+
+    static List<object> TopPerformers(NpgsqlConnection c, Proc p, bool negative)
+    {
+        var list = new List<object>();
+        string metric = negative
+            ? "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline<now())"
+            : "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline)";
+        using var cmd = new NpgsqlCommand(
+            $"select a.performer, coalesce(r.name,'(не назначен)'), {metric} val " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            $"left join sungero_core_recipient r on r.id=a.performer where {p.Where} " +
+            "group by a.performer, r.name having " + (negative
+                ? "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline<now())>0"
+                : "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline)>0") +
+            " order by val desc limit 5", c);
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) list.Add(new { id = r.IsDBNull(0) ? 0 : r.GetInt64(0), name = r.GetString(1), value = (int)r.GetInt64(2) });
+        return list;
+    }
+
+    // ---------- /api/process/stuck ----------
+    static object BuildStuck(string key)
+    {
+        var p = P(key); if (p == null) return new { error = "unknown process" };
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        var items = new List<object>();
+        // зависшие: InProcess, просрочено ИЛИ возраст велик; сортируем по возрасту
+        using var cmd = new NpgsqlCommand(
+            "select t.id, coalesce(t.subject,'(без темы)'), a.discriminator::text, coalesce(r.name,'(не назначен)'), " +
+            "a.deadline, extract(epoch from (now()-a.created))/86400.0 age " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            $"left join sungero_core_recipient r on r.id=a.performer where {p.Where} and a.status::text='InProcess' " +
+            "order by (a.deadline is not null and a.deadline<now()) desc, age desc limit 100", c);
+        using var r = cmd.ExecuteReader();
+        int i = 0;
+        while (r.Read())
+        {
+            DateTime? dl = r.IsDBNull(4) ? (DateTime?)null : r.GetDateTime(4);
+            double age = r.IsDBNull(5) ? 0 : r.GetDouble(5);
+            bool overdue = dl.HasValue && dl.Value < DateTime.Now;
+            items.Add(new
+            {
+                id = r.GetInt64(0),
+                subject = r.GetString(1),
+                stage = StageName(r.IsDBNull(2) ? null : r.GetString(2), i++),
+                performer = r.GetString(3),
+                deadline = dl?.ToString("yyyy-MM-dd"),
+                ageDays = (int)Math.Round(age),
+                overdueDays = overdue ? (int)Math.Round((DateTime.Now - dl.Value).TotalDays) : 0,
+                risk = overdue ? "overdue" : "inwork"
+            });
+        }
+        return new { count = items.Count, items };
+    }
+
+    // ---------- /api/process/workload (C. Загрузка исполнителей) ----------
+    static object BuildWorkload(string key)
+    {
+        var p = P(key); if (p == null) return new { error = "unknown process" };
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        var list = new List<dynamic>();
+        using (var cmd = new NpgsqlCommand(
+            "select a.performer, coalesce(r.name,'(не назначен)') as pname, " +
+            "count(*) filter (where a.status::text='InProcess') active, " +
+            "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline<now()) overdue, " +
+            "count(*) filter (where a.status::text='Completed') completed, " +
+            "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline) ontime, " +
+            "coalesce(avg(extract(epoch from (coalesce(a.completed,now())-a.created))/86400.0),0) avghold " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            "left join sungero_core_recipient r on r.id=a.performer " +
+            $"where {p.Where} and a.performer is not null group by a.performer, r.name", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read())
+                list.Add(new { id = r.GetInt64(0), name = r.GetString(1), active = (int)r.GetInt64(2), overdue = (int)r.GetInt64(3), completed = (int)r.GetInt64(4), ontime = (int)r.GetInt64(5), avgHold = Math.Round(r.GetDouble(6), 1) });
+        double avgActive = list.Count > 0 ? list.Average(x => (double)(int)x.active) : 0;
+        var items = list.Select(x => (object)new
+        {
+            id = (long)x.id, name = (string)x.name, active = (int)x.active, overdue = (int)x.overdue, completed = (int)x.completed,
+            ontime = (int)x.ontime,
+            onTimePct = ((int)x.completed > 0) ? (int)Math.Round(100.0 * (int)x.ontime / (int)x.completed) : -1,
+            avgHold = (double)x.avgHold,
+            overloaded = avgActive > 0 && (int)x.active > avgActive * 1.5
+        }).OrderByDescending(x => ((dynamic)x).active).Take(25).ToList();
+        return new { teamAvgActive = Math.Round(avgActive, 1), overloadedCount = items.Count(x => (bool)((dynamic)x).overloaded), items };
+    }
+
+    // ---------- /api/process/departments (распределение по подразделениям) ----------
+    // Задача относится к подразделению ПОСЛЕДНЕГО исполнителя (кто ведёт её сейчас).
+    static object BuildDepartments(string key)
+    {
+        var p = P(key); if (p == null) return new { error = "unknown process" };
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        var items = new List<object>();
+        string sql =
+            "with td as (select distinct on (a.task) a.task tid, coalesce(e.department_company_sungero,0) deptid, d.name::text dept " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            "left join sungero_core_recipient e on e.id=a.performer " +
+            "left join sungero_core_recipient d on d.id=e.department_company_sungero " +
+            $"where {p.Where} order by a.task, a.created desc), " +
+            "ov as (select a.task tid, " +
+            "max((a.status::text='InProcess' and a.deadline is not null and a.deadline<now())::int) isover, " +
+            "max((a.status::text='InProcess')::int) isactive " +
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task) " +
+            "select coalesce(td.dept,'(без подразделения)') dept, td.deptid, count(*) total, " +
+            "coalesce(sum(ov.isactive),0) inwork, coalesce(sum(ov.isover),0) overdue " +
+            "from td left join ov on ov.tid=td.tid group by td.dept, td.deptid order by total desc";
+        using var cmd = new NpgsqlCommand(sql, c);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            items.Add(new
+            {
+                dept = r.GetString(0),
+                deptId = r.GetInt64(1),
+                total = (int)r.GetInt64(2),
+                inwork = (int)r.GetInt64(3),
+                overdue = (int)r.GetInt64(4)
+            });
+        return new { items };
+    }
+
+    // ---------- /api/process/dept-tasks (поручения подразделения) ----------
+    static object BuildDeptTasks(string key, string deptStr)
+    {
+        var p = P(key); if (p == null) return new { error = "unknown process" };
+        long.TryParse(deptStr, out long deptId);
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        var items = new List<object>();
+        string sql =
+            "with td as (select distinct on (a.task) a.task tid, coalesce(e.department_company_sungero,0) deptid, " +
+            "coalesce(r.name,'(не назначен)') performer, a.deadline dl, a.status::text st, a.created cr " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            "left join sungero_core_recipient r on r.id=a.performer " +
+            "left join sungero_core_recipient e on e.id=a.performer " +
+            $"where {p.Where} order by a.task, a.created desc) " +
+            "select t.id, coalesce(t.subject,'(без темы)'), td.performer, td.dl, td.st, " +
+            "extract(epoch from (now()-td.cr))/86400.0 age " +
+            "from td join sungero_wf_task t on t.id=td.tid where td.deptid=@d " +
+            "order by case when td.st='InProcess' then 0 else 1 end, td.dl nulls last";
+        using var cmd = new NpgsqlCommand(sql, c);
+        cmd.Parameters.AddWithValue("d", deptId);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            DateTime? dl = r.IsDBNull(3) ? (DateTime?)null : r.GetDateTime(3);
+            string st = r.GetString(4);
+            double age = r.IsDBNull(5) ? 0 : r.GetDouble(5);
+            bool over = st == "InProcess" && dl.HasValue && dl.Value < DateTime.Now;
+            items.Add(new
+            {
+                id = r.GetInt64(0),
+                subject = r.GetString(1),
+                performer = r.GetString(2),
+                deadline = dl?.ToString("yyyy-MM-dd"),
+                status = st == "Completed" ? "done" : (over ? "overdue" : "inwork"),
+                ageDays = (int)Math.Round(age),
+                rxLink = RxBase + "Task/" + r.GetInt64(0)
+            });
+        }
+        return new { count = items.Count, items };
+    }
+
+    // ---------- /api/task ----------
+    static object BuildTask(long id)
+    {
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        object header = null;
+        using (var cmd = new NpgsqlCommand("select id, coalesce(subject,'(без темы)'), status::text, importance::text, created from sungero_wf_task where id=" + id, c))
+        using (var r = cmd.ExecuteReader())
+            if (r.Read()) header = new { id = r.GetInt64(0), subject = r.GetString(1), status = r.GetString(2), importance = r.IsDBNull(3) ? "" : r.GetString(3), created = r.IsDBNull(4) ? "" : r.GetDateTime(4).ToString("yyyy-MM-dd"), rxLink = RxBase + "Task/" + r.GetInt64(0) };
+        if (header == null) return new { error = "не найдено" };
+        var stages = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "select a.discriminator::text, coalesce(r.name,'(не назначен)'), a.status::text, a.created, a.deadline, a.completed " +
+            "from sungero_wf_assignment a left join sungero_core_recipient r on r.id=a.performer where a.task=" + id + " order by a.created asc", c))
+        using (var r = cmd.ExecuteReader())
+        {
+            int i = 0;
+            while (r.Read())
+            {
+                var st = r.GetString(2);
+                DateTime? cr = r.IsDBNull(3) ? (DateTime?)null : r.GetDateTime(3);
+                DateTime? dl = r.IsDBNull(4) ? (DateTime?)null : r.GetDateTime(4);
+                DateTime? cp = r.IsDBNull(5) ? (DateTime?)null : r.GetDateTime(5);
+                bool cur = st == "InProcess";
+                int dur = cr.HasValue ? (int)Math.Round(((cp ?? DateTime.Now) - cr.Value).TotalDays) : 0;
+                bool over = cur && dl.HasValue && dl.Value < DateTime.Now;
+                stages.Add(new { name = StageName(r.IsDBNull(0) ? null : r.GetString(0), i++), performer = r.GetString(1), status = st, started = cr?.ToString("yyyy-MM-dd"), deadline = dl?.ToString("yyyy-MM-dd"), completed = cp?.ToString("yyyy-MM-dd"), durationDays = dur, isCurrent = cur, overdue = over });
+            }
+        }
+        return new { header, stages };
+    }
+
+    // ---------- /api/performer ----------
+    static object BuildPerformer(long pid, string key)
+    {
+        var p = P(key);
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        string name = "(исполнитель)";
+        using (var cmd = new NpgsqlCommand("select name from sungero_core_recipient where id=" + pid, c)) { var o = cmd.ExecuteScalar(); if (o != null && !(o is DBNull)) name = o.ToString(); }
+        string where = p != null ? p.Where : "true";
+        var points = new List<object>(); int tOn = 0, tOver = 0;
+        using (var cmd = new NpgsqlCommand(
+            "select to_char(date_trunc('month',a.deadline),'YYYY-MM') m, " +
+            "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline) ontime, " +
+            "count(*) filter (where (a.status::text='Completed' and a.completed is not null and a.completed>a.deadline) or (a.status::text='InProcess' and a.deadline<now())) overdue " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            $"where {where} and a.performer={pid} and a.deadline is not null group by 1 order by 1", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) { int on = (int)r.GetInt64(1), ov = (int)r.GetInt64(2); tOn += on; tOver += ov; points.Add(new { month = r.GetString(0), ontime = on, overdue = ov }); }
+
+        // активные поручения исполнителя: что дольше всего в работе / просрочено (со ссылкой в RX)
+        var tasks = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "select t.id, coalesce(t.subject,'(без темы)'), a.discriminator::text, a.deadline, " +
+            "extract(epoch from (now()-a.created))/86400.0 age " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            $"where {where} and a.performer={pid} and a.status::text='InProcess' " +
+            "order by (a.deadline is not null and a.deadline<now()) desc, age desc limit 50", c))
+        using (var r = cmd.ExecuteReader())
+        {
+            int i = 0;
+            while (r.Read())
+            {
+                DateTime? dl = r.IsDBNull(3) ? (DateTime?)null : r.GetDateTime(3);
+                double age = r.IsDBNull(4) ? 0 : r.GetDouble(4);
+                bool over = dl.HasValue && dl.Value < DateTime.Now;
+                tasks.Add(new
+                {
+                    id = r.GetInt64(0),
+                    subject = r.GetString(1),
+                    stage = StageName(r.IsDBNull(2) ? null : r.GetString(2), i++),
+                    deadline = dl?.ToString("yyyy-MM-dd"),
+                    ageDays = (int)Math.Round(age),
+                    overdueDays = over ? (int)Math.Round((DateTime.Now - dl.Value).TotalDays) : 0,
+                    overdue = over,
+                    rxLink = RxBase + "Task/" + r.GetInt64(0)
+                });
+            }
+        }
+        return new { name, totalOntime = tOn, totalOverdue = tOver, points, tasks };
+    }
+
+    // ---------- Бэк-офис: конфигурация (адрес/пароль БД, адрес/токен модели) ----------
+    static object GetConfigMasked() => new
+    {
+        prefix = Conf.Prefix,
+        rxBase = Conf.RxBase,
+        db = new { Conf.Db.Host, Conf.Db.Port, Conf.Db.Database, Conf.Db.Username, hasPassword = !string.IsNullOrEmpty(Conf.Db.Password) },
+        llm = new { Conf.Llm.Url, Conf.Llm.Model, hasToken = !string.IsNullOrEmpty(Conf.Llm.Token) }
+    };
+    static object SaveConfigFromBody(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body); var r = doc.RootElement;
+            string S(JsonElement e, string name, string cur) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : cur;
+            Conf.Prefix = S(r, "prefix", Conf.Prefix);
+            Conf.RxBase = S(r, "rxBase", Conf.RxBase);
+            if (r.TryGetProperty("db", out var db))
+            {
+                Conf.Db.Host = S(db, "host", Conf.Db.Host); Conf.Db.Port = S(db, "port", Conf.Db.Port);
+                Conf.Db.Database = S(db, "database", Conf.Db.Database); Conf.Db.Username = S(db, "username", Conf.Db.Username);
+                var np = S(db, "password", ""); if (!string.IsNullOrEmpty(np)) Conf.Db.Password = np;   // пусто = не менять
+            }
+            if (r.TryGetProperty("llm", out var llm))
+            {
+                Conf.Llm.Url = S(llm, "url", Conf.Llm.Url); Conf.Llm.Model = S(llm, "model", Conf.Llm.Model);
+                var nt = S(llm, "token", ""); if (!string.IsNullOrEmpty(nt)) Conf.Llm.Token = nt;          // пусто = не менять
+            }
+            SaveConfig();
+            _sumCache = null; _bundleCache = null;   // сбросить кэши, чтобы подхватились новые настройки
+            return new { ok = true, note = "Сохранено в config.json. Смена адреса прослушивания (Prefix) применится после перезапуска; БД/модель — сразу.", config = GetConfigMasked() };
+        }
+        catch (Exception ex) { return new { ok = false, error = ex.Message }; }
+    }
+    static object TestConfig()
+    {
+        object dbres, llmres;
+        try { using var c = new NpgsqlConnection(Cs); c.Open(); using var cmd = new NpgsqlCommand("select 1", c); cmd.ExecuteScalar(); dbres = new { ok = true }; }
+        catch (Exception ex) { dbres = new { ok = false, error = ex.Message.Split('\n')[0] }; }
+        try { LlmChat(new object[] { new { role = "user", content = "ping" } }, 5, 0); llmres = new { ok = true }; }
+        catch (Exception ex) { llmres = new { ok = false, error = ex.Message.Split('\n')[0] }; }
+        return new { db = dbres, llm = llmres };
+    }
+
+    // ---------- C. LLM-аналитика + чат ----------
+    static string ReadBody(HttpListenerContext ctx)
+    {
+        using var sr = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8);
+        return sr.ReadToEnd();
+    }
+
+    // Вызов LLM (OpenAI chat/completions). messages: массив {role,content}. Бросает при ошибке.
+    static string LlmChat(object[] messages, int maxTokens, double temperature)
+    {
+        var body = new { model = LlmModel, messages, max_tokens = maxTokens, temperature };
+        using var req = new HttpRequestMessage(HttpMethod.Post, LlmUrl);
+        req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + LlmToken);
+        req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        using var resp = Http.Send(req);
+        var txt = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        if (!resp.IsSuccessStatusCode) throw new Exception("LLM HTTP " + (int)resp.StatusCode + ": " + Trunc(txt, 300));
+        using var doc = JsonDocument.Parse(txt);
+        return doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+    }
+    static string Trunc(string s, int n) => s != null && s.Length > n ? s.Substring(0, n) + "…" : s;
+
+    // Машиночитаемый агрегат всех метрик — общий контекст для сводки и чата.
+    static object BuildAiBundle()
+    {
+        var detail = new Dictionary<string, object>();
+        foreach (var p in Procs)
+            detail[p.Key] = new { process = BuildProcess(p.Key), workload = BuildWorkload(p.Key) };
+        return new { generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"), overview = BuildOverview(), detail };
+    }
+    static object _bundleCache; static DateTime _bundleAt;
+    static object GetBundleCached()
+    {
+        if (_bundleCache != null && (DateTime.Now - _bundleAt).TotalMinutes < 2) return _bundleCache;
+        _bundleCache = BuildAiBundle(); _bundleAt = DateTime.Now; return _bundleCache;
+    }
+
+    static object _sumCache; static DateTime _sumAt;
+    static object BuildAiSummary(bool force)
+    {
+        if (!force && _sumCache != null && (DateTime.Now - _sumAt).TotalMinutes < 10) return _sumCache;
+        var bundleJson = JsonSerializer.Serialize(GetBundleCached());
+        const string sys =
+            "Ты — старший аналитик аппарата руководителя региона. На основе JSON с метриками процессов " +
+            "(поручения, обращения граждан, НПА) дай краткую управленческую сводку для первого лица. " +
+            "Верни ровно три раздела с заголовками в отдельных строках: '1. На что обратить внимание', " +
+            "'2. Тренды', '3. Кто хуже всех справляется и вероятные причины'. В каждом разделе — маркированные " +
+            "пункты (через '- '), конкретно, с реальными цифрами из данных, без воды и без выдумок. " +
+            "Связывай причины: возвраты на доработку, формальные решения (закрыто за минуты), узкие горлышки, перегруз. " +
+            "Если данных мало — скажи об этом прямо. Отвечай по-русски.";
+        var messages = new object[]
+        {
+            new { role = "system", content = sys },
+            new { role = "user", content = "Данные процессов (JSON):\n" + bundleJson }
+        };
+        try
+        {
+            var text = LlmChat(messages, 1500, 0.3);
+            _sumCache = new { text, generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"), model = LlmModel };
+            _sumAt = DateTime.Now;
+            return _sumCache;
+        }
+        catch (Exception ex) { return new { error = ex.Message }; }
+    }
+
+    static object BuildAiChat(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return new { error = "пустой запрос" };
+        var msgs = new List<object>();
+        const string sys =
+            "Ты — ассистент-аналитик по процессам региона для руководителя. Отвечай ТОЛЬКО на основе " +
+            "предоставленного JSON с метриками (поручения, обращения граждан, НПА). Если в данных нет ответа — " +
+            "честно скажи, что данных нет. По-русски, кратко и по делу, с конкретными цифрами. Не выдумывай факты.";
+        var bundleJson = JsonSerializer.Serialize(GetBundleCached());
+        msgs.Add(new { role = "system", content = sys + "\n\nДанные (JSON):\n" + bundleJson });
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("messages", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                foreach (var m in arr.EnumerateArray())
+                {
+                    var role = m.TryGetProperty("role", out var rr) ? rr.GetString() : null;
+                    var content = m.TryGetProperty("content", out var cc) ? cc.GetString() : null;
+                    if ((role == "user" || role == "assistant") && !string.IsNullOrEmpty(content))
+                        msgs.Add(new { role, content });
+                }
+        }
+        catch (Exception ex) { return new { error = "bad request: " + ex.Message }; }
+        try { return new { reply = LlmChat(msgs.ToArray(), 1000, 0.4) }; }
+        catch (Exception ex) { return new { error = ex.Message }; }
+    }
+
+    // ---------- helpers ----------
+    static long ScalarL(NpgsqlConnection c, string sql) { using var cmd = new NpgsqlCommand(sql, c); var o = cmd.ExecuteScalar(); return (o == null || o is DBNull) ? 0 : Convert.ToInt64(o); }
+    static double ScalarD(NpgsqlConnection c, string sql) { using var cmd = new NpgsqlCommand(sql, c); var o = cmd.ExecuteScalar(); return (o == null || o is DBNull) ? 0 : Convert.ToDouble(o); }
+}

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>armgov-standalone</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <!-- Вендоренные сборки лежат в lib/ (скопированы из стенда, в репозитории) — -->
+  <!-- проект собирается на любой машине, DLL копируются рядом с exe (Private=true). -->
+  <ItemGroup>
+    <Reference Include="Npgsql">
+      <HintPath>lib\Npgsql.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.Extensions.Logging.Abstractions">
+      <HintPath>lib\Microsoft.Extensions.Logging.Abstractions.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="index.html" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="tokens.css" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="logo-directum.svg" CopyToOutputDirectory="PreserveNewest" />
+    <!-- config.json с секретами в .gitignore; копируется в вывод, если присутствует (на этой машине) -->
+    <None Include="config.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('config.json')" />
+  </ItemGroup>
+</Project>

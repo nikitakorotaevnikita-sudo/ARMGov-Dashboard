@@ -1,0 +1,8 @@
+bin/
+obj/
+dist/
+.git/
+.vs/
+# секреты в образ не кладём — передаём через env (см. Dockerfile/compose)
+config.json
+*.user

@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>АРМ руководителя — Аналитика процессов</title>
+<link rel="stylesheet" href="/tokens.css">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px}
+.app-header{position:fixed;top:0;left:0;right:0;height:var(--header-h);background:var(--header-bg);border-bottom:1px solid var(--header-border);display:flex;align-items:center;gap:16px;padding:0 20px;box-shadow:var(--shadow-sm);z-index:30}
+.app-header img{height:24px}
+.app-header h1{font-size:16px;font-weight:700;color:var(--title);margin:0}
+.app-header .meta{margin-left:auto;font-size:12px;color:var(--subtle)}
+.sidebar{position:fixed;top:var(--header-h);left:0;bottom:0;width:var(--sidebar-w);background:var(--sidebar-bg);border-right:1px solid var(--sidebar-border);padding:12px 0;overflow:auto;z-index:20}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 16px 10px 20px;border-radius:0 8px 8px 0;cursor:pointer;color:var(--sidebar-text);font-size:14px}
+.nav-item:hover{background:var(--bg);color:var(--text)}
+.nav-item.active{background:var(--sidebar-active-bg);color:var(--sidebar-text-active);border-left:3px solid var(--sidebar-rail);font-weight:600;padding-left:17px}
+.nav-dot{width:8px;height:8px;border-radius:50%}
+main{margin-left:var(--sidebar-w);margin-top:var(--header-h);padding:var(--content-pad)}
+.h2{font-size:20px;font-weight:700;color:var(--title);margin:0 0 4px}
+.sub{font-size:13px;color:var(--muted);margin:0 0 16px}
+.grid{display:grid;gap:16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--card-pad);box-shadow:var(--shadow-sm);transition:box-shadow .2s,transform .1s}
+.card-h{font-size:13px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin:0 0 12px}
+.tile{cursor:pointer;display:flex;flex-direction:column}
+.tile:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px)}
+.tile-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:nowrap;min-height:2.7em}
+.tile-head .tname{font-size:16px;font-weight:700;flex:1;min-width:0}
+.tile-head .tbadges{display:flex;gap:6px;flex-shrink:0;white-space:nowrap}
+.tile-chart{margin-top:auto;border-top:1px solid var(--border);padding-top:10px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--kpi-pad);box-shadow:var(--shadow-sm)}
+.kpi-label{font-size:12px;color:var(--muted);margin-bottom:4px}
+.kpi-value{font-size:26px;font-weight:700;line-height:1.1}
+.kpi-sub{font-size:12px;color:var(--subtle);margin-top:4px}
+.accent-green{border-top:3px solid var(--green)} .accent-red{border-top:3px solid var(--red)} .accent-amber{border-top:3px solid var(--amber)} .accent-blue{border-top:3px solid var(--accent)}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:var(--radius-pill);font-size:11px;font-weight:600}
+.b-green{background:var(--green-soft);color:var(--green)} .b-red{background:var(--red-soft);color:var(--red)} .b-amber{background:var(--amber-soft);color:var(--amber)}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 16px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+.btn:hover{background:var(--accent-hover)}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.listrow{padding:11px 0;border-top:1px solid var(--border);cursor:pointer}
+.listrow:first-child{border-top:none}
+.listrow:hover{background:var(--surface-2)}
+.bar-track{height:8px;background:var(--surface-2);border-radius:var(--radius-pill);overflow:hidden}
+.muted{color:var(--muted)} .subtle{color:var(--subtle)}
+.overlay{position:fixed;inset:0;background:rgba(1,12,28,.4);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;overflow:auto}
+.modalbox{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-hover);padding:20px 24px;width:100%;max-width:760px}
+.drawer{position:fixed;inset:0;background:rgba(1,12,28,.4);z-index:70}
+.drawerbox{position:absolute;right:0;top:0;bottom:0;width:min(600px,96vw);background:var(--surface);box-shadow:var(--shadow-hover);padding:20px 24px;overflow:auto}
+.hidden{display:none}
+.step{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:6px 0 18px}
+.step-node{padding:5px 12px;border-radius:var(--radius-pill);font-size:12px;font-weight:600;border:1px solid var(--border);color:var(--subtle);background:var(--surface-2)}
+.step-node.done{background:var(--green-soft);color:var(--green);border-color:var(--green-soft)}
+.step-node.cur{background:var(--amber-soft);color:var(--amber);border:2px solid var(--amber)}
+.step-arrow{color:var(--subtle)}
+a{color:var(--accent)}
+</style></head>
+<body data-theme="state-1">
+<header class="app-header">
+  <img src="/logo-directum.svg" alt="Directum" onerror="this.style.display='none'">
+  <h1>АРМ руководителя · Аналитика процессов</h1>
+  <span class="meta" id="meta">загрузка…</span>
+</header>
+<aside class="sidebar"><nav id="nav"></nav></aside>
+<main><div id="view-start"></div><div id="view-process" class="hidden"></div><div id="view-backoffice" class="hidden"></div></main>
+
+<div id="taskDrawer" class="drawer hidden" onclick="if(event.target===this)closeTask()">
+  <div class="drawerbox">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div id="t-title" style="font-size:15px;font-weight:600;line-height:1.4"></div>
+      <button class="btn-ghost" onclick="closeTask()">✕</button>
+    </div>
+    <div id="t-meta" class="muted" style="font-size:13px;margin:8px 0 4px"></div>
+    <div class="row" style="margin:8px 0 16px"><a id="t-rx" class="btn" target="_blank" rel="noopener">Открыть в RX ↗</a></div>
+    <div class="card-h">Этапы процесса</div>
+    <div id="t-steps" class="step"></div>
+    <div class="card-h">Маршрут задачи</div>
+    <div id="t-stages"></div>
+  </div>
+</div>
+
+<div id="perfModal" class="overlay hidden" onclick="if(event.target===this)closePerf()">
+  <div class="modalbox">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><div id="p-title" style="font-size:16px;font-weight:700"></div><div id="p-sub" class="muted" style="font-size:12px"></div></div>
+      <button class="btn-ghost" onclick="closePerf()">✕</button>
+    </div>
+    <div class="card-h" style="margin-top:14px">Историческая дисциплина <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(по месяцу срока)</span></div>
+    <div id="p-chart"></div>
+    <div class="row" style="gap:16px;font-size:12px;margin-top:8px"><span><span style="display:inline-block;width:10px;height:10px;background:var(--green);border-radius:2px"></span> вовремя</span><span><span style="display:inline-block;width:10px;height:10px;background:var(--red);border-radius:2px"></span> просрочено</span></div>
+    <div class="card-h" style="margin-top:18px">Поручения в работе <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(дольше всего / просроченные → клик откроет маршрут, «в RX» — карточку)</span></div>
+    <div id="p-tasks" style="max-height:42vh;overflow:auto;border:1px solid var(--border);border-radius:var(--radius);padding:0 14px"></div>
+  </div>
+</div>
+
+<div id="procModal" class="overlay hidden" onclick="if(event.target===this)closeProc()">
+  <div class="modalbox" style="max-width:860px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><div id="pm-title" style="font-size:18px;font-weight:700"></div><div id="pm-sub" class="muted" style="font-size:12px"></div></div>
+      <button class="btn-ghost" onclick="closeProc()">✕</button>
+    </div>
+    <div id="pm-body" style="margin-top:14px"><div class="sub">загрузка…</div></div>
+  </div>
+</div>
+
+<div id="deptModal" class="overlay hidden" onclick="if(event.target===this)closeDept()" style="z-index:65">
+  <div class="modalbox">
+    <div class="row" style="justify-content:space-between;align-items:flex-start"><div id="dm-title" style="font-size:16px;font-weight:700"></div><button class="btn-ghost" onclick="closeDept()">✕</button></div>
+    <div style="max-height:70vh;overflow:auto;margin-top:12px;border:1px solid var(--border);border-radius:var(--radius)"><div id="dm-list" style="padding:0 14px"></div></div>
+  </div>
+</div>
+
+<div id="overdueModal" class="overlay hidden" onclick="if(event.target===this)closeOverdue()">
+  <div class="modalbox">
+    <div class="row" style="justify-content:space-between;align-items:flex-start"><div id="om-title" style="font-size:16px;font-weight:700">Просроченные задания <span class="subtle" style="font-size:12px;font-weight:400">(клик → маршрут + ссылка в RX)</span></div><button class="btn-ghost" onclick="closeOverdue()">✕</button></div>
+    <div style="max-height:70vh;overflow:auto;margin-top:12px;border:1px solid var(--border);border-radius:var(--radius)"><div id="om-list" style="padding:0 14px"></div></div>
+  </div>
+</div>
+
+<button id="aiChatBtn" class="btn" onclick="toggleChat()" style="position:fixed;right:24px;bottom:24px;z-index:50;border-radius:24px;padding:12px 18px;box-shadow:var(--shadow-hover);font-size:14px">💬 Спросить ИИ</button>
+<div id="chatPanel" style="position:fixed;right:0;top:0;bottom:0;width:min(460px,96vw);background:var(--surface);box-shadow:var(--shadow-hover);z-index:75;display:none;flex-direction:column">
+  <div class="row" style="justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border)"><div style="font-weight:700">🧠 ИИ-ассистент по процессам</div><button class="btn-ghost" onclick="toggleChat()">✕</button></div>
+  <div id="chat-msgs" style="flex:1;overflow:auto;padding:16px 18px;background:var(--bg)"></div>
+  <div style="border-top:1px solid var(--border);padding:12px 14px;background:var(--surface)"><div class="row" style="gap:8px;align-items:flex-end"><textarea id="chat-input" rows="2" placeholder="Спросите про процессы… (Enter — отправить)" style="flex:1;resize:none;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}"></textarea><button class="btn" id="chat-send" onclick="sendChat()" style="padding:10px 16px">▶</button></div></div>
+</div>
+
+<script>
+var SEV={green:{c:'var(--green)',b:'b-green',a:'accent-green',l:'В норме'},amber:{c:'var(--amber)',b:'b-amber',a:'accent-amber',l:'Внимание'},red:{c:'var(--red)',b:'b-red',a:'accent-red',l:'Высокий риск'}};
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+var PROCS=[], CUR=null, CURDATA=null, OVR=null, AISUM=null, CHAT=[];
+
+/* ---------- SVG charts ---------- */
+function rect(x,y,w,h,f,r){return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+Math.max(0,h)+'" fill="'+f+'"'+(r?' rx="'+r+'"':'')+'/>';}
+function txt(x,y,s,a,sz,f){return '<text x="'+x+'" y="'+y+'" text-anchor="'+(a||'middle')+'" font-size="'+(sz||11)+'" fill="'+(f||'var(--muted)')+'" font-family="var(--font)">'+esc(s)+'</text>';}
+function svgStack(data,h,showVal,minSlots){
+  h=h||180; if(!data||!data.length)return '<div class="sub">нет данных</div>';
+  var n=data.length,slots=Math.max(n,minSlots||0);
+  var pt=18,pb=(showVal===false?10:34),pl=8,pr=8,ch=h-pt-pb,W=Math.max(slots*46,260);
+  var mx=Math.max(1,Math.max.apply(null,data.map(function(d){return (d.ontime||0)+(d.overdue||0);})));
+  var bw=(W-pl-pr)/slots,bw2=Math.min(bw-12,30);
+  var body=data.map(function(d,i){
+    var cx=pl+i*bw+bw/2,x=cx-bw2/2,total=(d.ontime||0)+(d.overdue||0);
+    var hov=(d.overdue||0)/mx*ch,hon=(d.ontime||0)/mx*ch,y0=pt+ch,s='';
+    var yov=y0-hov; if(hov>0)s+=rect(x,yov,bw2,hov,'var(--red)');
+    var yon=yov-hon; if(hon>0)s+=rect(x,yon,bw2,hon,'var(--green)',2);
+    if(showVal!==false){s+=txt(cx,(total>0?Math.min(yov,yon):y0)-5,total,'middle',11,'var(--text)');s+=txt(cx,h-14,d.label||d.month,'middle',10,'var(--subtle)');}
+    return s;
+  }).join('');
+  return '<svg viewBox="0 0 '+W+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="xMidYMid meet" style="max-width:100%;display:block">'+rect(pl,pt+ch,W-pl-pr,1,'var(--border)')+body+'</svg>';
+}
+function svgBars(data,h,color){
+  h=h||180; if(!data||!data.length)return '<div class="sub">нет данных</div>';
+  var pt=18,pb=34,pl=8,pr=8,ch=h-pt-pb,n=data.length,W=Math.max(n*64,280);
+  var mx=Math.max(1,Math.max.apply(null,data.map(function(d){return d.value;})));
+  var bw=(W-pl-pr)/n,bw2=Math.min(bw-16,46);
+  var body=data.map(function(d,i){
+    var cx=pl+i*bw+bw/2,x=cx-bw2/2,bh=d.value/mx*ch,y=pt+ch-bh;
+    return rect(x,y,bw2,bh,color||'var(--accent)',3)+txt(cx,y-5,d.value,'middle',11,'var(--text)')+txt(cx,h-14,d.label,'middle',10,'var(--subtle)');
+  }).join('');
+  return '<svg viewBox="0 0 '+W+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="xMidYMid meet" style="max-width:100%;display:block">'+rect(pl,pt+ch,W-pl-pr,1,'var(--border)')+body+'</svg>';
+}
+function legend(col,v,lbl){return '<span class="muted"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+col+';margin-right:5px"></span><b style="color:'+col+'">'+v+'</b> '+lbl+'</span>';}
+
+/* ---------- nav ---------- */
+function renderNav(){
+  var n='<div class="nav-item'+(CUR===null?' active':'')+'" onclick="goStart()">Обзор региона</div>';
+  PROCS.forEach(function(p){var sv=SEV[p.severity]||SEV.green;
+    n+='<div class="nav-item'+(CUR===p.key?' active':'')+'" onclick="goProcess(\''+p.key+'\')"><span class="nav-dot" style="background:'+sv.c+'"></span>'+esc(p.name)+'</div>';});
+  n+='<div class="nav-item'+(CUR==='__bo'?' active':'')+'" onclick="goBackoffice()" style="margin-top:14px;border-top:1px solid var(--sidebar-border);padding-top:16px">⚙ Бэк-офис</div>';
+  document.getElementById('nav').innerHTML=n;
+}
+
+/* ---------- Обзор ---------- */
+function goStart(){CUR=null;CURDATA=null;renderNav();document.getElementById('view-process').classList.add('hidden');document.getElementById('view-backoffice').classList.add('hidden');document.getElementById('view-start').classList.remove('hidden');}
+function goBackoffice(){CUR='__bo';CURDATA=null;renderNav();document.getElementById('view-start').classList.add('hidden');document.getElementById('view-process').classList.add('hidden');document.getElementById('view-backoffice').classList.remove('hidden');renderBackoffice();}
+function renderBackoffice(){
+  var el=document.getElementById('view-backoffice');
+  el.innerHTML='<div class="h2">Бэк-офис · настройки подключений</div><div class="sub">Адрес и пароль БД, адрес и токен модели. Сохраняется в config.json на сервере; секреты в браузер не возвращаются. Пароль/токен оставьте пустыми, чтобы не менять.</div>'+
+    '<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(360px,1fr))">'+
+    '<div class="card"><div class="card-h">База данных (PostgreSQL)</div>'+
+      bofield('bo-db-host','Адрес сервера (host)')+bofield('bo-db-port','Порт')+bofield('bo-db-database','База данных')+bofield('bo-db-username','Пользователь')+bofield('bo-db-password','Пароль','password')+'</div>'+
+    '<div class="card"><div class="card-h">Модель (LLM)</div>'+
+      bofield('bo-llm-url','URL эндпоинта (OpenAI-совместимый)')+bofield('bo-llm-model','Имя модели')+bofield('bo-llm-token','Токен (Bearer)','password')+bofield('bo-rxbase','Ссылка в RX (база для карточек)')+'</div>'+
+    '</div>'+
+    '<div class="row" style="gap:10px;margin-top:18px;align-items:center"><button class="btn" onclick="saveBackoffice()">Сохранить</button><button class="btn-ghost" onclick="testBackoffice()">Проверить подключение</button><span id="bo-status" class="sub" style="margin:0"></span></div>'+
+    '<div id="bo-test" style="margin-top:14px"></div>';
+  fetch('/api/config',{cache:'no-store'}).then(function(r){return r.json();}).then(function(c){
+    setv('bo-db-host',c.db.Host);setv('bo-db-port',c.db.Port);setv('bo-db-database',c.db.Database);setv('bo-db-username',c.db.Username);
+    setph('bo-db-password',c.db.hasPassword?'задан — оставьте пустым, чтобы не менять':'не задан');
+    setv('bo-llm-url',c.llm.Url);setv('bo-llm-model',c.llm.Model);setv('bo-rxbase',c.rxBase);
+    setph('bo-llm-token',c.llm.hasToken?'задан — оставьте пустым, чтобы не менять':'не задан');
+  }).catch(function(e){document.getElementById('bo-status').textContent='ошибка загрузки: '+e;});
+}
+function bofield(id,label,type){return '<div style="margin-bottom:12px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">'+label+'</label><input id="'+id+'" type="'+(type||'text')+'" autocomplete="off" spellcheck="false" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;font:inherit;font-size:13px;background:var(--surface)"></div>';}
+function setv(id,v){var e=document.getElementById(id);if(e)e.value=(v==null?'':v);}
+function setph(id,v){var e=document.getElementById(id);if(e)e.placeholder=v;}
+function gv(id){var e=document.getElementById(id);return e?e.value:'';}
+function saveBackoffice(){
+  var body={rxBase:gv('bo-rxbase'),db:{host:gv('bo-db-host'),port:gv('bo-db-port'),database:gv('bo-db-database'),username:gv('bo-db-username'),password:gv('bo-db-password')},llm:{url:gv('bo-llm-url'),model:gv('bo-llm-model'),token:gv('bo-llm-token')}};
+  var st=document.getElementById('bo-status');st.style.color='var(--muted)';st.textContent='сохраняю…';
+  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(d){
+    if(d.ok){st.style.color='var(--green)';st.textContent='✓ '+(d.note||'сохранено');OVR=null;AISUM=null;renderBackoffice();}
+    else{st.style.color='var(--red)';st.textContent='ошибка: '+(d.error||'?');}
+  }).catch(function(e){st.style.color='var(--red)';st.textContent='ошибка связи: '+e;});
+}
+function testBackoffice(){
+  var el=document.getElementById('bo-test');el.innerHTML='<div class="sub">проверяю подключения…</div>';
+  fetch('/api/config/test',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+    function row(name,res){return '<div class="row" style="gap:10px;font-size:14px;margin:6px 0"><span style="width:140px;font-weight:600">'+name+'</span>'+((res&&res.ok)?'<span style="color:var(--green)">✓ подключение успешно</span>':'<span style="color:var(--red)">✗ '+esc((res&&res.error)||'ошибка')+'</span>')+'</div>';}
+    el.innerHTML='<div class="card" style="padding:14px 18px">'+row('База данных',d.db)+row('Модель (LLM)',d.llm)+'</div>';
+  }).catch(function(e){el.innerHTML='<div class="sub" style="color:var(--red)">ошибка: '+e+'</div>';});
+}
+function sevRank(s){return s==='red'?0:(s==='amber'?1:2);}
+function renderStart(){
+  if(!OVR){document.getElementById('view-start').innerHTML='<div class="sub">загрузка…</div>';return;}
+  var reg=OVR.region||{},thr=reg.throughput||{},bn=reg.bottleneck||{},lr=reg.longRunners||{};
+  var thrCol=SEV[thr.color]?SEV[thr.color].c:'var(--text)',thrAcc=SEV[thr.color]?SEV[thr.color].a:'accent-blue';
+  var maxMonths=PROCS.reduce(function(a,p){return Math.max(a,(p.trend||[]).length);},1);
+  var html='<div class="h2">Стратегический обзор региона</div><div class="sub">За 10 секунд — всё ли в норме или где системный сбой. Клик по процессу → сводка.</div>';
+
+  // ----- HERO-полоса -----
+  html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-bottom:20px">';
+  html+='<div class="card '+thrAcc+'"><div class="kpi-label">Сквозная пропускная способность</div>'+
+    '<div class="row" style="gap:8px;align-items:baseline;margin:8px 0 4px"><span style="font-size:42px;font-weight:700;color:'+thrCol+'">'+(thr.pct!=null?thr.pct:'—')+'%</span><span class="subtle">в срок</span></div>'+
+    '<div class="subtle" style="font-size:12px">'+(thr.onTimeTotal||0)+' из '+(thr.ratedTotal||0)+' заданий с наступившим сроком — вовремя</div></div>';
+  html+='<div class="card accent-amber" style="cursor:pointer" onclick="'+((bn&&bn.processKey)?'openProcModal(\''+bn.processKey+'\')':'')+'"><div class="kpi-label">Главное узкое горлышко</div>'+
+    ((bn&&bn.stage)?'<div style="font-size:20px;font-weight:700;margin:8px 0 3px;line-height:1.25">'+esc(bn.process)+' <span class="subtle">→</span> '+esc(bn.stage)+'</div>'+
+      '<div class="subtle" style="font-size:13px">медиана ожидания <b style="color:var(--amber)">'+bn.medianDays+' дн</b> · в очереди '+bn.queue+'</div>':'<div class="sub" style="margin-top:8px">нет активных заданий</div>')+'</div>';
+  var lrcol=(lr.count>0)?'var(--red)':'var(--green)';
+  html+='<div class="card accent-red"><div class="kpi-label">Долгострои</div>'+
+    '<div class="row" style="gap:8px;align-items:baseline;margin:8px 0 4px"><span style="font-size:42px;font-weight:700;color:'+lrcol+'">'+(lr.count!=null?lr.count:'—')+'</span><span class="subtle">заданий</span></div>'+
+    '<div class="subtle" style="font-size:12px">просрочены более чем на '+(lr.thresholdDays||3)+' дня</div></div>';
+  html+='</div>';
+
+  // ----- ИИ-аналитика -----
+  html+='<div class="card" id="c-ai" style="margin-bottom:20px"></div>';
+
+  // ----- Светофор процессов (худшие сверху) -----
+  html+='<div class="card-h" style="margin:0 0 6px">Процессы · светофор</div>';
+  var sc='16px 1.7fr 0.8fr 0.9fr 1.4fr 0.9fr 2.2fr 18px';
+  html+='<div class="card" style="padding:6px 20px">';
+  html+='<div style="display:grid;grid-template-columns:'+sc+';gap:14px;font-size:11px;color:var(--subtle);text-transform:uppercase;letter-spacing:.04em;padding:8px 0 6px;border-bottom:1px solid var(--border)">'+
+    '<span></span><span>Процесс</span><span>Здоровье</span><span>Количество</span><span>Узкое горлышко</span><span>Просрочено</span><span>Дисциплина (в срок / просроч.)</span><span></span></div>';
+  html+=PROCS.slice().sort(function(a,b){return sevRank(a.severity)-sevRank(b.severity)||(b.overdue-a.overdue);}).map(function(p){var sv=SEV[p.severity]||SEV.green;
+    return '<div class="listrow" onclick="openProcModal(\''+p.key+'\')" style="display:grid;grid-template-columns:'+sc+';gap:14px;align-items:center;padding:14px 0">'+
+      '<span style="width:12px;height:12px;border-radius:50%;background:'+sv.c+'"></span>'+
+      '<span><span style="font-size:15px;font-weight:600">'+esc(p.name)+'</span>'+(p.chronic?' <span class="badge b-red" style="font-size:10px;padding:1px 6px">⚠ хрон.</span>':'')+'</span>'+
+      '<span><span style="font-size:18px;font-weight:700;color:'+sv.c+'">'+p.health+'</span><span class="subtle" style="font-size:11px">/100</span></span>'+
+      '<span><span style="font-size:18px;font-weight:700">'+(p.total!=null?p.total:'—')+'</span><span class="subtle" style="font-size:11px"> · в работе '+(p.inwork!=null?p.inwork:'—')+'</span></span>'+
+      '<span class="muted" style="font-size:12px">'+esc(p.bottleneckStage||'—')+(p.bottleneckMedianDays?' <span class="subtle">· '+p.bottleneckMedianDays+' дн</span>':'')+'</span>'+
+      '<span style="font-size:15px;font-weight:700;color:'+(p.overdue>0?'var(--red)':'var(--muted)')+'">'+p.overdue+'</span>'+
+      '<span>'+svgStack(p.trend,68,false,maxMonths)+'</span>'+
+      '<span class="subtle" style="text-align:right;font-size:18px">›</span></div>';
+  }).join('');
+  html+='</div>';
+  document.getElementById('view-start').innerHTML=html;
+  renderAi();
+}
+
+/* ---------- ИИ-аналитика (подсистема C) ---------- */
+function mdLite(t){
+  return String(t==null?'':t).split('\n').map(function(ln){
+    var e=esc(ln).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+    if(/^\s*\d+\.\s+/.test(ln)) return '<div style="font-weight:700;margin:14px 0 5px;color:var(--navy)">'+e.replace(/^\s+/,'')+'</div>';
+    if(/^\s*[-•*]\s+/.test(ln)) return '<div style="margin:3px 0 3px 6px;padding-left:14px;position:relative"><span style="position:absolute;left:0;color:var(--accent)">•</span>'+e.replace(/^\s*[-•*]\s+/,'')+'</div>';
+    if(!ln.trim()) return '';
+    return '<div style="margin:5px 0">'+e+'</div>';
+  }).join('');
+}
+function renderAi(){
+  var el=document.getElementById('c-ai');if(!el)return;
+  var busy=AISUM&&AISUM.loading;
+  var head='<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px"><div class="card-h" style="margin:0">🧠 ИИ-аналитика по региону <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(Qwen 3.6 · по всем процессам)</span></div>'+
+    '<button class="btn-ghost" onclick="loadAiSummary(true)"'+(busy?' disabled':'')+'>обновить</button></div>';
+  var b;
+  if(!AISUM){ el.innerHTML=head+'<div class="sub">ИИ анализирует данные…</div>'; loadAiSummary(false); return; }
+  if(AISUM.loading) b='<div class="sub">ИИ анализирует данные… (до ~30 сек)</div>';
+  else if(AISUM.error) b='<div class="sub" style="color:var(--red)">ИИ недоступен: '+esc(AISUM.error)+'</div>';
+  else b='<div style="font-size:14px;line-height:1.5">'+mdLite(AISUM.text||'')+'</div>'+(AISUM.generatedAt?'<div class="subtle" style="font-size:11px;margin-top:12px">сгенерировано '+esc(AISUM.generatedAt)+' · модель '+esc(AISUM.model||'')+'</div>':'');
+  el.innerHTML=head+b;
+}
+function loadAiSummary(force){
+  if(AISUM&&AISUM.loading)return;
+  AISUM={loading:true};renderAi();
+  fetch('/api/ai/summary'+(force?'?force=1':''),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    AISUM=d.error?{error:d.error}:{text:d.text,generatedAt:d.generatedAt,model:d.model};renderAi();
+  }).catch(function(e){AISUM={error:String(e)};renderAi();});
+}
+
+/* ---------- ИИ-чат (дрилдаун) ---------- */
+function toggleChat(){
+  var p=document.getElementById('chatPanel');var open=(p.style.display==='none'||!p.style.display);
+  p.style.display=open?'flex':'none';
+  if(open){ if(!CHAT.length){ renderChat([{role:'assistant',content:'Здравствуйте! У меня в контексте вся аналитика по поручениям, обращениям граждан и НПА. Спросите, например: «почему обращения в красной зоне?», «кто чаще всех возвращает на доработку и почему?», «где главный затор и кто перегружен?».'}]); } document.getElementById('chat-input').focus(); }
+}
+function chatBubble(role,content){
+  var me=role==='user';
+  return '<div style="display:flex;justify-content:'+(me?'flex-end':'flex-start')+';margin-bottom:10px"><div style="max-width:86%;padding:9px 12px;border-radius:12px;font-size:13px;line-height:1.45;background:'+(me?'var(--accent)':'var(--surface-2)')+';color:'+(me?'#fff':'var(--text)')+'">'+(me?esc(content):mdLite(content))+'</div></div>';
+}
+function renderChat(extra){
+  var el=document.getElementById('chat-msgs');if(!el)return;
+  var h=CHAT.map(function(m){return chatBubble(m.role,m.content);}).join('');
+  if(extra)h+=extra.map(function(m){return chatBubble(m.role,m.content);}).join('');
+  el.innerHTML=h;el.scrollTop=el.scrollHeight;
+}
+function sendChat(){
+  var inp=document.getElementById('chat-input');var t=(inp.value||'').trim();if(!t)return;
+  CHAT.push({role:'user',content:t});inp.value='';
+  renderChat([{role:'assistant',content:'… думаю'}]);
+  var btn=document.getElementById('chat-send');btn.disabled=true;
+  fetch('/api/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:CHAT})}).then(function(r){return r.json();}).then(function(d){
+    CHAT.push({role:'assistant',content:d.error?('⚠ ИИ недоступен: '+d.error):(d.reply||'(пустой ответ)')});
+    renderChat();btn.disabled=false;
+  }).catch(function(e){CHAT.push({role:'assistant',content:'⚠ ошибка связи: '+e});renderChat();btn.disabled=false;});
+}
+
+/* ---------- Процесс ---------- */
+function goProcess(key){
+  CUR=key;renderNav();
+  document.getElementById('view-start').classList.add('hidden');
+  document.getElementById('view-backoffice').classList.add('hidden');
+  var v=document.getElementById('view-process');v.classList.remove('hidden');v.innerHTML='<div class="sub">загрузка…</div>';
+  fetch('/api/process?key='+key,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    if(d.error){v.innerHTML='<div class="sub">ошибка: '+d.error+'</div>';return;}
+    CURDATA=d;renderProcess(d);
+    fetch('/api/process/stuck?key='+key,{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){renderOverdue(s.items||[]);});
+  });
+}
+function kpi(label,val,sub,cls){return '<div class="kpi '+cls+'"><div class="kpi-label">'+label+'</div><div class="kpi-value">'+val+'</div>'+(sub?'<div class="kpi-sub">'+sub+'</div>':'')+'</div>';}
+function renderProcess(d){
+  var k=d.kpi;
+  var html='<div class="row" style="margin-bottom:12px"><button class="btn-ghost" onclick="goStart()">← Обзор</button><span class="h2" style="margin:0">'+esc(d.name)+'</span>'+(d.chronic?'<span class="badge b-red" title="стабильно в красной зоне ≥3 месяцев">⚠ хронический</span>':'')+'</div>';
+  html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:16px">'+
+    kpi('Всего',k.total,'','accent-blue')+kpi('В работе',k.inwork,'','accent-blue')+
+    kpi('Просрочено',k.overdue,'заданий','accent-red')+kpi('Средний цикл',k.avgCycleDays+' дн','','accent-amber')+kpi('P95 маршрута',k.p95RouteDays+' дн','','accent-amber')+'</div>';
+  html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(380px,1fr))">'+
+    '<div class="card"><div class="card-h">Воронка согласования <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(объём по этапам и возвраты)</span></div><div id="c-funnel"></div></div>'+
+    '<div class="card"><div class="card-h">Время цикла по этапам (P50 / P95, дн)</div><div id="c-stages"></div></div>'+
+    '<div class="card"><div class="card-h">Длительность маршрута <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(сколько поручений сколько времени проходят)</span></div><div id="c-hist"></div></div>'+
+    '<div class="card"><div class="card-h">Тренд дисциплины (по месяцам срока)</div><div id="c-trend"></div><div class="row" style="gap:16px;font-size:12px;margin-top:6px">'+legend('var(--green)','','вовремя')+legend('var(--red)','','просрочено')+'</div></div>'+
+    '<div class="card"><div class="card-h">Прогноз срыва срока</div><div id="c-risk"></div></div>'+
+    '<div class="card"><div class="card-h">Топ по просрочкам</div><div id="c-neg"></div></div>'+
+    '<div class="card"><div class="card-h">Лучшие исполнители</div><div id="c-pos"></div></div>'+
+    '<div class="card"><div class="card-h">Возвраты и избыточность маршрута</div><div id="c-rework"></div></div>'+
+    '<div class="card"><div class="card-h">Время и качество решения</div><div id="c-formal"></div></div>'+
+    '</div>';
+  html+='<div class="card" style="margin-top:16px"><div class="card-h">Загрузка исполнителей</div><div id="c-workload"><div class="sub">загрузка…</div></div></div>';
+  html+='<div class="card" style="margin-top:16px"><div class="card-h">Просроченные задания — по дням просрочки <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(клик по столбцу → список → маршрут в RX)</span></div><div id="c-overdue"><div class="sub">загрузка…</div></div></div>';
+  document.getElementById('view-process').innerHTML=html;
+
+  // Воронка согласования
+  (function(){
+    var el=document.getElementById('c-funnel');if(!el)return;
+    var fs=(d.stages||[]).slice().sort(function(a,b){return b.total-a.total;});
+    if(!fs.length){el.innerHTML='<div class="sub">нет данных</div>';return;}
+    var fmax=fs.reduce(function(a,s){return Math.max(a,s.total);},1);
+    el.innerHTML=fs.map(function(s){
+      var w=Math.max(5,Math.round(s.total/fmax*100));
+      var done=s.done||0,ov=s.overdue||0,act=Math.max(0,(s.active||0)-ov),t=s.total||1;
+      var wDone=done/t*100,wAct=act/t*100,wOv=ov/t*100,isRet=/доработ/i.test(s.name);
+      return '<div style="margin-bottom:12px">'+
+        '<div class="row" style="justify-content:space-between;margin-bottom:5px;font-size:13px"><span><b>'+esc(s.name)+'</b>'+(isRet?' <span class="badge b-red" style="font-size:10px;padding:1px 6px">возврат</span>':'')+'</span>'+
+        '<span class="muted" style="font-size:12px">'+s.total+' зад. · <span style="color:var(--green)">✓'+done+'</span> · <span style="color:var(--accent)">в работе '+act+'</span>'+(ov>0?' · <span style="color:var(--red)">просроч. '+ov+'</span>':'')+'</span></div>'+
+        '<div style="height:16px;background:var(--surface-2);border-radius:8px;overflow:hidden"><div style="display:flex;height:100%;width:'+w+'%;min-width:8px;border-radius:8px;overflow:hidden">'+
+          (wDone>0?'<span style="height:100%;flex:'+wDone+';background:var(--green)"></span>':'')+
+          (wAct>0?'<span style="height:100%;flex:'+wAct+';background:var(--accent)"></span>':'')+
+          (wOv>0?'<span style="height:100%;flex:'+wOv+';background:var(--red)"></span>':'')+
+        '</div></div></div>';
+    }).join('')+'<div class="sub" style="margin:10px 0 0">На доработку (возврат) ушло <b style="color:var(--red)">'+(d.returnsTotal||0)+'</b> заданий · зелёное завершено · синее в работе · красное просрочено</div>';
+  })();
+
+  // B. Возвраты + «битва правок» + избыточность
+  var rw=d.rework||{},vrs=d.variants||[],ra=d.returnAuthors||[];
+  document.getElementById('c-rework').innerHTML=
+    '<div class="row" style="gap:24px;margin-bottom:14px">'+
+    '<div><div class="kpi-value" style="font-size:24px;color:'+(rw.pct>=20?'var(--red)':'var(--text)')+'">'+(rw.pct||0)+'%</div><div class="subtle" style="font-size:12px">возвраты на доработку ('+(rw.tasksRework||0)+' из '+(rw.tasksTotal||0)+')</div></div>'+
+    '<div><div class="kpi-value" style="font-size:24px;color:'+((d.returnsTotal||0)>0?'var(--amber)':'var(--text)')+'">'+(d.returnsTotal||0)+'</div><div class="subtle" style="font-size:12px">возвратов всего</div></div>'+
+    '<div><div class="kpi-value" style="font-size:24px">'+(d.repeatPerformer||0)+'</div><div class="subtle" style="font-size:12px">повторное участие</div></div></div>'+
+    (ra.length?'<div class="subtle" style="font-size:12px;margin:2px 0 6px">«Битва правок» — кто отправляет на доработку (клик → профиль)</div>'+perfRows(ra,'var(--amber)'):'')+
+    '<div class="subtle" style="font-size:12px;margin:14px 0 6px">Варианты маршрута (по частоте)</div>'+
+    vrs.map(function(v){return '<div class="row" style="justify-content:space-between;font-size:13px;padding:4px 0;border-top:1px solid var(--border)"><span>'+esc(v.route)+'</span><span class="muted">'+v.count+'</span></div>';}).join('');
+
+  // D. Время и качество решения
+  var fm=d.formal||{},dc=d.decision||{};
+  document.getElementById('c-formal').innerHTML=
+    (fm.completedTotal>0?
+    '<div class="row" style="gap:24px;margin-bottom:10px;flex-wrap:wrap">'+
+    '<div><div class="kpi-value" style="font-size:24px;color:'+(fm.formalPct>=50?'var(--amber)':'var(--text)')+'">'+fm.formalPct+'%</div><div class="subtle" style="font-size:12px">решено < 1 дня (формально)</div></div>'+
+    '<div><div class="kpi-value" style="font-size:24px">'+dc.medianHours+' ч</div><div class="subtle" style="font-size:12px">медиана времени решения</div></div>'+
+    ((dc.sample||0)>0?'<div><div class="kpi-value" style="font-size:24px">'+dc.openToDecideMedianMin+' мин</div><div class="subtle" style="font-size:12px">от открытия до решения (n='+dc.sample+')</div></div>':'')+
+    '</div>'+
+    (((dc.sample||0)>0&&(dc.instantCount||0)>0)?
+      '<div class="sub" style="margin:0;color:var(--amber)">⚠ «Пустое согласование»: '+dc.instantCount+' из '+dc.sample+' заданий закрыты быстрее '+dc.instantThresholdMin+' мин после открытия — решение без вникания.</div>'
+      :'<div class="sub" style="margin:0">Из '+fm.completedTotal+' завершённых '+fm.formalCount+' закрыты менее чем за сутки — индикатор формального согласования.</div>')
+    :'<div class="sub">мало завершённых заданий для оценки</div>');
+
+  // C. Загрузка исполнителей
+  fetch('/api/process/workload?key='+CUR,{cache:'no-store'}).then(function(r){return r.json();}).then(renderWorkload);
+
+  // cycle-time bars (horizontal P50/P95)
+  var maxP=Math.max.apply(null,d.stages.map(function(s){return s.p95||0;}).concat([1]));
+  document.getElementById('c-stages').innerHTML=d.stages.map(function(s){
+    var w50=Math.round((s.p50||0)/maxP*100),w95=Math.round((s.p95||0)/maxP*100);
+    return '<div style="margin-bottom:14px"><div class="row" style="justify-content:space-between;font-size:13px;margin-bottom:5px"><span><b>'+esc(s.name)+'</b> <span class="subtle">'+s.total+' зад.</span></span><span class="muted">P50 '+s.p50+' · P95 '+s.p95+'</span></div>'+
+      '<div class="bar-track" style="position:relative;height:12px"><div style="position:absolute;left:0;top:0;bottom:0;width:'+w95+'%;background:var(--blue-soft)"></div><div style="position:absolute;left:0;top:0;bottom:0;width:'+w50+'%;background:var(--accent)"></div></div>'+
+      '<div style="font-size:12px;margin-top:4px" class="'+(s.overdue>0?'':'muted')+'">'+(s.overdue>0?'<span class="muted">в работе '+s.active+'</span> · <span style="color:var(--red)">просрочено '+s.overdue+'</span>':'в работе '+s.active)+'</div></div>';
+  }).join('');
+
+  document.getElementById('c-hist').innerHTML='<div class="subtle" style="font-size:12px;margin-bottom:2px">ось X — длительность маршрута, дней · ось Y — число поручений</div>'+svgBars(d.routeHist.map(function(b){return {label:b.bucket.replace(' дн',''),value:b.count};}),190);
+  document.getElementById('c-trend').innerHTML=svgStack(d.trend,190);
+
+  // risk forecast — по близости срока активных заданий
+  var rk=d.risk,inwork=rk.normal+rk.atRisk+rk.critical+rk.overdue||0,t=inwork||1;
+  function seg(v,col,ttl){return v>0?'<div title="'+ttl+': '+v+'" style="width:'+(v/t*100)+'%;background:'+col+'"></div>':'';}
+  document.getElementById('c-risk').innerHTML=
+    '<div class="subtle" style="font-size:12px;margin-bottom:8px">Активные задания, сгруппированные по тому, сколько осталось до срока</div>'+
+    '<div style="display:flex;height:30px;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px;border:1px solid var(--border)">'+
+    seg(rk.overdue,'var(--red)','срок прошёл')+seg(rk.critical,'#b3471f','до срока ≤3 дн')+seg(rk.atRisk,'var(--amber)','до срока ≤7 дн')+seg(rk.normal,'var(--green)','запас >7 дн')+'</div>'+
+    '<div class="row" style="gap:16px;font-size:13px;margin-bottom:12px">'+
+    legend('var(--red)',rk.overdue,'уже просрочено')+legend('#b3471f',rk.critical,'критично (≤3 дн)')+legend('var(--amber)',rk.atRisk,'под риском (≤7 дн)')+legend('var(--green)',rk.normal,'в норме (>7 дн)')+'</div>'+
+    '<div class="sub" style="margin:0">Из <b>'+inwork+'</b> активных заданий <b style="color:var(--red)">'+rk.overdue+'</b> уже просрочено, ещё <b style="color:var(--amber)">'+(rk.atRisk+rk.critical)+'</b> сорвут срок в ближайшую неделю, если не вмешаться.</div>';
+
+  document.getElementById('c-neg').innerHTML=perfRows(d.topNeg,'var(--red)');
+  document.getElementById('c-pos').innerHTML=perfRows(d.topPos,'var(--green)');
+}
+function perfRows(arr,col){
+  if(!arr||!arr.length)return '<div class="sub">нет данных</div>';
+  var mx=arr.reduce(function(a,x){return Math.max(a,x.value);},1);
+  return arr.map(function(x){var pct=Math.round(x.value/mx*100);
+    return '<div class="listrow" onclick="openPerf('+(x.id||0)+',\''+esc(x.name).replace(/\x27/g,"")+'\')">'+
+      '<div class="row" style="justify-content:space-between;margin-bottom:5px"><span style="font-size:14px">'+esc(x.name)+'</span><span style="font-size:13px;font-weight:600;color:'+col+'">'+x.value+'</span></div>'+
+      '<div class="bar-track"><div style="height:100%;width:'+pct+'%;background:'+col+'"></div></div></div>';
+  }).join('');
+}
+function renderWorkload(w){
+  var el=document.getElementById('c-workload');if(!el)return;
+  var items=w.items||[];
+  if(!items.length){el.innerHTML='<div class="sub">нет данных</div>';return;}
+  // масштаб бара = max(вовремя + активные) по команде; сегменты: вовремя / в работе(на ходу) / просрочено
+  var mx=items.reduce(function(a,x){return Math.max(a,(x.ontime||0)+(x.active||0));},1);
+  var head='<div class="sub" style="margin:0 0 4px">Средняя текущая загрузка: <b>'+w.teamAvgActive+'</b> активных · перегружено: <b style="color:var(--red)">'+w.overloadedCount+'</b></div>'+
+    '<div class="row" style="gap:16px;font-size:12px;margin:0 0 12px">'+legend('var(--green)','','вовремя завершено')+legend('var(--accent)','','в работе (в срок)')+legend('var(--red)','','просрочено')+'</div>';
+  var cols='1.6fr 2.2fr 0.7fr 0.7fr 0.9fr';
+  var rows='<div style="display:grid;grid-template-columns:'+cols+';gap:10px;font-size:11px;color:var(--subtle);text-transform:uppercase;letter-spacing:.04em;padding:0 0 6px">'+
+    '<span>Исполнитель</span><span>Состав работы (вовремя · в работе · просрочено)</span><span>Активно</span><span>В срок</span><span>Удержание</span></div>';
+  rows+=items.map(function(x){
+    var inworkOk=Math.max(0,(x.active||0)-(x.overdue||0));
+    var wOn=(x.ontime||0)/mx*100,wIn=inworkOk/mx*100,wOv=(x.overdue||0)/mx*100;
+    return '<div class="listrow" onclick="openPerf('+x.id+',\''+esc(x.name).replace(/\x27/g,"")+'\')" style="display:grid;grid-template-columns:'+cols+';gap:10px;align-items:center;padding:9px 0">'+
+      '<span style="font-size:13px">'+esc(x.name)+(x.overloaded?' <span class="badge b-red" style="font-size:10px;padding:1px 6px">перегруз</span>':'')+'</span>'+
+      '<span><span class="bar-track" style="display:inline-flex;width:90%;vertical-align:middle;height:14px">'+
+        (wOn>0?'<span title="вовремя завершено '+x.ontime+'" style="height:100%;width:'+wOn+'%;background:var(--green)"></span>':'')+
+        (wIn>0?'<span title="в работе (в срок) '+inworkOk+'" style="height:100%;width:'+wIn+'%;background:var(--accent)"></span>':'')+
+        (wOv>0?'<span title="просрочено '+x.overdue+'" style="height:100%;width:'+wOv+'%;background:var(--red)"></span>':'')+
+      '</span></span>'+
+      '<span style="font-size:13px" class="muted">'+(x.active||0)+'</span>'+
+      '<span style="font-size:13px" class="muted">'+(x.onTimePct>=0?x.onTimePct+'%':'—')+'</span>'+
+      '<span style="font-size:13px" class="muted">'+x.avgHold+' д</span></div>';
+  }).join('');
+  el.innerHTML=head+rows;
+}
+var OVERDUE=[], OVB=[];
+function overdueBuckets(items){
+  var defs=[{l:'1–7 дн',lo:1,hi:7},{l:'8–30 дн',lo:8,hi:30},{l:'31–90 дн',lo:31,hi:90},{l:'91–180 дн',lo:91,hi:180},{l:'180+ дн',lo:181,hi:1e9}];
+  return defs.map(function(d){return {label:d.l,lo:d.lo,hi:d.hi,items:items.filter(function(p){return p.overdueDays>=d.lo&&p.overdueDays<=d.hi;})};});
+}
+function renderOverdue(items){
+  var el=document.getElementById('c-overdue');if(!el)return;
+  OVERDUE=(items||[]).filter(function(p){return p.risk==='overdue';});
+  if(!OVERDUE.length){el.innerHTML='<div class="sub">просроченных заданий нет</div>';return;}
+  OVB=overdueBuckets(OVERDUE);
+  var mx=OVB.reduce(function(a,b){return Math.max(a,b.items.length);},1);
+  var bars=OVB.map(function(b,i){
+    var n=b.items.length,h=Math.round(n/mx*150),dis=n===0;
+    var col=b.lo>=181?'#7a1f12':b.lo>=91?'#b3471f':'var(--red)';
+    return '<div '+(dis?'':'onclick="openOverdueModal('+i+')"')+' title="'+n+' заданий просрочено на '+b.label+'" '+
+      'style="flex:1;min-width:80px;cursor:'+(dis?'default':'pointer')+';display:flex;flex-direction:column;align-items:center;justify-content:flex-end;opacity:'+(dis?0.4:1)+';transition:opacity .1s"'+(dis?'':' onmouseover="this.style.opacity=.75" onmouseout="this.style.opacity=1"')+'>'+
+      '<span style="font-size:15px;font-weight:700;color:'+col+'">'+n+'</span>'+
+      '<div style="width:72%;max-width:84px;height:'+(h+2)+'px;background:'+col+';border-radius:5px 5px 0 0;margin-top:4px"></div>'+
+      '<span style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center">'+b.label+'</span></div>';
+  }).join('');
+  el.innerHTML='<div class="sub" style="margin:0 0 10px">Распределение <b>'+OVERDUE.length+'</b> просроченных заданий по длительности просрочки · ось Y — число заданий · клик по столбцу → список</div>'+
+    '<div style="display:flex;align-items:flex-end;gap:16px;height:200px;padding:0 8px">'+bars+'</div>';
+}
+function openOverdueModal(bucketIdx){
+  var b=OVB[bucketIdx];if(!b)return;
+  var m=document.getElementById('overdueModal');m.classList.remove('hidden');
+  document.getElementById('om-title').innerHTML='Просрочка на <b>'+b.label+'</b> <span class="subtle" style="font-size:12px;font-weight:400">· '+b.items.length+' заданий · клик → маршрут + ссылка в RX</span>';
+  var list=b.items.slice().sort(function(a,c){return c.overdueDays-a.overdueDays;});
+  document.getElementById('om-list').innerHTML=list.map(function(p){
+    var subj=p.subject.length>78?p.subject.slice(0,78)+'…':p.subject;
+    return '<div class="listrow" onclick="openTask('+p.id+')"><div class="row" style="justify-content:space-between"><span style="font-size:14px">'+esc(subj)+'</span><span style="font-size:12px;color:var(--red);white-space:nowrap">просрочено на '+p.overdueDays+' дн</span></div>'+
+      '<div style="font-size:12px;margin-top:2px" class="muted">этап: <b>'+esc(p.stage)+'</b> · '+esc(p.performer)+(p.deadline?' · срок '+p.deadline:'')+'</div></div>';
+  }).join('');
+}
+function closeOverdue(){document.getElementById('overdueModal').classList.add('hidden');}
+
+/* ---------- task drawer ---------- */
+function openTask(id){
+  var dw=document.getElementById('taskDrawer');dw.classList.remove('hidden');
+  document.getElementById('t-title').textContent='Загрузка…';document.getElementById('t-meta').textContent='';document.getElementById('t-stages').innerHTML='';document.getElementById('t-steps').innerHTML='';document.getElementById('t-rx').href='#';
+  fetch('/api/task?id='+id,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    if(d.error){document.getElementById('t-title').textContent='Ошибка: '+d.error;return;}
+    var h=d.header,st=d.stages||[];
+    document.getElementById('t-title').textContent=h.subject;
+    document.getElementById('t-meta').innerHTML='№'+h.id+' · '+esc(h.status)+' · важность '+esc(h.importance)+' · создано '+esc(h.created);
+    document.getElementById('t-rx').href=h.rxLink||'#';
+    // степпер ВСЕХ этапов процесса
+    var reached={},curName=null; st.forEach(function(s){reached[s.name]=true;if(s.isCurrent)curName=s.name;});
+    var procStages=(CURDATA&&CURDATA.stages)?CURDATA.stages.map(function(s){return s.name;}):st.map(function(s){return s.name;});
+    var seen={};procStages=procStages.filter(function(n){if(seen[n])return false;seen[n]=true;return true;});
+    document.getElementById('t-steps').innerHTML=procStages.map(function(n,i){
+      var cls=n===curName?'cur':(reached[n]?'done':'');
+      return (i>0?'<span class="step-arrow">→</span>':'')+'<span class="step-node '+cls+'">'+esc(n)+'</span>';
+    }).join('');
+    // детальный маршрут
+    document.getElementById('t-stages').innerHTML=st.map(function(s){
+      var dot=s.overdue?'var(--red)':(s.status==='Completed'?'var(--green)':(s.isCurrent?'var(--amber)':'var(--subtle)'));
+      var bd=s.isCurrent?('2px solid '+(s.overdue?'var(--red)':'var(--amber)')):'1px solid var(--border)';
+      var dur=s.completed?('завершён за '+s.durationDays+' дн'):(s.isCurrent?('<b style="color:'+(s.overdue?'var(--red)':'var(--amber)')+'">висит '+s.durationDays+' дн'+(s.overdue?' (просрочен)':'')+'</b>'):(s.durationDays+' дн'));
+      return '<div class="row" style="align-items:stretch;gap:12px;margin-bottom:10px"><div style="display:flex;flex-direction:column;align-items:center"><span style="width:12px;height:12px;border-radius:50%;background:'+dot+';margin-top:4px"></span><span style="flex:1;width:2px;background:var(--border)"></span></div>'+
+        '<div style="flex:1;border:'+bd+';border-radius:var(--radius-sm);padding:10px 12px"><div class="row" style="justify-content:space-between"><span style="font-weight:600">'+esc(s.name)+(s.isCurrent?' <span style="font-size:11px;color:var(--amber)">← сейчас здесь</span>':'')+'</span><span class="muted" style="font-size:12px">'+esc(s.status)+'</span></div>'+
+        '<div class="muted" style="font-size:13px;margin-top:3px">'+esc(s.performer)+'</div><div class="subtle" style="font-size:12px;margin-top:3px">'+(s.started||'')+(s.completed?' → '+s.completed:(s.deadline?' · срок '+s.deadline:''))+' · '+dur+'</div></div></div>';
+    }).join('')||'<div class="sub">этапов нет</div>';
+  });
+}
+function closeTask(){document.getElementById('taskDrawer').classList.add('hidden');}
+
+/* ---------- performer ---------- */
+function openPerf(id,name){
+  if(!id)return;var m=document.getElementById('perfModal');m.classList.remove('hidden');
+  document.getElementById('p-title').textContent=name;document.getElementById('p-sub').textContent='загрузка…';document.getElementById('p-chart').innerHTML='';
+  document.getElementById('p-tasks').innerHTML='<div class="sub" style="margin:8px 0">загрузка…</div>';
+  fetch('/api/performer?id='+id+(CUR?'&key='+CUR:''),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    if(d.error){document.getElementById('p-sub').textContent='ошибка: '+d.error;return;}
+    document.getElementById('p-title').textContent=d.name||name;
+    document.getElementById('p-sub').textContent='всего: вовремя '+d.totalOntime+' · просрочено '+d.totalOverdue;
+    document.getElementById('p-chart').innerHTML=svgStack(d.points,200);
+    var ts=d.tasks||[];
+    document.getElementById('p-tasks').innerHTML = ts.length ? ts.map(function(tk){
+      var subj=tk.subject.length>72?tk.subject.slice(0,72)+'…':tk.subject;
+      var badge=tk.overdue?'<span style="color:var(--red);font-weight:600;white-space:nowrap">просрочено на '+tk.overdueDays+' дн</span>':'<span class="muted" style="white-space:nowrap">в работе '+tk.ageDays+' дн</span>';
+      return '<div class="listrow"><div class="row" style="justify-content:space-between"><span style="font-size:14px;cursor:pointer" onclick="openTask('+tk.id+')">'+esc(subj)+'</span>'+badge+'</div>'+
+        '<div class="row" style="justify-content:space-between;font-size:12px;margin-top:3px"><span class="muted">этап: <b>'+esc(tk.stage)+'</b>'+(tk.deadline?' · срок '+tk.deadline:'')+'</span><a href="'+tk.rxLink+'" target="_blank" rel="noopener">открыть в RX ↗</a></div></div>';
+    }).join('') : '<div class="sub" style="margin:8px 0">активных поручений нет</div>';
+  });
+}
+function closePerf(){document.getElementById('perfModal').classList.add('hidden');}
+
+/* ---------- сводка процесса (модалка со стартовой плитки) ---------- */
+function procFind(key){return PROCS.filter(function(p){return p.key===key;})[0]||{};}
+function openProcModal(key){
+  var m=document.getElementById('procModal');m.classList.remove('hidden');
+  var meta=procFind(key),sv=SEV[meta.severity]||SEV.green;
+  document.getElementById('pm-title').textContent=meta.name||key;
+  document.getElementById('pm-sub').innerHTML='состояние процесса: <b style="color:'+sv.c+'">'+(meta.health!=null?meta.health:'—')+'</b>/100 · '+sv.l+(meta.chronic?' · <span style="color:var(--red)">⚠ хронический</span>':'');
+  var body=document.getElementById('pm-body');body.innerHTML='<div class="sub">загрузка…</div>';
+  Promise.all([
+    fetch('/api/process?key='+key,{cache:'no-store'}).then(function(r){return r.json();}),
+    fetch('/api/process/departments?key='+key,{cache:'no-store'}).then(function(r){return r.json();}),
+    fetch('/api/process/workload?key='+key,{cache:'no-store'}).then(function(r){return r.json();})
+  ]).then(function(res){
+    var d=res[0],dep=res[1],wl=res[2];
+    if(d.error){body.innerHTML='<div class="sub">ошибка: '+d.error+'</div>';return;}
+    var k=d.kpi||{},rw=d.rework||{};
+    var html='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr));margin-bottom:18px">'+
+      kpi('Всего',k.total,'','accent-blue')+kpi('В работе',k.inwork,'','accent-blue')+kpi('Просрочено',k.overdue,'','accent-red')+kpi('Средний цикл',k.avgCycleDays+' дн','','accent-amber')+'</div>'+
+      '<div class="card-h">Распределение поручений по подразделениям <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(клик → список поручений подразделения)</span></div>'+
+      '<div id="pm-dept" style="margin-bottom:20px"></div>'+
+      '<div class="card-h">Возвраты на доработку</div>'+
+      '<div class="row" style="gap:28px;margin-bottom:20px"><div><div class="kpi-value" style="font-size:24px;color:'+(rw.pct>=20?'var(--red)':'var(--text)')+'">'+(rw.pct||0)+'%</div><div class="subtle" style="font-size:12px">'+(rw.tasksRework||0)+' из '+(rw.tasksTotal||0)+' поручений возвращались на доработку</div></div>'+
+      '<div><div class="kpi-value" style="font-size:24px">'+(d.repeatPerformer||0)+'</div><div class="subtle" style="font-size:12px">повторное участие исполнителя</div></div></div>'+
+      '<div class="card-h">Загрузка исполнителей <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(вовремя · в работе · просрочено)</span></div><div id="pm-wl"></div>'+
+      '<div class="row" style="margin-top:20px"><button class="btn" onclick="closeProc();goProcess(\''+key+'\')">Подробная аналитика процесса →</button></div>';
+    body.innerHTML=html;
+    renderDeptDist(key,dep.items||[]);
+    renderWorkloadInto('pm-wl',wl,8);
+  });
+}
+function closeProc(){document.getElementById('procModal').classList.add('hidden');}
+function renderDeptDist(key,items){
+  var el=document.getElementById('pm-dept');if(!el)return;
+  if(!items.length){el.innerHTML='<div class="sub">нет данных по подразделениям</div>';return;}
+  var mx=items.reduce(function(a,x){return Math.max(a,x.total);},1);
+  el.innerHTML=items.map(function(x){
+    var pct=Math.max(5,Math.round(x.total/mx*100)),ovpct=x.total>0?Math.round(x.overdue/x.total*100):0;
+    return '<div class="listrow" onclick="openDeptTasks(\''+key+'\','+x.deptId+',\''+esc(x.dept).replace(/\x27/g,"")+'\')" style="padding:11px 2px">'+
+      '<div class="row" style="justify-content:space-between;margin-bottom:8px"><span style="font-size:13px;font-weight:500">'+esc(x.dept)+'</span><span style="font-size:12px" class="muted"><b style="color:var(--text)">'+x.total+'</b> поручений · в работе '+x.inwork+(x.overdue>0?' · <span style="color:var(--red)">просрочено '+x.overdue+'</span>':'')+'</span></div>'+
+      '<div style="height:16px;background:var(--surface-2);border-radius:8px;overflow:hidden"><div style="display:flex;height:100%;width:'+pct+'%;min-width:10px;border-radius:8px;overflow:hidden">'+
+        (ovpct<100?'<span style="height:100%;flex:'+(100-ovpct)+';background:var(--accent)"></span>':'')+
+        (ovpct>0?'<span style="height:100%;flex:'+ovpct+';background:var(--red)"></span>':'')+
+      '</div></div></div>';
+  }).join('');
+}
+function renderWorkloadInto(elId,w,limit){
+  var el=document.getElementById(elId);if(!el)return;
+  var items=(w.items||[]).slice(0,limit||8);
+  if(!items.length){el.innerHTML='<div class="sub">нет данных</div>';return;}
+  var mx=items.reduce(function(a,x){return Math.max(a,(x.ontime||0)+(x.active||0));},1);
+  el.innerHTML=items.map(function(x){
+    var inworkOk=Math.max(0,(x.active||0)-(x.overdue||0));
+    var wOn=(x.ontime||0)/mx*100,wIn=inworkOk/mx*100,wOv=(x.overdue||0)/mx*100;
+    return '<div class="listrow" onclick="openPerf('+x.id+',\''+esc(x.name).replace(/\x27/g,"")+'\')" style="display:grid;grid-template-columns:1.4fr 2fr;gap:10px;align-items:center;padding:7px 0">'+
+      '<span style="font-size:13px">'+esc(x.name)+(x.overloaded?' <span class="badge b-red" style="font-size:10px;padding:1px 6px">перегруз</span>':'')+'</span>'+
+      '<span class="bar-track" style="display:inline-flex;height:14px">'+
+        (wOn>0?'<span title="вовремя завершено '+x.ontime+'" style="height:100%;width:'+wOn+'%;background:var(--green)"></span>':'')+
+        (wIn>0?'<span title="в работе '+inworkOk+'" style="height:100%;width:'+wIn+'%;background:var(--accent)"></span>':'')+
+        (wOv>0?'<span title="просрочено '+x.overdue+'" style="height:100%;width:'+wOv+'%;background:var(--red)"></span>':'')+
+      '</span></div>';
+  }).join('');
+}
+
+/* ---------- поручения подразделения ---------- */
+function openDeptTasks(key,deptId,deptName){
+  var m=document.getElementById('deptModal');m.classList.remove('hidden');
+  document.getElementById('dm-title').innerHTML='Поручения · <b>'+esc(deptName)+'</b> <span class="subtle" style="font-size:12px;font-weight:400">(клик → маршрут + RX)</span>';
+  document.getElementById('dm-list').innerHTML='<div class="sub" style="margin:10px 0">загрузка…</div>';
+  fetch('/api/process/dept-tasks?key='+key+'&dept='+deptId,{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+    var items=s.items||[];
+    document.getElementById('dm-list').innerHTML=items.length?items.map(function(p){
+      var subj=p.subject.length>74?p.subject.slice(0,74)+'…':p.subject;
+      var st=p.status==='overdue'?'<span style="color:var(--red);white-space:nowrap">просрочено</span>':(p.status==='done'?'<span style="color:var(--green);white-space:nowrap">завершено</span>':'<span class="muted" style="white-space:nowrap">в работе</span>');
+      return '<div class="listrow" onclick="openTask('+p.id+')"><div class="row" style="justify-content:space-between"><span style="font-size:14px">'+esc(subj)+'</span>'+st+'</div>'+
+        '<div style="font-size:12px;margin-top:2px" class="muted">'+esc(p.performer)+(p.deadline?' · срок '+p.deadline:'')+' · в работе '+p.ageDays+' дн</div></div>';
+    }).join(''):'<div class="sub" style="margin:10px 0">поручений нет</div>';
+  });
+}
+function closeDept(){document.getElementById('deptModal').classList.add('hidden');}
+
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeTask();closePerf();closeOverdue();closeDept();closeProc();}});
+
+function load(){
+  fetch('/api/overview',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    OVR=d;PROCS=d.processes||[];document.getElementById('meta').textContent='данные БД · '+d.generatedAt;
+    renderNav();if(CUR===null)renderStart();
+  }).catch(function(e){document.getElementById('meta').textContent='ошибка связи: '+e;});
+}
+load();setInterval(load,60000);
+</script>
+</body></html>

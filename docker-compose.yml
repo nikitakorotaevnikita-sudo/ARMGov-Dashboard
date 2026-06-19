@@ -1,0 +1,15 @@
+services:
+  armgov-dashboard:
+    build: .
+    container_name: armgov-dashboard
+    ports:
+      - "5080:5080"
+    environment:
+      ARMGOV_PREFIX: "http://*:5080/"
+      # секреты подставляются из окружения хоста (или .env рядом с этим файлом)
+      ARMGOV_DB_PASSWORD: "${ARMGOV_DB_PASSWORD:-}"
+      ARMGOV_LLM_TOKEN: "${ARMGOV_LLM_TOKEN:-}"
+    restart: unless-stopped
+    # Альтернатива env-секретам — смонтировать готовый config.json:
+    # volumes:
+    #   - ./config.json:/app/config.json:ro

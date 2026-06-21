@@ -55,7 +55,7 @@ main{margin-left:var(--sidebar-w);margin-top:var(--header-h);padding:var(--conte
 .step-node.cur{background:var(--amber-soft);color:var(--amber);border:2px solid var(--amber)}
 .step-arrow{color:var(--subtle)}
 a{color:var(--accent)}
-.ihelp{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1px solid var(--border);color:var(--subtle);font-size:10px;font-weight:700;cursor:pointer;position:relative;margin-left:6px;vertical-align:middle;text-transform:none;letter-spacing:0}
+.ihelp{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;width:16px;height:16px;min-width:16px;border-radius:50%;border:1px solid var(--border);color:var(--subtle);font-size:10px;font-weight:700;cursor:pointer;position:relative;margin-left:6px;vertical-align:middle;text-transform:none;letter-spacing:0;box-sizing:border-box;line-height:1}
 .ihelp:hover{border-color:var(--accent);color:var(--accent)}
 .ihelp .tip{display:none;position:absolute;top:135%;left:-4px;z-index:55;width:300px;max-width:70vw;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow-hover);padding:11px 13px;font-size:12px;font-weight:400;color:var(--text);text-transform:none;letter-spacing:0;line-height:1.5;white-space:normal}
 .ihelp:hover .tip{display:block}
@@ -64,6 +64,14 @@ a{color:var(--accent)}
 .expl{font-size:11px;color:var(--accent);cursor:pointer;border:1px solid var(--border);border-radius:var(--radius-pill);padding:2px 9px;font-weight:500;white-space:nowrap}
 .expl:hover{border-color:var(--accent);background:var(--accent-soft)}
 .cardhead{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.pcard.wide{grid-column:1/-1}
+.drag{cursor:grab;color:var(--subtle);font-size:13px;margin-right:7px;user-select:none;flex:0 0 auto}
+.drag:hover{color:var(--accent)} .drag:active{cursor:grabbing}
+.wbtn{cursor:pointer;color:var(--subtle);font-size:11px;border:1px solid var(--border);border-radius:var(--radius-pill);padding:1px 9px;white-space:nowrap;flex-shrink:0}
+.wbtn:hover{border-color:var(--accent);color:var(--accent)}
+.card.dragover{outline:2px dashed var(--accent);outline-offset:-2px}
+.card.dragging{opacity:.5}
+@media print{.drag,.wbtn{display:none!important}}
 @media print{
   .sidebar,.app-header,#aiChatBtn,#chatPanel,.btn,.btn-ghost,.ihelp,.expl,#hdr-controls{display:none!important}
   main{margin:0!important;padding:8mm!important}
@@ -176,6 +184,8 @@ var HELP={
   workload:['Загрузка исполнителей: вовремя / в работе / просрочено + перегруз.','Тревожно: «перегруз» и низкая доля «в срок».','Перераспределить нагрузку.'],
   overdue:['Распределение просроченных заданий по длительности просрочки.','Тревожно: много заданий в корзинах 90+ и 180+ дней.','Клик по столбцу — список и маршрут в RX.'],
   backlog:['Сколько поручений поступает и сколько завершается по месяцам.','Тревожно: поступает стабильно больше, чем завершается — завал растёт.','Сравните синее (поступило) и зелёное (завершено).'],
+  flow:['Сколько времени документ реально обрабатывают (открыли→решили) против ожидания в очереди (создано→открыли).','Тревожно: эффективность в единицы % — почти всё время документ просто ждёт.','Ускорять надо передачу и распределение, а не самих людей.'],
+  pickup:['Сколько задание лежит непринятым — от создания до первого открытия.','Тревожно: большое время — задачи долго никто не берёт в работу.','На каких этапах задания залёживаются до взятия.'],
   ftr:['Доля задач, прошедших без единого возврата на доработку («с первого раза»).','Тревожно: низкий % — много переделок, двойная работа.','Падает — растёт «брак» на входе.'],
   loops:['Как часто задачи возвращаются на уже пройденный этап + частые переходы между этапами.','Тревожно: высокий % петель и частые «возвраты».','«Пинг-понг» между этапами — где ходят по кругу.'],
   breakdown:['Распределение задач в разрезах: исполнитель, ведомство, вид рассмотрения.','Тревожно: перекос на одном исполнителе/ведомстве и просрочка там.','Переключайте разрез; клик — детализация.']
@@ -238,7 +248,7 @@ function goStart(){CUR=null;CURDATA=null;renderNav();document.getElementById('vi
 function goBackoffice(){CUR='__bo';CURDATA=null;renderNav();document.getElementById('view-start').classList.add('hidden');document.getElementById('view-process').classList.add('hidden');document.getElementById('view-backoffice').classList.remove('hidden');renderBackoffice();}
 var BOCFG=null, BO_PROF_IDX=0;
 var OVB_LABELS={throughput:'Пропускная способность',bottleneck:'Узкое горлышко',longrunners:'Долгострои',burning:'Что горит',svetofor:'Светофор процессов'};
-var PRB_LABELS={funnel:'Воронка',stages:'Время цикла',hist:'Длительность маршрута',trend:'Тренд дисциплины',risk:'Прогноз срыва',neg:'Топ по просрочкам',pos:'Лучшие исполнители',rework:'Возвраты',formal:'Качество решения',workload:'Загрузка',overdue:'Просроченные',backlog:'Приток/отток',ftr:'С первого раза',loops:'Петли',breakdown:'Разрезы'};
+var PRB_LABELS={funnel:'Воронка',stages:'Время цикла',hist:'Длительность маршрута',trend:'Тренд дисциплины',risk:'Прогноз срыва',neg:'Топ по просрочкам',pos:'Лучшие исполнители',rework:'Возвраты',formal:'Качество решения',workload:'Загрузка',overdue:'Просроченные',backlog:'Приток/отток',flow:'Поток-эффективность',pickup:'Скорость реакции',ftr:'С первого раза',loops:'Петли',breakdown:'Разрезы'};
 function renderBackoffice(){
   var el=document.getElementById('view-backoffice');
   el.innerHTML='<div class="h2">Бэк-офис · настройки</div><div class="sub">Подключения, профили (состав блоков по ролям), пороги и быстрые промпты чата. Сохраняется в config.json; секреты в браузер не возвращаются.</div>'+
@@ -311,6 +321,8 @@ function testBackoffice(){
   }).catch(function(e){el.innerHTML='<div class="sub" style="color:var(--red)">ошибка: '+e+'</div>';});
 }
 function sevRank(s){return s==='red'?0:(s==='amber'?1:2);}
+function csvLink(what,label){return '<a href="/api/export?what='+what+'&key='+CUR+'&period='+PERIOD+'" class="expl" style="text-decoration:none">⬇ '+(label||'CSV')+'</a>';}
+function deltaArrow(d,suffix){if(d==null)return '';var a=d>0?'▲':(d<0?'▼':'→');var c=d>0?'var(--green)':(d<0?'var(--red)':'var(--subtle)');return '<span title="дисциплина к прошлому месяцу" style="color:'+c+';font-weight:600">'+a+' '+Math.abs(d)+(suffix||' п.п.')+'</span>';}
 function renderStart(){
   if(!OVR){document.getElementById('view-start').innerHTML='<div class="sub">загрузка…</div>';return;}
   var reg=OVR.region||{},thr=reg.throughput||{},bn=reg.bottleneck||{},lr=reg.longRunners||{};
@@ -323,7 +335,8 @@ function renderStart(){
   var hero='';
   if(ovHas('throughput')) hero+='<div class="card '+thrAcc+'"><div class="cardhead"><div class="kpi-label">Сквозная пропускная способность'+hlp('Сквозная пропускная способность','throughput',null)+'</div></div>'+
     '<div class="row" style="gap:8px;align-items:baseline;margin:8px 0 4px"><span style="font-size:42px;font-weight:700;color:'+thrCol+'">'+(thr.pct!=null?thr.pct:'—')+'%</span><span class="subtle">в срок</span></div>'+
-    '<div class="subtle" style="font-size:12px">'+(thr.onTimeTotal||0)+' из '+(thr.ratedTotal||0)+' заданий с наступившим сроком — вовремя</div></div>';
+    '<div class="subtle" style="font-size:12px">'+(thr.onTimeTotal||0)+' из '+(thr.ratedTotal||0)+' заданий с наступившим сроком — вовремя</div>'+
+    (thr.deltaPp!=null?'<div style="font-size:12px;margin-top:5px">'+deltaArrow(thr.deltaPp)+' <span class="subtle">к прошлому месяцу</span></div>':'')+'</div>';
   if(ovHas('bottleneck')) hero+='<div class="card accent-amber" style="cursor:pointer" onclick="'+((bn&&bn.processKey)?'openProcModal(\''+bn.processKey+'\')':'')+'"><div class="cardhead"><div class="kpi-label">Где работа застревает'+hlp('Где работа застревает','bottleneck',null)+'</div></div>'+
     ((bn&&bn.stage)?'<div style="font-size:20px;font-weight:700;margin:8px 0 3px;line-height:1.25">'+esc(bn.process)+' <span class="subtle">→</span> '+esc(bn.stage)+'</div>'+
       '<div class="subtle" style="font-size:13px">медиана ожидания <b style="color:var(--amber)">'+bn.medianDays+' дн</b> · в очереди '+bn.queue+'</div>':'<div class="sub" style="margin-top:8px">нет активных заданий</div>')+'</div>';
@@ -354,7 +367,7 @@ function renderStart(){
   html+=PROCS.slice().sort(function(a,b){return sevRank(a.severity)-sevRank(b.severity)||(b.overdue-a.overdue);}).map(function(p){var sv=SEV[p.severity]||SEV.green;
     return '<div class="listrow" onclick="openProcModal(\''+p.key+'\')" style="display:grid;grid-template-columns:'+sc+';gap:14px;align-items:center;padding:14px 0">'+
       '<span style="width:12px;height:12px;border-radius:50%;background:'+sv.c+'"></span>'+
-      '<span><span style="font-size:15px;font-weight:600">'+esc(p.name)+'</span>'+(p.chronic?' <span class="badge b-red" style="font-size:10px;padding:1px 6px">⚠ хрон.</span>':'')+'</span>'+
+      '<span><span style="font-size:15px;font-weight:600">'+esc(p.name)+'</span>'+(p.chronic?' <span class="badge b-red" style="font-size:10px;padding:1px 6px">⚠ хрон.</span>':'')+(p.throughputDelta!=null?' <span style="font-size:11px">'+deltaArrow(p.throughputDelta)+'</span>':'')+'</span>'+
       '<span><span style="font-size:18px;font-weight:700;color:'+sv.c+'">'+p.health+'</span><span class="subtle" style="font-size:11px">/100</span></span>'+
       '<span><span style="font-size:18px;font-weight:700">'+(p.total!=null?p.total:'—')+'</span><span class="subtle" style="font-size:11px"> · в работе '+(p.inwork!=null?p.inwork:'—')+'</span></span>'+
       '<span class="muted" style="font-size:12px">'+esc(p.bottleneckStage||'—')+(p.bottleneckMedianDays?' <span class="subtle">· '+p.bottleneckMedianDays+' дн</span>':'')+'</span>'+
@@ -409,6 +422,15 @@ function renderChatQuick(){
   el.innerHTML=ps.map(function(t){return '<span class="expl" style="color:var(--accent)" onclick="quickAsk('+JSON.stringify(t).replace(/"/g,'&quot;')+')">'+esc(t)+'</span>';}).join('');
 }
 function quickAsk(t){var inp=document.getElementById('chat-input');inp.value=t;sendChat();}
+function aiProcessSummary(){
+  if(!CUR||CUR==='__bo')return;
+  document.getElementById('chatPanel').style.display='flex';renderChatQuick();
+  CHAT.push({role:'user',content:'Сводка ИИ по процессу: '+(CURDATA?CURDATA.name:CUR)});
+  renderChat([{role:'assistant',content:'… готовлю сводку по процессу'}]);
+  fetch('/api/ai/summary?key='+CUR,{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+    CHAT.push({role:'assistant',content:s.error?('⚠ ИИ недоступен: '+s.error):(s.text||'(пусто)')});renderChat();
+  }).catch(function(e){CHAT.push({role:'assistant',content:'⚠ '+e});renderChat();});
+}
 function explainBlock(title,key){
   document.getElementById('chatPanel').style.display='flex';renderChatQuick();
   CHAT.push({role:'user',content:'Поясни блок: «'+title+'»'});
@@ -447,34 +469,55 @@ function goProcess(key){
   fetch('/api/process?key='+key+'&period='+PERIOD,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     if(d.error){v.innerHTML='<div class="sub">ошибка: '+d.error+'</div>';return;}
     CURDATA=d;renderProcess(d);
-    fetch('/api/process/stuck?key='+key+'&period='+PERIOD,{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){renderOverdue(s.items||[]);});
   });
 }
 function kpi(label,val,sub,cls){return '<div class="kpi '+cls+'"><div class="kpi-label">'+label+'</div><div class="kpi-value">'+val+'</div>'+(sub?'<div class="kpi-sub">'+sub+'</div>':'')+'</div>';}
+
+/* ---------- реестр блоков процесса + перетаскивание/ширина (localStorage) ---------- */
+// [ключ, заголовок, внутренний html, шир.по-умолчанию]
+var PCARDS=[
+  ['funnel','Воронка согласования','<div id="c-funnel"></div>',false],
+  ['stages','Время цикла по этапам (P50 / P95)','<div id="c-stages"></div>',false],
+  ['hist','Длительность маршрута','<div id="c-hist"></div>',false],
+  ['trend','Тренд дисциплины','<div id="c-trend"></div><div class="row" style="gap:16px;font-size:12px;margin-top:6px">'+legend('var(--green)','','вовремя')+legend('var(--red)','','просрочено')+'</div>',false],
+  ['risk','Прогноз срыва срока','<div id="c-risk"></div>',false],
+  ['neg','Топ по просрочкам','<div id="c-neg"></div>',false],
+  ['pos','Лучшие исполнители','<div id="c-pos"></div>',false],
+  ['rework','Возвраты и избыточность маршрута','<div id="c-rework"></div>',false],
+  ['formal','Время и качество решения','<div id="c-formal"></div>',false],
+  ['backlog','Приток / отток (растёт ли завал)','<div id="c-backlog"></div>',false],
+  ['flow','Поток-эффективность (работа vs ожидание)','<div id="c-flow"></div>',false],
+  ['pickup','Скорость реакции (создано → взято в работу)','<div id="c-pickup"></div>',false],
+  ['ftr','С первого раза (без возвратов)','<div id="c-ftr"></div>',false],
+  ['loops','Петли','<div id="c-loops"></div>',false],
+  ['breakdown','Разрезы по процессу','<div id="c-breakdown"></div>',true],
+  ['workload','Загрузка исполнителей','<div id="c-workload"><div class="sub">загрузка…</div></div>',true],
+  ['overdue','Просроченные задания — по дням просрочки','<div id="c-overdue"><div class="sub">загрузка…</div></div>',true]
+];
+function pcDefaultWide(){return PCARDS.filter(function(c){return c[3];}).map(function(c){return c[0];});}
+function loadLayout(key){try{return JSON.parse(localStorage.getItem('armgov.layout.'+key))||{};}catch(e){return {};}}
+function saveLayout(key,l){try{localStorage.setItem('armgov.layout.'+key,JSON.stringify(l));}catch(e){}}
+function processOrder(key){var def=PCARDS.map(function(c){return c[0];});var l=loadLayout(key);var ord=(l.order&&l.order.length)?l.order.slice():def.slice();def.forEach(function(k){if(ord.indexOf(k)<0)ord.push(k);});return ord.filter(function(k){return def.indexOf(k)>=0;});}
+function processWide(key){var l=loadLayout(key);return l.wide?l.wide.slice():pcDefaultWide();}
+var DRAG_KEY=null;
+function pDragStart(e,key){DRAG_KEY=key;try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',key);}catch(_){}}
+function pDrop(e,targetKey){e.preventDefault();if(!DRAG_KEY||DRAG_KEY===targetKey){DRAG_KEY=null;return;}var l=loadLayout(CUR);var ord=processOrder(CUR).filter(function(k){return k!==DRAG_KEY;});var ti=ord.indexOf(targetKey);if(ti<0)ti=ord.length;ord.splice(ti,0,DRAG_KEY);l.order=ord;saveLayout(CUR,l);DRAG_KEY=null;renderProcess(CURDATA);}
+function pToggleWide(key){var l=loadLayout(CUR);var w=processWide(CUR);var i=w.indexOf(key);if(i>=0)w.splice(i,1);else w.push(key);l.wide=w;saveLayout(CUR,l);renderProcess(CURDATA);}
+function resetLayout(){try{localStorage.removeItem('armgov.layout.'+CUR);}catch(e){}renderProcess(CURDATA);}
+
 function renderProcess(d){
   var k=d.kpi;
-  var html='<div class="row" style="margin-bottom:12px"><button class="btn-ghost" onclick="goStart()">← Обзор</button><span class="h2" style="margin:0">'+esc(d.name)+'</span>'+(d.chronic?'<span class="badge b-red" title="стабильно в красной зоне ≥3 месяцев">⚠ хронический</span>':'')+'</div>';
+  var html='<div class="row" style="margin-bottom:12px"><button class="btn-ghost" onclick="goStart()">← Обзор</button><span class="h2" style="margin:0">'+esc(d.name)+'</span>'+(d.chronic?'<span class="badge b-red" title="стабильно в красной зоне ≥3 месяцев">⚠ хронический</span>':'')+'<button class="btn" style="margin-left:auto" onclick="aiProcessSummary()">✦ Сводка ИИ</button><button class="btn-ghost" onclick="resetLayout()" title="вернуть блоки в исходный порядок и ширину">↺ сбросить раскладку</button></div>';
+  html+='<div class="sub" style="margin:-6px 0 12px">Блоки можно перетаскивать за ⠿ и менять ширину — раскладка сохраняется в этом браузере.</div>';
   html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:16px">'+
     kpi('Всего',k.total,'','accent-blue')+kpi('В работе',k.inwork,'','accent-blue')+
     kpi('Просрочено',k.overdue,'заданий','accent-red')+kpi('Средний цикл',k.avgCycleDays+' дн','от старта до завершения','accent-amber')+kpi('95% проходят за',k.p95RouteDays+' дн','дольше — лишь 5% самых тяжёлых','accent-amber')+'</div>';
-  function pcard(key,title,inner){return '<div class="card'+(prHas(key)?'':' hidden')+'">'+ch(title,key)+inner+'</div>';}
-  html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(380px,1fr))">'+
-    pcard('funnel','Воронка согласования','<div id="c-funnel"></div>')+
-    pcard('stages','Время цикла по этапам (P50 / P95)','<div id="c-stages"></div>')+
-    pcard('hist','Длительность маршрута','<div id="c-hist"></div>')+
-    pcard('trend','Тренд дисциплины','<div id="c-trend"></div><div class="row" style="gap:16px;font-size:12px;margin-top:6px">'+legend('var(--green)','','вовремя')+legend('var(--red)','','просрочено')+'</div>')+
-    pcard('risk','Прогноз срыва срока','<div id="c-risk"></div>')+
-    pcard('neg','Топ по просрочкам','<div id="c-neg"></div>')+
-    pcard('pos','Лучшие исполнители','<div id="c-pos"></div>')+
-    pcard('rework','Возвраты и избыточность маршрута','<div id="c-rework"></div>')+
-    pcard('formal','Время и качество решения','<div id="c-formal"></div>')+
-    pcard('backlog','Приток / отток (растёт ли завал)','<div id="c-backlog"></div>')+
-    pcard('ftr','С первого раза (без возвратов)','<div id="c-ftr"></div>')+
-    pcard('loops','Петли','<div id="c-loops"></div>')+
-    '</div>';
-  html+='<div class="card'+(prHas('breakdown')?'':' hidden')+'" style="margin-top:16px">'+ch('Разрезы по процессу','breakdown')+'<div id="c-breakdown"></div></div>';
-  html+='<div class="card'+(prHas('workload')?'':' hidden')+'" style="margin-top:16px">'+ch('Загрузка исполнителей','workload')+'<div id="c-workload"><div class="sub">загрузка…</div></div></div>';
-  html+='<div class="card'+(prHas('overdue')?'':' hidden')+'" style="margin-top:16px">'+ch('Просроченные задания — по дням просрочки','overdue')+'<div id="c-overdue"><div class="sub">загрузка…</div></div></div>';
+  var order=processOrder(CUR),wide=processWide(CUR),defmap={};PCARDS.forEach(function(c){defmap[c[0]]=c;});
+  html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(380px,1fr))">'+order.map(function(key){var c=defmap[key];if(!c)return '';var isW=wide.indexOf(key)>=0;
+    return '<div class="card pcard'+(isW?' wide':'')+(prHas(key)?'':' hidden')+'" data-k="'+key+'" ondragover="event.preventDefault()" ondrop="pDrop(event,\''+key+'\')">'+
+      '<div class="cardhead"><div class="card-h" style="margin:0;display:flex;align-items:center"><span class="drag" draggable="true" ondragstart="pDragStart(event,\''+key+'\')" title="перетащите, чтобы переставить">⠿</span>'+c[1]+hlp(c[1],key)+'</div>'+
+      '<span class="wbtn" onclick="pToggleWide(\''+key+'\')">'+(isW?'◧ обычный':'▭ на строку')+'</span></div>'+c[2]+'</div>';
+  }).join('')+'</div>';
   document.getElementById('view-process').innerHTML=html;
 
   // #5 С первого раза
@@ -501,6 +544,31 @@ function renderProcess(d){
     el.innerHTML='<div class="row" style="gap:14px;font-size:12px;margin-bottom:8px">'+legend('var(--accent)','','поступило')+legend('var(--green)','','завершено')+'</div>'+
       '<div style="display:flex;align-items:flex-end;gap:6px">'+cols+'</div>'+
       '<div class="sub" style="margin:10px 0 0">Поступило <b>'+ta+'</b>, завершено <b>'+tc+'</b> → '+(ta>tc?'<b style="color:var(--red)">завал растёт (+'+(ta-tc)+')</b>':'<b style="color:var(--green)">разгрузка</b>')+'</div>';})();
+
+  // #1 Поток-эффективность
+  (function(){var el=document.getElementById('c-flow');if(!el)return;var f=d.flow||{};
+    if(!f.sample){el.innerHTML='<div class="sub">недостаточно данных (нет событий открытия у завершённых заданий)</div>';return;}
+    var eff=f.effPct||0,col=(eff>=40?'var(--green)':eff>=15?'var(--amber)':'var(--red)');
+    function hrs(h){return h>=48?(Math.round(h/24*10)/10)+' дн':(h+' ч');}
+    var ratio=(f.workAvgHours>0)?Math.round(f.waitAvgHours/f.workAvgHours):0;
+    el.innerHTML='<div class="row" style="gap:8px;align-items:baseline"><span style="font-size:34px;font-weight:700;color:'+col+'">'+eff+'%</span><span class="subtle">времени — реальная работа</span></div>'+
+      '<div style="display:flex;height:16px;border-radius:8px;overflow:hidden;margin:12px 0;border:1px solid var(--border)">'+
+        '<div title="работа" style="width:'+Math.max(2,eff)+'%;background:var(--accent)"></div>'+
+        '<div title="ожидание" style="flex:1;background:var(--surface-2)"></div></div>'+
+      '<div class="row" style="gap:16px;font-size:12px;margin-bottom:8px">'+legend('var(--accent)','','работа')+legend('var(--surface-2)','','ожидание в очереди')+'</div>'+
+      '<div class="sub" style="margin:0">В среднем: ожидание <b>'+hrs(f.waitAvgHours)+'</b> · работа <b>'+hrs(f.workAvgHours)+'</b>'+(ratio>1?' → документ <b style="color:var(--red)">ждёт в '+ratio+'× дольше</b>, чем над ним работают':'')+'. По '+f.sample+' заданиям с отметкой открытия.</div>';
+  })();
+
+  // #2 Скорость реакции (создано → взято в работу)
+  (function(){var el=document.getElementById('c-pickup');if(!el)return;var pk=d.pickup||{};
+    if(!pk.sample){el.innerHTML='<div class="sub">нет данных об открытии заданий</div>';return;}
+    function hb(x){return x>=48?(Math.round(x/24*10)/10)+' дн':(x+' ч');}
+    var bs=pk.byStage||[],col=(pk.avgHours>=48?'var(--red)':pk.avgHours>=8?'var(--amber)':'var(--green)');
+    el.innerHTML='<div class="row" style="gap:8px;align-items:baseline"><span style="font-size:30px;font-weight:700;color:'+col+'">'+hb(pk.avgHours)+'</span><span class="subtle">лежит до взятия в работу (в среднем)</span></div>'+
+      '<div class="sub" style="margin:6px 0 10px">медиана '+hb(pk.medianHours)+' · '+pk.sample+' заданий с отметкой открытия.</div>'+
+      '<div class="subtle" style="font-size:12px;margin-bottom:4px">Где задания дольше залёживаются</div>'+
+      bs.map(function(t){return '<div class="row" style="justify-content:space-between;font-size:13px;padding:4px 0;border-top:1px solid var(--border)"><span>'+esc(t.stage)+'</span><span class="muted">'+hb(t.avgHours)+' · '+t.count+'×</span></div>';}).join('');
+  })();
 
   // Разрезы по процессу
   if(prHas('breakdown'))renderBreakdown();
@@ -552,7 +620,9 @@ function renderProcess(d){
     :'<div class="sub">мало завершённых заданий для оценки</div>');
 
   // C. Загрузка исполнителей
-  fetch('/api/process/workload?key='+CUR,{cache:'no-store'}).then(function(r){return r.json();}).then(renderWorkload);
+  fetch('/api/process/workload?key='+CUR+'&period='+PERIOD,{cache:'no-store'}).then(function(r){return r.json();}).then(renderWorkload);
+  // Просроченные задания — грузим здесь, чтобы блок наполнялся при ЛЮБОЙ перерисовке (смена профиля, drag, ширина)
+  fetch('/api/process/stuck?key='+CUR+'&period='+PERIOD,{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){renderOverdue(s.items||[]);});
 
   // cycle-time bars (horizontal P50/P95)
   var maxP=Math.max.apply(null,d.stages.map(function(s){return s.p95||0;}).concat([1]));
@@ -595,7 +665,7 @@ function renderWorkload(w){
   if(!items.length){el.innerHTML='<div class="sub">нет данных</div>';return;}
   // масштаб бара = max(вовремя + активные) по команде; сегменты: вовремя / в работе(на ходу) / просрочено
   var mx=items.reduce(function(a,x){return Math.max(a,(x.ontime||0)+(x.active||0));},1);
-  var head='<div class="sub" style="margin:0 0 4px">Средняя текущая загрузка: <b>'+w.teamAvgActive+'</b> активных · перегружено: <b style="color:var(--red)">'+w.overloadedCount+'</b></div>'+
+  var head='<div class="row" style="justify-content:space-between"><div class="sub" style="margin:0 0 4px">Средняя текущая загрузка: <b>'+w.teamAvgActive+'</b> активных · перегружено: <b style="color:var(--red)">'+w.overloadedCount+'</b></div>'+csvLink('workload')+'</div>'+
     '<div class="row" style="gap:16px;font-size:12px;margin:0 0 12px">'+legend('var(--green)','','вовремя завершено')+legend('var(--accent)','','в работе (в срок)')+legend('var(--red)','','просрочено')+'</div>';
   var cols='1.6fr 2.2fr 0.7fr 0.7fr 0.9fr';
   var rows='<div style="display:grid;grid-template-columns:'+cols+';gap:10px;font-size:11px;color:var(--subtle);text-transform:uppercase;letter-spacing:.04em;padding:0 0 6px">'+
@@ -636,7 +706,7 @@ function renderOverdue(items){
       '<div style="width:72%;max-width:84px;height:'+(h+2)+'px;background:'+col+';border-radius:5px 5px 0 0;margin-top:4px"></div>'+
       '<span style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center">'+b.label+'</span></div>';
   }).join('');
-  el.innerHTML='<div class="sub" style="margin:0 0 10px">Распределение <b>'+OVERDUE.length+'</b> просроченных заданий по длительности просрочки · ось Y — число заданий · клик по столбцу → список</div>'+
+  el.innerHTML='<div class="row" style="justify-content:space-between;margin:0 0 10px"><span class="sub" style="margin:0">Распределение <b>'+OVERDUE.length+'</b> просроченных заданий по длительности просрочки · клик по столбцу → список</span>'+csvLink('overdue','CSV списка')+'</div>'+
     '<div style="display:flex;align-items:flex-end;gap:16px;height:200px;padding:0 8px">'+bars+'</div>';
 }
 function openOverdueModal(bucketIdx){
@@ -772,7 +842,8 @@ var BD_DIM='dept';
 function renderBreakdown(){
   var el=document.getElementById('c-breakdown');if(!el)return;
   var key=CUR,tabs=[['performer','Исполнитель'],['dept','Ведомство'],['kind','Вид рассмотрения']];
-  el.innerHTML='<div class="row" style="gap:6px;margin-bottom:12px">'+tabs.map(function(t){return '<span class="expl" style="'+(BD_DIM===t[0]?'background:var(--accent);color:#fff;border-color:var(--accent)':'')+'" onclick="BD_DIM=\''+t[0]+'\';renderBreakdown()">'+t[1]+'</span>';}).join('')+'</div><div id="bd-body"><div class="sub">загрузка…</div></div>';
+  var exp=(BD_DIM==='dept')?csvLink('departments'):(BD_DIM==='performer'?csvLink('workload'):'');
+  el.innerHTML='<div class="row" style="gap:6px;margin-bottom:12px">'+tabs.map(function(t){return '<span class="expl" style="'+(BD_DIM===t[0]?'background:var(--accent);color:#fff;border-color:var(--accent)':'')+'" onclick="BD_DIM=\''+t[0]+'\';renderBreakdown()">'+t[1]+'</span>';}).join('')+(exp?'<span style="margin-left:auto">'+exp+'</span>':'')+'</div><div id="bd-body"><div class="sub">загрузка…</div></div>';
   var per='&period='+PERIOD;
   if(BD_DIM==='dept') fetch('/api/process/departments?key='+key+per).then(function(r){return r.json();}).then(function(s){bdBars((s.items||[]).map(function(x){return {label:x.dept,total:x.total,overdue:x.overdue,click:'openDeptTasks(\''+key+'\','+x.deptId+',\''+esc(x.dept).replace(/\x27/g,'')+'\')'};}));});
   else if(BD_DIM==='performer') fetch('/api/process/workload?key='+key+per).then(function(r){return r.json();}).then(function(s){bdBars((s.items||[]).map(function(x){return {label:x.name,total:(x.active||0)+(x.completed||0),overdue:x.overdue,click:'openPerf('+x.id+',\''+esc(x.name).replace(/\x27/g,'')+'\')'};}));});

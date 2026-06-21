@@ -56,11 +56,11 @@ class Program
     static List<Profile> DefaultProfiles() => new()
     {
         new Profile{ Name="Руководитель", Overview=new(){"throughput","bottleneck","longrunners","burning","svetofor"},
-            Process=new(){"funnel","backlog","ftr","risk","neg","workload","overdue","trend","breakdown"} },
+            Process=new(){"funnel","backlog","flow","pickup","ftr","risk","neg","workload","overdue","trend","breakdown"} },
         new Profile{ Name="Контроль исполнения", Overview=new(){"longrunners","bottleneck","burning","svetofor"},
-            Process=new(){"overdue","neg","rework","loops","ftr","backlog","risk","workload","funnel","breakdown"} },
+            Process=new(){"overdue","neg","rework","loops","pickup","ftr","flow","backlog","risk","workload","funnel","breakdown"} },
         new Profile{ Name="Аналитик", Overview=new(){"throughput","bottleneck","longrunners","burning","svetofor"},
-            Process=new(){"funnel","stages","hist","trend","backlog","ftr","loops","risk","neg","pos","rework","formal","workload","overdue","breakdown"} },
+            Process=new(){"funnel","stages","hist","trend","backlog","flow","pickup","ftr","loops","risk","neg","pos","rework","formal","workload","overdue","breakdown"} },
     };
     static string CfgPath => Path.Combine(AppContext.BaseDirectory, "config.json");
     static readonly JsonSerializerOptions JsonCfg = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
@@ -153,13 +153,29 @@ class Program
             case "/api/process/departments": J(ctx, BuildDepartments(q["key"], q["period"])); return;
             case "/api/process/dept-tasks": J(ctx, BuildDeptTasks(q["key"], q["dept"], q["period"])); return;
             case "/api/process/by-kind": J(ctx, BuildByKind(q["key"], q["period"])); return;
+            case "/api/export":
+            {
+                var (fn, csv) = BuildExport(q["what"], q["key"], q["period"]);
+                var payload = Encoding.UTF8.GetBytes(csv);
+                var bom = new byte[] { 0xEF, 0xBB, 0xBF };  // BOM, чтобы Excel читал кириллицу
+                var bytes = new byte[bom.Length + payload.Length];
+                Buffer.BlockCopy(bom, 0, bytes, 0, bom.Length);
+                Buffer.BlockCopy(payload, 0, bytes, bom.Length, payload.Length);
+                ctx.Response.StatusCode = 200;
+                ctx.Response.ContentType = "text/csv; charset=utf-8";
+                ctx.Response.AddHeader("Content-Disposition", "attachment; filename=\"" + fn + "\"");
+                ctx.Response.AddHeader("Cache-Control", "no-store");
+                ctx.Response.ContentLength64 = bytes.Length;
+                ctx.Response.OutputStream.Write(bytes, 0, bytes.Length); ctx.Response.OutputStream.Close();
+                return;
+            }
             case "/api/task":
                 if (long.TryParse(q["id"], out var tid)) { J(ctx, BuildTask(tid)); return; }
                 Write(ctx, 400, "application/json", "{\"error\":\"bad id\"}"); return;
             case "/api/performer":
                 if (long.TryParse(q["id"], out var pid)) { J(ctx, BuildPerformer(pid, q["key"])); return; }
                 Write(ctx, 400, "application/json", "{\"error\":\"bad id\"}"); return;
-            case "/api/ai/summary": J(ctx, BuildAiSummary(q["force"] == "1")); return;
+            case "/api/ai/summary": J(ctx, BuildAiSummary(q["force"] == "1", q["key"])); return;
             case "/api/ai/chat": J(ctx, BuildAiChat(ReadBody(ctx))); return;
             case "/api/ai/explain": J(ctx, BuildAiExplain(ReadBody(ctx))); return;
             case "/api/config":
@@ -231,6 +247,7 @@ class Program
         var procs = new List<object>();
         var bottlenecks = new List<dynamic>();   // ранжир (процесс, этап) по медиане возраста активных
         var burning = new List<dynamic>();
+        var regMon = new Dictionary<string, int[]>();  // месяц -> [ontime, overdue] по региону (для дельты)
 
         foreach (var p0 in Procs)
         {
@@ -274,11 +291,18 @@ class Program
             }
 
             var trend = Trend(c, p);
+            foreach (dynamic t in trend)
+            {
+                var m = (string)t.month; if (!regMon.ContainsKey(m)) regMon[m] = new int[2];
+                regMon[m][0] += (int)t.ontime; regMon[m][1] += (int)t.overdue;
+            }
+            var pd = ThrTrendDelta(trend);
             procs.Add(new
             {
                 key = p.Key, name = p.Name, total, inwork, health, severity = Sev(health),
                 throughputPct = thrPct, overdue = overdueAsg, longRunners = lng,
-                bottleneckStage = bnStage ?? "—", bottleneckMedianDays = bnMed, trend
+                bottleneckStage = bnStage ?? "—", bottleneckMedianDays = bnMed, trend,
+                throughputDelta = pd.has ? (int?)pd.deltaPp : null
             });
             burning.Add(new { processKey = p.Key, process = p.Name, severity = Sev(health), overdue = overdueAsg, health, thrPct, bnStage = bnStage ?? "—" });
 
@@ -287,6 +311,9 @@ class Program
 
         long regRated = regOnTime + regBreached;
         int regThr = regRated > 0 ? (int)Math.Round(100.0 * regOnTime / regRated) : 100;
+        // дельта пропускной способности региона: последний месяц vs предыдущий
+        var regTrend = regMon.OrderBy(kv => kv.Key).Select(kv => (object)new { month = kv.Key, ontime = kv.Value[0], overdue = kv.Value[1] }).ToList();
+        var regDelta = ThrTrendDelta(regTrend);
         var bnTop = bottlenecks.OrderByDescending(b => (double)b.medianDays).Take(5).ToList();
         var top1 = bnTop.Count > 0 ? bnTop[0] : null;
 
@@ -307,7 +334,7 @@ class Program
             generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
             region = new
             {
-                throughput = new { pct = regThr, onTimeTotal = regOnTime, ratedTotal = regRated, color = Sev(regThr) },
+                throughput = new { pct = regThr, onTimeTotal = regOnTime, ratedTotal = regRated, color = Sev(regThr), deltaPp = regDelta.has ? (int?)regDelta.deltaPp : null, lastMonthPct = regDelta.has ? (int?)regDelta.lastPct : null },
                 bottleneck = top1 == null ? null : new { process = (string)top1.process, processKey = (string)top1.processKey, stage = (string)top1.stage, medianDays = (double)top1.medianDays, queue = (long)top1.queue },
                 longRunners = new { count = regLong, thresholdDays = Conf.Thresholds.LongRunnerDays }
             },
@@ -317,6 +344,17 @@ class Program
             period = string.IsNullOrEmpty(period) ? "all" : period,
             ui = UiConfig()
         };
+    }
+
+    // Дельта пропускной способности: последний месяц с данными vs предыдущий (в п.п.). has=false если данных <2 мес.
+    static (int lastPct, int prevPct, int deltaPp, bool has) ThrTrendDelta(List<object> trend)
+    {
+        var pts = trend.Select(o => (dynamic)o).Where(d => ((int)d.ontime + (int)d.overdue) > 0).ToList();
+        if (pts.Count < 2) return (0, 0, 0, false);
+        var last = pts[pts.Count - 1]; var prev = pts[pts.Count - 2];
+        int lp = (int)Math.Round(100.0 * (int)last.ontime / ((int)last.ontime + (int)last.overdue));
+        int pp = (int)Math.Round(100.0 * (int)prev.ontime / ((int)prev.ontime + (int)prev.overdue));
+        return (lp, pp, lp - pp, true);
     }
 
     static List<object> Trend(NpgsqlConnection c, Proc p)
@@ -503,6 +541,41 @@ class Program
         using (var r = cmd.ExecuteReader())
             while (r.Read()) backlog.Add(new { month = r.GetString(0), arrived = (int)r.GetInt64(1), completed = (int)r.GetInt64(2) });
 
+        // #1 Поток-эффективность: ожидание (создано→открыто) vs работа (открыто→решено) по завершённым заданиям с событием открытия
+        long flowN = 0; double flowWaitAvgH = 0, flowWorkAvgH = 0, flowEffPct = 0;
+        using (var cmd = new NpgsqlCommand(
+            "select count(*) n, " +
+            "coalesce(sum(extract(epoch from (a.completed - mr.first_read))),0) work_sec, " +
+            "coalesce(sum(extract(epoch from (a.completed - a.created))),0) total_sec " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            "join (select entityid, min(historydate) first_read from sungero_wf_workflowhistory where operation='MarkRead' group by entityid) mr on mr.entityid=a.id " +
+            $"where {p.Where} and a.status::text='Completed' and a.completed is not null and mr.first_read>=a.created and mr.first_read<=a.completed", c))
+        using (var r = cmd.ExecuteReader())
+            if (r.Read())
+            {
+                flowN = r.GetInt64(0);
+                double ws = r.GetDouble(1), ts = r.GetDouble(2);
+                flowEffPct = ts > 0 ? Math.Round(100.0 * ws / ts, 1) : 0;
+                flowWorkAvgH = flowN > 0 ? Math.Round(ws / flowN / 3600.0, 1) : 0;
+                flowWaitAvgH = flowN > 0 ? Math.Round((ts - ws) / flowN / 3600.0, 1) : 0;
+            }
+
+        // #2 Скорость реакции: создано задание → первое открытие (сколько лежит непринятым). Где задачи залёживаются.
+        string pkCte =
+            "with pk as (select a.discriminator::text d, extract(epoch from (mr.first_read - a.created))/3600.0 ph " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            "join (select entityid, min(historydate) first_read from sungero_wf_workflowhistory where operation='MarkRead' group by entityid) mr on mr.entityid=a.id " +
+            $"where {p.Where} and mr.first_read >= a.created) ";
+        long pkN = 0; double pkAvgH = 0, pkMedH = 0;
+        using (var cmd = new NpgsqlCommand(pkCte + "select count(*) n, coalesce(avg(ph),0) a, coalesce(percentile_cont(0.5) within group (order by ph),0) m from pk", c))
+        using (var r = cmd.ExecuteReader())
+            if (r.Read()) { pkN = r.GetInt64(0); pkAvgH = Math.Round(r.GetDouble(1), 1); pkMedH = Math.Round(r.GetDouble(2), 1); }
+        var pkByStage = new List<object>();
+        using (var cmd = new NpgsqlCommand(pkCte + "select d, count(*) c, coalesce(avg(ph),0) ag from pk group by d order by ag desc limit 6", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read())
+                pkByStage.Add(new { stage = StageName(r.IsDBNull(0) ? null : r.GetString(0), 0), count = (int)r.GetInt64(1), avgHours = Math.Round(r.GetDouble(2), 1) });
+
         return new
         {
             key = p.Key, name = p.Name, chronic,
@@ -519,6 +592,8 @@ class Program
             firstTimeRight = new { total, clean = ftrClean, pct = ftrPct },
             loops = new { loopTasks, loopPct, transitions },
             backlog,
+            flow = new { sample = flowN, waitAvgHours = flowWaitAvgH, workAvgHours = flowWorkAvgH, effPct = flowEffPct },
+            pickup = new { sample = pkN, avgHours = pkAvgH, medianHours = pkMedH, byStage = pkByStage },
             topNeg, topPos
         };
     }
@@ -726,6 +801,76 @@ class Program
         return new { items };
     }
 
+    // ---------- /api/export (CSV для Excel: просроченные / загрузка / подразделения) ----------
+    static string CsvCell(string s)
+    {
+        s = s ?? "";
+        if (s.IndexOf(';') >= 0 || s.IndexOf('"') >= 0 || s.IndexOf('\n') >= 0 || s.IndexOf('\r') >= 0)
+            s = "\"" + s.Replace("\"", "\"\"") + "\"";
+        return s;
+    }
+    static (string fname, string csv) BuildExport(string what, string key, string period)
+    {
+        var p0 = P(key); if (p0 == null) return ("export.csv", "");
+        var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        var sb = new StringBuilder();
+        void Row(params string[] cells) { sb.Append(string.Join(";", cells.Select(CsvCell))); sb.Append("\r\n"); }
+
+        if (what == "workload")
+        {
+            Row("Исполнитель", "Активных", "Просрочено", "Завершено", "В срок", "Удержание, дн");
+            using var cmd = new NpgsqlCommand(
+                "select coalesce(r.name,'(не назначен)') n, " +
+                "count(*) filter (where a.status::text='InProcess') active, " +
+                "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline<now()) overdue, " +
+                "count(*) filter (where a.status::text='Completed') completed, " +
+                "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline) ontime, " +
+                "coalesce(avg(extract(epoch from (coalesce(a.completed,now())-a.created))/86400.0),0) avghold " +
+                "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer " +
+                $"where {p.Where} and a.performer is not null group by r.name order by active desc", c);
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                long comp = r.GetInt64(3), ont = r.GetInt64(4);
+                Row(r.GetString(0), r.GetInt64(1).ToString(), r.GetInt64(2).ToString(), comp.ToString(),
+                    comp > 0 ? (int)Math.Round(100.0 * ont / comp) + "%" : "—", Math.Round(r.GetDouble(5), 1).ToString());
+            }
+            return ($"workload_{key}.csv", sb.ToString());
+        }
+        if (what == "departments")
+        {
+            Row("Подразделение", "Всего", "В работе", "Просрочено");
+            string sql =
+                "with td as (select distinct on (a.task) a.task tid, d.name::text dept from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+                "left join sungero_core_recipient e on e.id=a.performer left join sungero_core_recipient d on d.id=e.department_company_sungero " +
+                $"where {p.Where} order by a.task, a.created desc), " +
+                "ov as (select a.task tid, max((a.status::text='InProcess' and a.deadline is not null and a.deadline<now())::int) isover, max((a.status::text='InProcess')::int) isactive " +
+                $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task) " +
+                "select coalesce(td.dept,'(без подразделения)') dept, count(*) total, coalesce(sum(ov.isactive),0) inwork, coalesce(sum(ov.isover),0) overdue " +
+                "from td left join ov on ov.tid=td.tid group by td.dept order by total desc";
+            using var cmd = new NpgsqlCommand(sql, c); using var r = cmd.ExecuteReader();
+            while (r.Read()) Row(r.GetString(0), r.GetInt64(1).ToString(), r.GetInt64(2).ToString(), r.GetInt64(3).ToString());
+            return ($"departments_{key}.csv", sb.ToString());
+        }
+        // по умолчанию — просроченные задания
+        Row("Тема", "Этап", "Исполнитель", "Срок", "Дней просрочки", "Ссылка RX");
+        using (var cmd = new NpgsqlCommand(
+            "select coalesce(t.subject,'(без темы)'), a.discriminator::text, coalesce(r.name,'(не назначен)'), a.deadline, " +
+            "extract(epoch from (now()-a.deadline))/86400.0 od, t.id " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer " +
+            $"where {p.Where} and a.status::text='InProcess' and a.deadline is not null and a.deadline<now() order by a.deadline asc", c))
+        using (var r = cmd.ExecuteReader())
+        {
+            int i = 0;
+            while (r.Read())
+                Row(r.GetString(0), StageName(r.IsDBNull(1) ? null : r.GetString(1), i++), r.GetString(2),
+                    r.IsDBNull(3) ? "" : r.GetDateTime(3).ToString("yyyy-MM-dd"),
+                    ((int)Math.Round(r.GetDouble(4))).ToString(), RxBase + "Task/" + r.GetInt64(5));
+        }
+        return ($"overdue_{key}.csv", sb.ToString());
+    }
+
     // ---------- /api/task ----------
     static object BuildTask(long id)
     {
@@ -843,7 +988,7 @@ class Program
             if (r.TryGetProperty("chatPrompts", out var cp) && cp.ValueKind == JsonValueKind.Array) Conf.ChatPrompts = cp.Deserialize<List<string>>(JsonCfg) ?? Conf.ChatPrompts;
             if (r.TryGetProperty("profiles", out var pr) && pr.ValueKind == JsonValueKind.Array) Conf.Profiles = pr.Deserialize<List<Profile>>(JsonCfg) ?? Conf.Profiles;
             SaveConfig();
-            _sumCache = null; _bundleCache = null;   // сбросить кэши, чтобы подхватились новые настройки
+            _sumCache.Clear(); _bundleCache = null;   // сбросить кэши, чтобы подхватились новые настройки
             return new { ok = true, note = "Сохранено в config.json. Смена адреса прослушивания (Prefix) применится после перезапуска; БД/модель — сразу.", config = GetConfigMasked() };
         }
         catch (Exception ex) { return new { ok = false, error = ex.Message }; }
@@ -895,30 +1040,44 @@ class Program
         _bundleCache = BuildAiBundle(); _bundleAt = DateTime.Now; return _bundleCache;
     }
 
-    static object _sumCache; static DateTime _sumAt;
-    static object BuildAiSummary(bool force)
+    static readonly Dictionary<string, (object data, DateTime at)> _sumCache = new();
+    static object BuildAiSummary(bool force, string key = null)
     {
-        if (!force && _sumCache != null && (DateTime.Now - _sumAt).TotalMinutes < 10) return _sumCache;
-        var bundleJson = JsonSerializer.Serialize(GetBundleCached());
-        const string sys =
-            "Ты — старший аналитик аппарата руководителя региона. На основе JSON с метриками процессов " +
-            "(поручения, обращения граждан, НПА) дай краткую управленческую сводку для первого лица. " +
-            "Верни ровно три раздела с заголовками в отдельных строках: '1. На что обратить внимание', " +
-            "'2. Тренды', '3. Кто хуже всех справляется и вероятные причины'. В каждом разделе — маркированные " +
-            "пункты (через '- '), конкретно, с реальными цифрами из данных, без воды и без выдумок. " +
-            "Связывай причины: возвраты на доработку, формальные решения (закрыто за минуты), узкие горлышки, перегруз. " +
-            "Если данных мало — скажи об этом прямо. Отвечай по-русски.";
+        string ck = string.IsNullOrEmpty(key) ? "region" : key;
+        if (!force && _sumCache.TryGetValue(ck, out var cc) && (DateTime.Now - cc.at).TotalMinutes < 10) return cc.data;
+        var pr = key != null ? P(key) : null;
+        string sys, userJson;
+        if (pr != null)
+        {
+            userJson = JsonSerializer.Serialize(new { process = BuildProcess(key), workload = BuildWorkload(key) });
+            sys = "Ты — старший аналитик аппарата руководителя. На основе JSON с метриками ОДНОГО процесса («" + pr.Name + "») " +
+                "дай краткую сводку для первого лица. Верни ровно три раздела с заголовками в отдельных строках: " +
+                "'1. На что обратить внимание', '2. Тренды', '3. Кто хуже всех справляется и вероятные причины'. " +
+                "Маркированные пункты (через '- '), с реальными цифрами из данных, без воды. Связывай причины: возвраты " +
+                "на доработку, формальные решения, узкие горлышки, перегруз, скорость взятия в работу. По-русски.";
+        }
+        else
+        {
+            userJson = JsonSerializer.Serialize(GetBundleCached());
+            sys = "Ты — старший аналитик аппарата руководителя региона. На основе JSON с метриками процессов " +
+                "(поручения, обращения граждан, НПА) дай краткую управленческую сводку для первого лица. " +
+                "Верни ровно три раздела с заголовками в отдельных строках: '1. На что обратить внимание', " +
+                "'2. Тренды', '3. Кто хуже всех справляется и вероятные причины'. В каждом разделе — маркированные " +
+                "пункты (через '- '), конкретно, с реальными цифрами из данных, без воды и без выдумок. " +
+                "Связывай причины: возвраты на доработку, формальные решения (закрыто за минуты), узкие горлышки, перегруз. " +
+                "Если данных мало — скажи об этом прямо. Отвечай по-русски.";
+        }
         var messages = new object[]
         {
             new { role = "system", content = sys },
-            new { role = "user", content = "Данные процессов (JSON):\n" + bundleJson }
+            new { role = "user", content = "Данные (JSON):\n" + userJson }
         };
         try
         {
             var text = LlmChat(messages, 1500, 0.3);
-            _sumCache = new { text, generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"), model = LlmModel };
-            _sumAt = DateTime.Now;
-            return _sumCache;
+            var data = new { text, scope = pr != null ? pr.Name : "регион", generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"), model = LlmModel };
+            _sumCache[ck] = (data, DateTime.Now);
+            return data;
         }
         catch (Exception ex) { return new { error = ex.Message }; }
     }

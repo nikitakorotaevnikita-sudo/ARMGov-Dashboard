@@ -36,9 +36,32 @@ class Program
         public string RxBase { get; set; } = "http://172.16.96.98/Client/#/";
         public DbCfg Db { get; set; } = new();
         public LlmCfg Llm { get; set; } = new();
+        public Thresholds Thresholds { get; set; } = new();
+        public List<string> ChatPrompts { get; set; } = new()
+        {
+            "Где главный затор и кто перегружен?",
+            "Кто чаще всех возвращает на доработку и почему это проблема?",
+            "Почему обращения граждан в красной зоне?",
+            "Назови 3 самых срочных действия на сегодня."
+        };
+        public string ActiveProfile { get; set; } = "Руководитель";
+        public List<Profile> Profiles { get; set; } = DefaultProfiles();
     }
     public class DbCfg { public string Host { get; set; } = "192.168.52.18"; public string Port { get; set; } = "5432"; public string Database { get; set; } = "DirRX412OGVGenAI"; public string Username { get; set; } = "admin"; public string Password { get; set; } = ""; }
     public class LlmCfg { public string Url { get; set; } = "https://llm.ario.directum360.ru/v1/chat/completions"; public string Model { get; set; } = "Qwen/Qwen3.6-35B-A3B"; public string Token { get; set; } = ""; }
+    public class Thresholds { public int ThroughputRed { get; set; } = 50; public int ThroughputAmber { get; set; } = 75; public int LongRunnerDays { get; set; } = 3; }
+    public class Profile { public string Name { get; set; } = ""; public List<string> Overview { get; set; } = new(); public List<string> Process { get; set; } = new(); }
+    // Ключи блоков: overview = throughput|bottleneck|longrunners|burning|svetofor
+    // process = funnel|stages|hist|trend|risk|neg|pos|rework|formal|workload|overdue|backlog|ftr|loops|breakdown
+    static List<Profile> DefaultProfiles() => new()
+    {
+        new Profile{ Name="Руководитель", Overview=new(){"throughput","bottleneck","longrunners","burning","svetofor"},
+            Process=new(){"funnel","backlog","ftr","risk","neg","workload","overdue","trend","breakdown"} },
+        new Profile{ Name="Контроль исполнения", Overview=new(){"longrunners","bottleneck","burning","svetofor"},
+            Process=new(){"overdue","neg","rework","loops","ftr","backlog","risk","workload","funnel","breakdown"} },
+        new Profile{ Name="Аналитик", Overview=new(){"throughput","bottleneck","longrunners","burning","svetofor"},
+            Process=new(){"funnel","stages","hist","trend","backlog","ftr","loops","risk","neg","pos","rework","formal","workload","overdue","breakdown"} },
+    };
     static string CfgPath => Path.Combine(AppContext.BaseDirectory, "config.json");
     static readonly JsonSerializerOptions JsonCfg = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
     static void LoadConfig()
@@ -52,6 +75,23 @@ class Program
         Conf = c;
     }
     static void SaveConfig() => File.WriteAllText(CfgPath, JsonSerializer.Serialize(Conf, JsonCfg));
+
+    // Период фильтрует процессы по дате создания задачи (t.created). Пусто/all = весь период.
+    static string PeriodClause(string period) => period switch
+    {
+        "month" => " and t.created >= now() - interval '1 month'",
+        "quarter" => " and t.created >= now() - interval '3 months'",
+        "year" => " and t.created >= now() - interval '12 months'",
+        _ => ""
+    };
+    // Настройки UI для дашборда (профили/промпты/пороги) — отдаются в составе /api/overview.
+    static object UiConfig() => new
+    {
+        activeProfile = Conf.ActiveProfile,
+        profiles = Conf.Profiles,
+        chatPrompts = Conf.ChatPrompts,
+        thresholds = Conf.Thresholds
+    };
 
     // Определения процессов: ключ -> (имя, SQL-условие отбора задач t.*)
     class Proc { public string Key, Name, Where; }
@@ -106,12 +146,13 @@ class Program
         switch (path)
         {
             case "/api/processes": J(ctx, BuildProcesses()); return;
-            case "/api/overview": J(ctx, BuildOverview()); return;
-            case "/api/process": J(ctx, BuildProcess(q["key"])); return;
-            case "/api/process/stuck": J(ctx, BuildStuck(q["key"])); return;
-            case "/api/process/workload": J(ctx, BuildWorkload(q["key"])); return;
-            case "/api/process/departments": J(ctx, BuildDepartments(q["key"])); return;
-            case "/api/process/dept-tasks": J(ctx, BuildDeptTasks(q["key"], q["dept"])); return;
+            case "/api/overview": J(ctx, BuildOverview(q["period"])); return;
+            case "/api/process": J(ctx, BuildProcess(q["key"], q["period"])); return;
+            case "/api/process/stuck": J(ctx, BuildStuck(q["key"], q["period"])); return;
+            case "/api/process/workload": J(ctx, BuildWorkload(q["key"], q["period"])); return;
+            case "/api/process/departments": J(ctx, BuildDepartments(q["key"], q["period"])); return;
+            case "/api/process/dept-tasks": J(ctx, BuildDeptTasks(q["key"], q["dept"], q["period"])); return;
+            case "/api/process/by-kind": J(ctx, BuildByKind(q["key"], q["period"])); return;
             case "/api/task":
                 if (long.TryParse(q["id"], out var tid)) { J(ctx, BuildTask(tid)); return; }
                 Write(ctx, 400, "application/json", "{\"error\":\"bad id\"}"); return;
@@ -120,6 +161,7 @@ class Program
                 Write(ctx, 400, "application/json", "{\"error\":\"bad id\"}"); return;
             case "/api/ai/summary": J(ctx, BuildAiSummary(q["force"] == "1")); return;
             case "/api/ai/chat": J(ctx, BuildAiChat(ReadBody(ctx))); return;
+            case "/api/ai/explain": J(ctx, BuildAiExplain(ReadBody(ctx))); return;
             case "/api/config":
                 if (ctx.Request.HttpMethod == "POST") { J(ctx, SaveConfigFromBody(ReadBody(ctx))); return; }
                 J(ctx, GetConfigMasked()); return;
@@ -156,7 +198,7 @@ class Program
         ctx.Response.OutputStream.Write(b, 0, b.Length); ctx.Response.OutputStream.Close();
     }
 
-    static string Sev(int h) => h >= 75 ? "green" : (h >= 50 ? "amber" : "red");
+    static string Sev(int h) => h >= Conf.Thresholds.ThroughputAmber ? "green" : (h >= Conf.Thresholds.ThroughputRed ? "amber" : "red");
 
     // ---------- общие куски SQL ----------
     static string AsgJoin(Proc p) => $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}";
@@ -182,7 +224,7 @@ class Program
     }
 
     // ---------- /api/overview (Уровень 0 — стратегический обзор + машиночитаемый агрегат) ----------
-    static object BuildOverview()
+    static object BuildOverview(string period = null)
     {
         using var c = new NpgsqlConnection(Cs); c.Open();
         long regOnTime = 0, regBreached = 0, regLong = 0;
@@ -190,8 +232,9 @@ class Program
         var bottlenecks = new List<dynamic>();   // ранжир (процесс, этап) по медиане возраста активных
         var burning = new List<dynamic>();
 
-        foreach (var p in Procs)
+        foreach (var p0 in Procs)
         {
+            var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
             // базовые счётчики
             long total = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where}");
             long inwork = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where} and t.status::text='InProcess'");
@@ -206,8 +249,8 @@ class Program
             long rated = onTime + breached;
             int thrPct = rated > 0 ? (int)Math.Round(100.0 * onTime / rated) : 100;
 
-            // долгострои > 3 дней
-            long lng = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='InProcess' and a.deadline is not null and a.deadline < now() - interval '3 days'");
+            // долгострои > порога дней
+            long lng = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='InProcess' and a.deadline is not null and a.deadline < now() - make_interval(days => {Conf.Thresholds.LongRunnerDays})");
 
             // узкое горлышко процесса: этап с макс. медианой возраста активных заданий
             string bnStage = null; double bnMed = 0; long bnQueue = 0;
@@ -266,11 +309,13 @@ class Program
             {
                 throughput = new { pct = regThr, onTimeTotal = regOnTime, ratedTotal = regRated, color = Sev(regThr) },
                 bottleneck = top1 == null ? null : new { process = (string)top1.process, processKey = (string)top1.processKey, stage = (string)top1.stage, medianDays = (double)top1.medianDays, queue = (long)top1.queue },
-                longRunners = new { count = regLong, thresholdDays = 3 }
+                longRunners = new { count = regLong, thresholdDays = Conf.Thresholds.LongRunnerDays }
             },
             bottlenecksTop = bnTop.Select(b => (object)new { processKey = (string)b.processKey, process = (string)b.process, stage = (string)b.stage, medianDays = (double)b.medianDays, queue = (long)b.queue }).ToList(),
             whatsBurning,
-            processes = procs
+            processes = procs,
+            period = string.IsNullOrEmpty(period) ? "all" : period,
+            ui = UiConfig()
         };
     }
 
@@ -288,9 +333,10 @@ class Program
     }
 
     // ---------- /api/process ----------
-    static object BuildProcess(string key)
+    static object BuildProcess(string key, string period = null)
     {
-        var p = P(key); if (p == null) return new { error = "unknown process" };
+        var p0 = P(key); if (p0 == null) return new { error = "unknown process" };
+        var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
         using var c = new NpgsqlConnection(Cs); c.Open();
 
         long total = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where}");
@@ -428,6 +474,35 @@ class Program
             $"where {p.Where} and a.status::text='Completed' and a.completed is not null and mr.first_read<=a.completed) z", c))
         using (var r = cmd.ExecuteReader()) if (r.Read()) { openDecMedian = Math.Round(r.GetDouble(0), 1); openDecN = r.GetInt64(1); instant = r.GetInt64(2); }
 
+        // #5 С первого раза (first-time-right): задачи без единого возврата на Доработку
+        long ftrClean = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where} and not exists (select 1 from sungero_wf_assignment a where a.task=t.id and a.discriminator='{DorabotkaDisc}')");
+        int ftrPct = total > 0 ? (int)Math.Round(100.0 * ftrClean / total) : 100;
+
+        // #6 Петли/пинг-понг: задачи с повторным прохождением этапа + топ переходов между этапами
+        long loopTasks = ScalarL(c, $"select count(distinct task) from (select a.task task from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task, a.discriminator having count(*)>1) z");
+        int loopPct = total > 0 ? (int)Math.Round(100.0 * loopTasks / total) : 0;
+        var transitions = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "select prev, d, count(*) c from (select a.discriminator::text d, lag(a.discriminator::text) over (partition by a.task order by a.created, a.id) prev " +
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}) s where prev is not null group by prev, d order by c desc limit 7", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read())
+            {
+                string from = StageName(r.IsDBNull(0) ? null : r.GetString(0), 0), to = StageName(r.IsDBNull(1) ? null : r.GetString(1), 0);
+                transitions.Add(new { from, to, count = (int)r.GetInt64(2), back = from == "Доработка" || to == "Доработка" });
+            }
+
+        // #3 Приток vs отток по месяцам (создано против завершено)
+        var backlog = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "with m as (select generate_series(date_trunc('month',now())-interval '7 months', date_trunc('month',now()), interval '1 month') mo), " +
+            $"arr as (select date_trunc('month',t.created) mo, count(*) n from sungero_wf_task t where {p.Where} group by 1), " +
+            "comp as (select date_trunc('month',cd) mo, count(*) n from (select t.id, (select max(a.completed) from sungero_wf_assignment a where a.task=t.id and a.completed is not null) cd " +
+            $"from sungero_wf_task t where {p.Where} and t.status::text='Completed') d where cd is not null group by 1) " +
+            "select to_char(m.mo,'YYYY-MM') mon, coalesce(arr.n,0) arrived, coalesce(comp.n,0) completed from m left join arr on arr.mo=m.mo left join comp on comp.mo=m.mo order by m.mo", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) backlog.Add(new { month = r.GetString(0), arrived = (int)r.GetInt64(1), completed = (int)r.GetInt64(2) });
+
         return new
         {
             key = p.Key, name = p.Name, chronic,
@@ -441,6 +516,9 @@ class Program
             formal = new { completedTotal = fTotal, formalCount = fFormal, formalPct, avgDecisionHours = Math.Round(fAvgH, 1) },
             returnsTotal, returnAuthors,
             decision = new { medianHours = Math.Round(decMedian, 1), openToDecideMedianMin = openDecMedian, sample = openDecN, instantCount = instant, instantThresholdMin = 5 },
+            firstTimeRight = new { total, clean = ftrClean, pct = ftrPct },
+            loops = new { loopTasks, loopPct, transitions },
+            backlog,
             topNeg, topPos
         };
     }
@@ -485,9 +563,10 @@ class Program
     }
 
     // ---------- /api/process/stuck ----------
-    static object BuildStuck(string key)
+    static object BuildStuck(string key, string period = null)
     {
-        var p = P(key); if (p == null) return new { error = "unknown process" };
+        var p0 = P(key); if (p0 == null) return new { error = "unknown process" };
+        var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
         using var c = new NpgsqlConnection(Cs); c.Open();
         var items = new List<object>();
         // зависшие: InProcess, просрочено ИЛИ возраст велик; сортируем по возрасту
@@ -520,9 +599,10 @@ class Program
     }
 
     // ---------- /api/process/workload (C. Загрузка исполнителей) ----------
-    static object BuildWorkload(string key)
+    static object BuildWorkload(string key, string period = null)
     {
-        var p = P(key); if (p == null) return new { error = "unknown process" };
+        var p0 = P(key); if (p0 == null) return new { error = "unknown process" };
+        var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
         using var c = new NpgsqlConnection(Cs); c.Open();
         var list = new List<dynamic>();
         using (var cmd = new NpgsqlCommand(
@@ -552,9 +632,10 @@ class Program
 
     // ---------- /api/process/departments (распределение по подразделениям) ----------
     // Задача относится к подразделению ПОСЛЕДНЕГО исполнителя (кто ведёт её сейчас).
-    static object BuildDepartments(string key)
+    static object BuildDepartments(string key, string period = null)
     {
-        var p = P(key); if (p == null) return new { error = "unknown process" };
+        var p0 = P(key); if (p0 == null) return new { error = "unknown process" };
+        var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
         using var c = new NpgsqlConnection(Cs); c.Open();
         var items = new List<object>();
         string sql =
@@ -585,9 +666,10 @@ class Program
     }
 
     // ---------- /api/process/dept-tasks (поручения подразделения) ----------
-    static object BuildDeptTasks(string key, string deptStr)
+    static object BuildDeptTasks(string key, string deptStr, string period = null)
     {
-        var p = P(key); if (p == null) return new { error = "unknown process" };
+        var p0 = P(key); if (p0 == null) return new { error = "unknown process" };
+        var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
         long.TryParse(deptStr, out long deptId);
         using var c = new NpgsqlConnection(Cs); c.Open();
         var items = new List<object>();
@@ -623,6 +705,25 @@ class Program
             });
         }
         return new { count = items.Count, items };
+    }
+
+    // ---------- /api/process/by-kind (разрез по виду процесса рассмотрения) ----------
+    static object BuildByKind(string key, string period = null)
+    {
+        var p0 = P(key); if (p0 == null) return new { error = "unknown process" };
+        var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        var items = new List<object>();
+        using var cmd = new NpgsqlCommand(
+            "select coalesce(pk.name::text,'(не указан)') kind, count(*) total, " +
+            "count(*) filter (where t.status::text='InProcess') inwork, " +
+            "count(*) filter (where exists (select 1 from sungero_wf_assignment a where a.task=t.id and a.status::text='InProcess' and a.deadline is not null and a.deadline<now())) overdue " +
+            "from sungero_wf_task t left join sungero_wf_processkind pk on pk.id=t.processkind " +
+            $"where {p.Where} group by pk.name order by total desc", c);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            items.Add(new { label = r.GetString(0), total = (int)r.GetInt64(1), inwork = (int)r.GetInt64(2), overdue = (int)r.GetInt64(3) });
+        return new { items };
     }
 
     // ---------- /api/task ----------
@@ -712,7 +813,11 @@ class Program
         prefix = Conf.Prefix,
         rxBase = Conf.RxBase,
         db = new { Conf.Db.Host, Conf.Db.Port, Conf.Db.Database, Conf.Db.Username, hasPassword = !string.IsNullOrEmpty(Conf.Db.Password) },
-        llm = new { Conf.Llm.Url, Conf.Llm.Model, hasToken = !string.IsNullOrEmpty(Conf.Llm.Token) }
+        llm = new { Conf.Llm.Url, Conf.Llm.Model, hasToken = !string.IsNullOrEmpty(Conf.Llm.Token) },
+        thresholds = Conf.Thresholds,
+        chatPrompts = Conf.ChatPrompts,
+        activeProfile = Conf.ActiveProfile,
+        profiles = Conf.Profiles
     };
     static object SaveConfigFromBody(string body)
     {
@@ -733,6 +838,10 @@ class Program
                 Conf.Llm.Url = S(llm, "url", Conf.Llm.Url); Conf.Llm.Model = S(llm, "model", Conf.Llm.Model);
                 var nt = S(llm, "token", ""); if (!string.IsNullOrEmpty(nt)) Conf.Llm.Token = nt;          // пусто = не менять
             }
+            if (r.TryGetProperty("activeProfile", out var ap) && ap.ValueKind == JsonValueKind.String) Conf.ActiveProfile = ap.GetString();
+            if (r.TryGetProperty("thresholds", out var th) && th.ValueKind == JsonValueKind.Object) Conf.Thresholds = th.Deserialize<Thresholds>(JsonCfg) ?? Conf.Thresholds;
+            if (r.TryGetProperty("chatPrompts", out var cp) && cp.ValueKind == JsonValueKind.Array) Conf.ChatPrompts = cp.Deserialize<List<string>>(JsonCfg) ?? Conf.ChatPrompts;
+            if (r.TryGetProperty("profiles", out var pr) && pr.ValueKind == JsonValueKind.Array) Conf.Profiles = pr.Deserialize<List<Profile>>(JsonCfg) ?? Conf.Profiles;
             SaveConfig();
             _sumCache = null; _bundleCache = null;   // сбросить кэши, чтобы подхватились новые настройки
             return new { ok = true, note = "Сохранено в config.json. Смена адреса прослушивания (Prefix) применится после перезапуска; БД/модель — сразу.", config = GetConfigMasked() };
@@ -838,6 +947,31 @@ class Program
         }
         catch (Exception ex) { return new { error = "bad request: " + ex.Message }; }
         try { return new { reply = LlmChat(msgs.ToArray(), 1000, 0.4) }; }
+        catch (Exception ex) { return new { error = ex.Message }; }
+    }
+
+    // Пояснение конкретного блока на текущих данных: body {block, title, key?}
+    static object BuildAiExplain(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body); var r = doc.RootElement;
+            string title = r.TryGetProperty("title", out var t) ? t.GetString() : "блок";
+            string key = r.TryGetProperty("key", out var k) && k.ValueKind == JsonValueKind.String ? k.GetString() : null;
+            // контекст: данные конкретного процесса (если задан) либо общий обзор
+            object data = key != null && P(key) != null ? BuildProcess(key) : BuildOverview();
+            var dataJson = JsonSerializer.Serialize(data);
+            string sys = "Ты — аналитик процессов для руководителя. Объясни КОРОТКО (3–5 предложений) " +
+                "блок дашборда по имени, опираясь ТОЛЬКО на JSON: 1) что показывает метрика, " +
+                "2) что говорят текущие цифры, 3) тревожно это или нет и на что обратить внимание. " +
+                "По-русски, с конкретными числами из данных, без воды.";
+            var messages = new object[]
+            {
+                new { role = "system", content = sys },
+                new { role = "user", content = "Блок: «" + title + "».\nДанные (JSON):\n" + dataJson }
+            };
+            return new { reply = LlmChat(messages, 500, 0.3) };
+        }
         catch (Exception ex) { return new { error = ex.Message }; }
     }
 

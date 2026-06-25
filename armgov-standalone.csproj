@@ -7,6 +7,10 @@
     <AssemblyName>armgov-standalone</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+  <!-- Вспомогательные утилиты (tools/) — отдельные проекты, не компилируются в составе дашборда -->
+  <ItemGroup>
+    <Compile Remove="tools\**\*.cs" />
+  </ItemGroup>
   <!-- Вендоренные сборки лежат в lib/ (скопированы из стенда, в репозитории) — -->
   <!-- проект собирается на любой машине, DLL копируются рядом с exe (Private=true). -->
   <ItemGroup>

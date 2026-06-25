@@ -847,7 +847,7 @@ function renderBreakdown(){
   var per='&period='+PERIOD;
   if(BD_DIM==='dept') fetch('/api/process/departments?key='+key+per).then(function(r){return r.json();}).then(function(s){bdBars((s.items||[]).map(function(x){return {label:x.dept,total:x.total,overdue:x.overdue,click:'openDeptTasks(\''+key+'\','+x.deptId+',\''+esc(x.dept).replace(/\x27/g,'')+'\')'};}));});
   else if(BD_DIM==='performer') fetch('/api/process/workload?key='+key+per).then(function(r){return r.json();}).then(function(s){bdBars((s.items||[]).map(function(x){return {label:x.name,total:(x.active||0)+(x.completed||0),overdue:x.overdue,click:'openPerf('+x.id+',\''+esc(x.name).replace(/\x27/g,'')+'\')'};}));});
-  else fetch('/api/process/by-kind?key='+key+per).then(function(r){return r.json();}).then(function(s){bdBars((s.items||[]).map(function(x){return {label:x.label,total:x.total,overdue:x.overdue,click:''};}));});
+  else fetch('/api/process/by-kind?key='+key+per).then(function(r){return r.json();}).then(function(s){bdBars((s.items||[]).map(function(x){return {label:x.label,total:x.total,overdue:x.overdue,click:'openKindTasks(\''+key+'\','+x.kindId+',\''+esc(x.label).replace(/\x27/g,'')+'\')'};}));});
 }
 function bdBars(items){
   var el=document.getElementById('bd-body');if(!el)return;
@@ -879,6 +879,22 @@ function openDeptTasks(key,deptId,deptName){
 }
 function closeDept(){document.getElementById('deptModal').classList.add('hidden');}
 
+/* ---------- поручения по виду рассмотрения (переиспользует deptModal) ---------- */
+function openKindTasks(key,kindId,kindName){
+  var m=document.getElementById('deptModal');m.classList.remove('hidden');
+  document.getElementById('dm-title').innerHTML='Поручения · вид <b>'+esc(kindName)+'</b> <span class="subtle" style="font-size:12px;font-weight:400">(клик → маршрут + RX)</span>';
+  document.getElementById('dm-list').innerHTML='<div class="sub" style="margin:10px 0">загрузка…</div>';
+  fetch('/api/process/kind-tasks?key='+key+'&kind='+kindId,{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+    var items=s.items||[];
+    document.getElementById('dm-list').innerHTML=items.length?items.map(function(p){
+      var subj=p.subject.length>74?p.subject.slice(0,74)+'…':p.subject;
+      var st=p.status==='overdue'?'<span style="color:var(--red);white-space:nowrap">просрочено</span>':(p.status==='done'?'<span style="color:var(--green);white-space:nowrap">завершено</span>':'<span class="muted" style="white-space:nowrap">в работе</span>');
+      return '<div class="listrow" onclick="openTask('+p.id+')"><div class="row" style="justify-content:space-between"><span style="font-size:14px">'+esc(subj)+'</span>'+st+'</div>'+
+        '<div style="font-size:12px;margin-top:2px" class="muted">'+esc(p.performer)+(p.deadline?' · срок '+p.deadline:'')+' · в работе '+p.ageDays+' дн</div></div>';
+    }).join(''):'<div class="sub" style="margin:10px 0">поручений нет</div>';
+  });
+}
+
 document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeTask();closePerf();closeOverdue();closeDept();closeProc();}});
 
 function load(){
@@ -896,7 +912,21 @@ function renderHeaderControls(){
   el.innerHTML=
     '<span class="subtle" style="font-size:11px">период</span><select class="hdr-sel" onchange="setPeriod(this.value)">'+per+'</select>'+
     (profs.length?'<span class="subtle" style="font-size:11px">профиль</span><select class="hdr-sel" onchange="setProfile(this.value)">'+pro+'</select>':'')+
+    '<button class="btn-ghost" id="refreshBtn" style="padding:5px 10px" onclick="refreshData()">↻ Обновить данные</button>'+
     '<button class="btn-ghost" style="padding:5px 10px" onclick="window.print()">🖨 Печать</button>';
+}
+// Сброс серверного кэша и перерисовка текущего экрана (обзор + при необходимости процесс).
+function refreshData(){
+  var b=document.getElementById('refreshBtn');
+  if(b){b.disabled=true;b.textContent='↻ Обновляю…';}
+  fetch('/api/refresh',{method:'POST',cache:'no-store'}).then(function(r){return r.json();}).then(function(){
+    load();
+    if(CUR&&CUR!=='__bo')goProcess(CUR);
+  }).catch(function(e){
+    document.getElementById('meta').textContent='не удалось обновить: '+e;
+  }).then(function(){
+    if(b){b.disabled=false;b.textContent='↻ Обновить данные';}
+  });
 }
 function setPeriod(v){PERIOD=v;AISUM=null;load();if(CUR&&CUR!=='__bo'&&CUR!==null)goProcess(CUR);}
 function setProfile(v){ACTIVE_PROFILE=v;if(CUR===null)renderStart();else if(CUR&&CUR!=='__bo')renderProcess(CURDATA);}

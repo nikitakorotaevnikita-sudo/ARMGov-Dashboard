@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -24,6 +25,11 @@ class Program
     static string Cs => $"Host={Conf.Db.Host};Port={Conf.Db.Port};Database={Conf.Db.Database};Username={Conf.Db.Username};Password={Conf.Db.Password};SSL Mode=Prefer;Trust Server Certificate=true;Timeout=15;Command Timeout=120";
     static string Prefix => string.IsNullOrWhiteSpace(Conf.Prefix) ? "http://localhost:5080/" : Conf.Prefix;
     static string RxBase => Conf.RxBase;
+    // Ссылка на карточку задачи в веб-клиенте RX: #/card/{тип-сущности}/{id}.
+    // Тип берётся из колонки discriminator самой задачи (sungero_wf_task.discriminator).
+    // Старый формат #/Task/{id} в RX 2.6 даёт «Страница не найдена».
+    static string RxTaskLink(long id, string discriminator) =>
+        string.IsNullOrEmpty(discriminator) ? RxBase + "Task/" + id : RxBase + "card/" + discriminator + "/" + id;
     static string LlmUrl => Conf.Llm.Url;
     static string LlmModel => Conf.Llm.Model;
     static string LlmToken => Conf.Llm.Token;
@@ -103,12 +109,30 @@ class Program
     };
     static Proc P(string key) => Procs.FirstOrDefault(p => p.Key == key);
 
+    // Этап = тип задания (a.discriminator). Локализованных имён в БД нет (только .NET-типы
+    // в sungero_system_entitytype), поэтому русские названия заданы вручную по типу задания.
     static readonly Dictionary<string, string> StageNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["d238ef51-607e-46a5-b86a-ede4482f7f19"] = "Исполнение",
+        ["d238ef51-607e-46a5-b86a-ede4482f7f19"] = "Исполнение поручения",     // IActionItemExecutionAssignment
+        ["f44faafc-cd55-4c5b-b16d-93b6fc966ffb"] = "Контроль исполнения",       // IActionItemSupervisorAssignment
         ["ab2c30c0-072f-4595-ac10-312f59223cda"] = "Контроль / приёмка",
-        ["ef79164b-2ce7-451b-9ba6-eb59dd9a4a74"] = "Доработка",
-        ["50e39d87-4fc6-4847-8bad-20847b9ba020"] = "Прочее",
+        ["50e39d87-4fc6-4847-8bad-20847b9ba020"] = "Рассмотрение документа",    // IDocumentReviewAssignment
+        ["7cca016a-80f0-4562-9042-57bb748d5b30"] = "Подготовка проекта резолюции", // IPreparingDraftResolutionAssignment
+        ["018e582e-5b0e-4e4f-af57-be1e0a468efa"] = "Рассмотрение резолюции",    // IReviewResolutionAssignment
+        ["1d5433e5-b285-4310-9a63-fc4e76f0a9b7"] = "Доработка резолюции",       // IReviewReworkAssignment (реальная доработка)
+        ["90daecb7-5d5d-465e-95a4-3235b8c01d5b"] = "Простое задание",          // ISimpleAssignment
+        ["ef79164b-2ce7-451b-9ba6-eb59dd9a4a74"] = "Уведомление",              // INotice (исключается из статистики)
+        // Согласование НПА (процесс согласования проекта правового акта)
+        ["28090f3e-2104-4251-a823-229ad1de0427"] = "Согласование",             // IEntityApprovalAssignment
+        ["04777117-f8a5-4e68-93fe-2e9036765d1c"] = "Задание",                  // IAdvancedAssignment
+        ["01dd1422-80d7-4505-9719-842ca2433647"] = "Обработка документа",      // IDocumentProcessingAssignment
+        ["aa94c3bf-2eb5-4e4b-bc1e-c4b86604b889"] = "Подписание",               // ISigningAssignment
+        ["14d47b91-96e5-4b5f-89c0-8f8a8db7bc4c"] = "Доработка",                // IEntityReworkAssignment
+        ["8fee99ee-b3fd-49dd-9b48-e51b83597227"] = "Ознакомление",             // IAcquaintanceAssignment
+        ["9ce17e8c-740f-4655-9a0c-67b59b107b50"] = "Подготовка заключения",    // IPrepareConclusionAssignment
+        ["e04a433b-5b48-40c2-993a-41370b9ebb8a"] = "Завершение ознакомления",  // IAcquaintanceFinishAssignment
+        ["70b4bad9-604f-46f2-b438-0cc6ec594484"] = "Регистрация и отправка",   // IRegisterAndSendTransferDocumentsAssignment
+        ["d0190603-b367-4b4b-ac3c-856f3e495328"] = "Рассмотрение",             // IReviewAssignment
     };
     static string StageName(string disc, int idx) =>
         disc == null ? "—" : (StageNames.TryGetValue(disc, out var n) ? n : "Этап " + (idx + 1));
@@ -121,6 +145,7 @@ class Program
             return File.Exists(p) ? ctx.LoadFromAssemblyPath(p) : null;
         };
         LoadConfig();
+        LoadNoticeTypes();
         Serve();
     }
 
@@ -143,16 +168,19 @@ class Program
     {
         var path = ctx.Request.Url.AbsolutePath.TrimEnd('/');
         var q = ctx.Request.QueryString;
+        var ck = path + ctx.Request.Url.Query;   // ключ кэша = путь + строка запроса
         switch (path)
         {
-            case "/api/processes": J(ctx, BuildProcesses()); return;
-            case "/api/overview": J(ctx, BuildOverview(q["period"])); return;
-            case "/api/process": J(ctx, BuildProcess(q["key"], q["period"])); return;
-            case "/api/process/stuck": J(ctx, BuildStuck(q["key"], q["period"])); return;
-            case "/api/process/workload": J(ctx, BuildWorkload(q["key"], q["period"])); return;
-            case "/api/process/departments": J(ctx, BuildDepartments(q["key"], q["period"])); return;
-            case "/api/process/dept-tasks": J(ctx, BuildDeptTasks(q["key"], q["dept"], q["period"])); return;
-            case "/api/process/by-kind": J(ctx, BuildByKind(q["key"], q["period"])); return;
+            case "/api/refresh": Cache.Clear(); J(ctx, new { ok = true }); return;
+            case "/api/processes": JCached(ctx, ck, () => BuildProcesses()); return;
+            case "/api/overview": JCached(ctx, ck, () => BuildOverview(q["period"])); return;
+            case "/api/process": JCached(ctx, ck, () => BuildProcess(q["key"], q["period"])); return;
+            case "/api/process/stuck": JCached(ctx, ck, () => BuildStuck(q["key"], q["period"])); return;
+            case "/api/process/workload": JCached(ctx, ck, () => BuildWorkload(q["key"], q["period"])); return;
+            case "/api/process/departments": JCached(ctx, ck, () => BuildDepartments(q["key"], q["period"])); return;
+            case "/api/process/dept-tasks": JCached(ctx, ck, () => BuildDeptTasks(q["key"], q["dept"], q["period"])); return;
+            case "/api/process/kind-tasks": JCached(ctx, ck, () => BuildKindTasks(q["key"], q["kind"], q["period"])); return;
+            case "/api/process/by-kind": JCached(ctx, ck, () => BuildByKind(q["key"], q["period"])); return;
             case "/api/export":
             {
                 var (fn, csv) = BuildExport(q["what"], q["key"], q["period"]);
@@ -205,6 +233,22 @@ class Program
     }
 
     static void J(HttpListenerContext ctx, object o) => Write(ctx, 200, "application/json; charset=utf-8", JsonSerializer.Serialize(o));
+
+    // ---------- кэш ответов аналитических эндпоинтов ----------
+    // Данные не realtime: держим готовый JSON в памяти на короткий TTL. Билдеры не трогаем.
+    // Сброс — кнопкой «Обновить данные» (POST /api/refresh) или по истечении TTL.
+    static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
+    static readonly ConcurrentDictionary<string, (DateTime at, string json)> Cache = new();
+    // Отдаёт из кэша по ключу или строит, кладёт и отдаёт. Время данных — в заголовке X-Data-At.
+    static void JCached(HttpListenerContext ctx, string key, Func<object> build)
+    {
+        var now = DateTime.Now;
+        string json; DateTime at;
+        if (Cache.TryGetValue(key, out var e) && now - e.at < CacheTtl) { json = e.json; at = e.at; }
+        else { json = JsonSerializer.Serialize(build()); at = now; Cache[key] = (now, json); }
+        ctx.Response.AddHeader("X-Data-At", at.ToString("yyyy-MM-dd HH:mm:ss"));
+        Write(ctx, 200, "application/json; charset=utf-8", json);
+    }
     static void Write(HttpListenerContext ctx, int code, string ct, string body)
     {
         var b = Encoding.UTF8.GetBytes(body);
@@ -216,8 +260,39 @@ class Program
 
     static string Sev(int h) => h >= Conf.Thresholds.ThroughputAmber ? "green" : (h >= Conf.Thresholds.ThroughputRed ? "amber" : "red");
 
+    // ---------- исключение уведомлений из статистики ----------
+    // Уведомления (Sungero.Workflow.INotice и *Notification) лежат в той же таблице,
+    // что и задания, но это информирование, а не работа — в метрики попадать не должны.
+    // Список типов грузится из sungero_system_entitytype при старте (имя содержит Notice/Notif).
+    // NoticeNotIn — готовый предикат " and a.discriminator not in ('..','..')" (алиас задания = a).
+    static string NoticeNotIn = "";   // " and a.discriminator not in ('..',..)" — для запросов с алиасом a
+    static string NoticeList = "";    // "'..','..'" — голый список для подзапросов без алиаса
+    static void LoadNoticeTypes()
+    {
+        var guids = new List<string>();
+        try
+        {
+            using var c = new NpgsqlConnection(Cs); c.Open();
+            using var cmd = new NpgsqlCommand(
+                "select typeguid::text from sungero_system_entitytype " +
+                "where typename::text ilike '%notice%' or typename::text ilike '%notif%'", c);
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) guids.Add(r.GetString(0));
+        }
+        catch { /* БД недоступна при старте — используем фолбэк ниже */ }
+        if (guids.Count == 0)  // фолбэк: известные типы-уведомления, встречающиеся в заданиях
+            guids.AddRange(new[] {
+                "ef79164b-2ce7-451b-9ba6-eb59dd9a4a74", "32ce5b61-1be2-4d61-b98a-37b99aff3560",
+                "e3f1702b-33e5-4cbb-9ffd-1b0c3504f748", "3dad0441-cd89-4928-b6ff-9b7dd7fc20cf" });
+        NoticeList = string.Join(",", guids.Select(g => "'" + g + "'"));
+        NoticeNotIn = " and a.discriminator not in (" + NoticeList + ")";
+        Console.WriteLine($"Notice types excluded from stats: {guids.Count}");
+    }
+
     // ---------- общие куски SQL ----------
-    static string AsgJoin(Proc p) => $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}";
+    // AsgJoin уже исключает уведомления (NoticeNotIn). Для inline-запросов по заданиям
+    // добавляйте {NoticeNotIn} после {p.Where}.
+    static string AsgJoin(Proc p) => $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn}";
 
     // ---------- /api/processes ----------
     static object BuildProcesses()
@@ -456,7 +531,7 @@ class Program
         using (var cmd = new NpgsqlCommand(
             "select count(*) total, count(*) filter (where rep>1) rw from (" +
             "select t.id, coalesce(max(c.cnt),1) rep from sungero_wf_task t " +
-            "join (select task, discriminator, count(*) cnt from sungero_wf_assignment group by task, discriminator) c on c.task=t.id " +
+            $"join (select task, discriminator, count(*) cnt from sungero_wf_assignment where discriminator not in ({NoticeList}) group by task, discriminator) c on c.task=t.id " +
             $"where {p.Where} group by t.id) z", c))
         using (var r = cmd.ExecuteReader()) { if (r.Read()) { rwTotal = r.GetInt64(0); rwTasks = r.GetInt64(1); } }
         int reworkPct = rwTotal > 0 ? (int)Math.Round(100.0 * rwTasks / rwTotal) : 0;
@@ -465,7 +540,7 @@ class Program
         using (var cmd = new NpgsqlCommand(
             "select route, count(*) cnt from (" +
             "select a.task, string_agg(a.discriminator::text,'|' order by a.created) route " +
-            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task) v " +
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn} group by a.task) v " +
             "group by route order by cnt desc limit 6", c))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
@@ -476,7 +551,7 @@ class Program
             }
         long repeatPerf = ScalarL(c,
             "select count(*) from (select a.task, a.performer from sungero_wf_assignment a " +
-            $"join sungero_wf_task t on t.id=a.task where {p.Where} and a.performer is not null " +
+            $"join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn} and a.performer is not null " +
             "group by a.task, a.performer having count(distinct a.discriminator)>1) z");
 
         // ----- D. Содержательность согласования: время до решения + формальные (<1 дня) -----
@@ -484,12 +559,14 @@ class Program
         using (var cmd = new NpgsqlCommand(
             "select count(*) total, count(*) filter (where extract(epoch from (a.completed-a.created))/3600.0 < 24) formal, " +
             "coalesce(avg(extract(epoch from (a.completed-a.created))/3600.0),0) avgh " +
-            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} and a.status::text='Completed' and a.completed is not null", c))
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn} and a.status::text='Completed' and a.completed is not null", c))
         using (var r = cmd.ExecuteReader()) { if (r.Read()) { fTotal = r.GetInt64(0); fFormal = r.GetInt64(1); fAvgH = r.GetDouble(2); } }
         int formalPct = fTotal > 0 ? (int)Math.Round(100.0 * fFormal / fTotal) : 0;
 
         // ----- B. Карта возвратов («битва правок»): кто инициирует Доработку -----
-        const string DorabotkaDisc = "ef79164b-2ce7-451b-9ba6-eb59dd9a4a74";
+        // Реальная «доработка» — IReviewReworkAssignment. Раньше тут по ошибке стоял GUID
+        // уведомления (INotice ef79164b), из-за чего возвраты/FTR считались по уведомлениям.
+        const string DorabotkaDisc = "1d5433e5-b285-4310-9a63-fc4e76f0a9b7";
         var returnAuthors = new List<object>();
         using (var cmd = new NpgsqlCommand(
             "select a.author, coalesce(r.name::text,'(неизвестно)'), count(*) cnt " +
@@ -502,14 +579,14 @@ class Program
         long returnsTotal = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.discriminator='{DorabotkaDisc}'");
 
         // ----- B. Время и качество решения: медиана цикла + open→decide (MarkRead) + «пустые» -----
-        double decMedian = ScalarD(c, $"select coalesce(percentile_cont(0.5) within group (order by extract(epoch from (a.completed-a.created))/3600.0),0) from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} and a.status::text='Completed' and a.completed is not null");
+        double decMedian = ScalarD(c, $"select coalesce(percentile_cont(0.5) within group (order by extract(epoch from (a.completed-a.created))/3600.0),0) from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn} and a.status::text='Completed' and a.completed is not null");
         double openDecMedian = 0; long openDecN = 0, instant = 0;
         using (var cmd = new NpgsqlCommand(
             "select coalesce(percentile_cont(0.5) within group (order by mins),0) med, count(*) n, count(*) filter (where mins < 5) inst from (" +
             "select extract(epoch from (a.completed - mr.first_read))/60.0 mins " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
             "join (select entityid, min(historydate) first_read from sungero_wf_workflowhistory where operation='MarkRead' group by entityid) mr on mr.entityid=a.id " +
-            $"where {p.Where} and a.status::text='Completed' and a.completed is not null and mr.first_read<=a.completed) z", c))
+            $"where {p.Where}{NoticeNotIn} and a.status::text='Completed' and a.completed is not null and mr.first_read<=a.completed) z", c))
         using (var r = cmd.ExecuteReader()) if (r.Read()) { openDecMedian = Math.Round(r.GetDouble(0), 1); openDecN = r.GetInt64(1); instant = r.GetInt64(2); }
 
         // #5 С первого раза (first-time-right): задачи без единого возврата на Доработку
@@ -517,17 +594,19 @@ class Program
         int ftrPct = total > 0 ? (int)Math.Round(100.0 * ftrClean / total) : 100;
 
         // #6 Петли/пинг-понг: задачи с повторным прохождением этапа + топ переходов между этапами
-        long loopTasks = ScalarL(c, $"select count(distinct task) from (select a.task task from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task, a.discriminator having count(*)>1) z");
+        long loopTasks = ScalarL(c, $"select count(distinct task) from (select a.task task from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn} group by a.task, a.discriminator having count(*)>1) z");
         int loopPct = total > 0 ? (int)Math.Round(100.0 * loopTasks / total) : 0;
         var transitions = new List<object>();
         using (var cmd = new NpgsqlCommand(
             "select prev, d, count(*) c from (select a.discriminator::text d, lag(a.discriminator::text) over (partition by a.task order by a.created, a.id) prev " +
-            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}) s where prev is not null group by prev, d order by c desc limit 7", c))
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn}) s where prev is not null group by prev, d order by c desc limit 7", c))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
             {
-                string from = StageName(r.IsDBNull(0) ? null : r.GetString(0), 0), to = StageName(r.IsDBNull(1) ? null : r.GetString(1), 0);
-                transitions.Add(new { from, to, count = (int)r.GetInt64(2), back = from == "Доработка" || to == "Доработка" });
+                string fromDisc = r.IsDBNull(0) ? null : r.GetString(0), toDisc = r.IsDBNull(1) ? null : r.GetString(1);
+                string from = StageName(fromDisc, 0), to = StageName(toDisc, 0);
+                // «возврат» = переход на этап доработки (по GUID типа, а не по локализованной подписи)
+                transitions.Add(new { from, to, count = (int)r.GetInt64(2), back = fromDisc == DorabotkaDisc || toDisc == DorabotkaDisc });
             }
 
         // #3 Приток vs отток по месяцам (создано против завершено)
@@ -535,7 +614,7 @@ class Program
         using (var cmd = new NpgsqlCommand(
             "with m as (select generate_series(date_trunc('month',now())-interval '7 months', date_trunc('month',now()), interval '1 month') mo), " +
             $"arr as (select date_trunc('month',t.created) mo, count(*) n from sungero_wf_task t where {p.Where} group by 1), " +
-            "comp as (select date_trunc('month',cd) mo, count(*) n from (select t.id, (select max(a.completed) from sungero_wf_assignment a where a.task=t.id and a.completed is not null) cd " +
+            $"comp as (select date_trunc('month',cd) mo, count(*) n from (select t.id, (select max(a.completed) from sungero_wf_assignment a where a.task=t.id and a.completed is not null{NoticeNotIn}) cd " +
             $"from sungero_wf_task t where {p.Where} and t.status::text='Completed') d where cd is not null group by 1) " +
             "select to_char(m.mo,'YYYY-MM') mon, coalesce(arr.n,0) arrived, coalesce(comp.n,0) completed from m left join arr on arr.mo=m.mo left join comp on comp.mo=m.mo order by m.mo", c))
         using (var r = cmd.ExecuteReader())
@@ -549,7 +628,7 @@ class Program
             "coalesce(sum(extract(epoch from (a.completed - a.created))),0) total_sec " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
             "join (select entityid, min(historydate) first_read from sungero_wf_workflowhistory where operation='MarkRead' group by entityid) mr on mr.entityid=a.id " +
-            $"where {p.Where} and a.status::text='Completed' and a.completed is not null and mr.first_read>=a.created and mr.first_read<=a.completed", c))
+            $"where {p.Where}{NoticeNotIn} and a.status::text='Completed' and a.completed is not null and mr.first_read>=a.created and mr.first_read<=a.completed", c))
         using (var r = cmd.ExecuteReader())
             if (r.Read())
             {
@@ -565,7 +644,7 @@ class Program
             "with pk as (select a.discriminator::text d, extract(epoch from (mr.first_read - a.created))/3600.0 ph " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
             "join (select entityid, min(historydate) first_read from sungero_wf_workflowhistory where operation='MarkRead' group by entityid) mr on mr.entityid=a.id " +
-            $"where {p.Where} and mr.first_read >= a.created) ";
+            $"where {p.Where}{NoticeNotIn} and mr.first_read >= a.created) ";
         long pkN = 0; double pkAvgH = 0, pkMedH = 0;
         using (var cmd = new NpgsqlCommand(pkCte + "select count(*) n, coalesce(avg(ph),0) a, coalesce(percentile_cont(0.5) within group (order by ph),0) m from pk", c))
         using (var r = cmd.ExecuteReader())
@@ -606,7 +685,7 @@ class Program
         var counts = new int[buckets.Length];
         using var cmd = new NpgsqlCommand(
             "select extract(epoch from (max(coalesce(a.completed,now()))-min(a.created)))/86400.0 dur " +
-            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task", c);
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn} group by a.task", c);
         using var r = cmd.ExecuteReader();
         while (r.Read())
         {
@@ -627,7 +706,7 @@ class Program
         using var cmd = new NpgsqlCommand(
             $"select a.performer, coalesce(r.name,'(не назначен)'), {metric} val " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
-            $"left join sungero_core_recipient r on r.id=a.performer where {p.Where} " +
+            $"left join sungero_core_recipient r on r.id=a.performer where {p.Where}{NoticeNotIn} " +
             "group by a.performer, r.name having " + (negative
                 ? "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline<now())>0"
                 : "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline)>0") +
@@ -649,7 +728,7 @@ class Program
             "select t.id, coalesce(t.subject,'(без темы)'), a.discriminator::text, coalesce(r.name,'(не назначен)'), " +
             "a.deadline, extract(epoch from (now()-a.created))/86400.0 age " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
-            $"left join sungero_core_recipient r on r.id=a.performer where {p.Where} and a.status::text='InProcess' " +
+            $"left join sungero_core_recipient r on r.id=a.performer where {p.Where}{NoticeNotIn} and a.status::text='InProcess' " +
             "order by (a.deadline is not null and a.deadline<now()) desc, age desc limit 100", c);
         using var r = cmd.ExecuteReader();
         int i = 0;
@@ -689,7 +768,7 @@ class Program
             "coalesce(avg(extract(epoch from (coalesce(a.completed,now())-a.created))/86400.0),0) avghold " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
             "left join sungero_core_recipient r on r.id=a.performer " +
-            $"where {p.Where} and a.performer is not null group by a.performer, r.name", c))
+            $"where {p.Where}{NoticeNotIn} and a.performer is not null group by a.performer, r.name", c))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
                 list.Add(new { id = r.GetInt64(0), name = r.GetString(1), active = (int)r.GetInt64(2), overdue = (int)r.GetInt64(3), completed = (int)r.GetInt64(4), ontime = (int)r.GetInt64(5), avgHold = Math.Round(r.GetDouble(6), 1) });
@@ -718,11 +797,11 @@ class Program
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
             "left join sungero_core_recipient e on e.id=a.performer " +
             "left join sungero_core_recipient d on d.id=e.department_company_sungero " +
-            $"where {p.Where} order by a.task, a.created desc), " +
+            $"where {p.Where}{NoticeNotIn} order by a.task, a.created desc), " +
             "ov as (select a.task tid, " +
             "max((a.status::text='InProcess' and a.deadline is not null and a.deadline<now())::int) isover, " +
             "max((a.status::text='InProcess')::int) isactive " +
-            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task) " +
+            $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn} group by a.task) " +
             "select coalesce(td.dept,'(без подразделения)') dept, td.deptid, count(*) total, " +
             "coalesce(sum(ov.isactive),0) inwork, coalesce(sum(ov.isover),0) overdue " +
             "from td left join ov on ov.tid=td.tid group by td.dept, td.deptid order by total desc";
@@ -754,9 +833,9 @@ class Program
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
             "left join sungero_core_recipient r on r.id=a.performer " +
             "left join sungero_core_recipient e on e.id=a.performer " +
-            $"where {p.Where} order by a.task, a.created desc) " +
+            $"where {p.Where}{NoticeNotIn} order by a.task, a.created desc) " +
             "select t.id, coalesce(t.subject,'(без темы)'), td.performer, td.dl, td.st, " +
-            "extract(epoch from (now()-td.cr))/86400.0 age " +
+            "extract(epoch from (now()-td.cr))/86400.0 age, t.discriminator::text " +
             "from td join sungero_wf_task t on t.id=td.tid where td.deptid=@d " +
             "order by case when td.st='InProcess' then 0 else 1 end, td.dl nulls last";
         using var cmd = new NpgsqlCommand(sql, c);
@@ -776,7 +855,51 @@ class Program
                 deadline = dl?.ToString("yyyy-MM-dd"),
                 status = st == "Completed" ? "done" : (over ? "overdue" : "inwork"),
                 ageDays = (int)Math.Round(age),
-                rxLink = RxBase + "Task/" + r.GetInt64(0)
+                rxLink = RxTaskLink(r.GetInt64(0), r.IsDBNull(6) ? null : r.GetString(6))
+            });
+        }
+        return new { count = items.Count, items };
+    }
+
+    // ---------- /api/process/kind-tasks (поручения по виду рассмотрения) ----------
+    // Зеркало BuildDeptTasks, но фильтр по виду (t.processkind). kindId=0 → вид не указан (null).
+    static object BuildKindTasks(string key, string kindStr, string period = null)
+    {
+        var p0 = P(key); if (p0 == null) return new { error = "unknown process" };
+        var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
+        long.TryParse(kindStr, out long kindId);
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        var items = new List<object>();
+        // Считаем от задач (как бар «вида»), последнее задание подтягиваем боковым join'ом —
+        // тогда список совпадает по числу с баром, включая задачи без заданий.
+        string sql =
+            "select t.id, coalesce(t.subject,'(без темы)'), " +
+            "coalesce(la.performer,'(не назначен)') performer, la.dl, coalesce(la.st, t.status::text) st, " +
+            "extract(epoch from (now()-coalesce(la.cr,t.created)))/86400.0 age, t.discriminator::text " +
+            "from sungero_wf_task t " +
+            "left join lateral (select coalesce(r.name,'(не назначен)') performer, a.deadline dl, a.status::text st, a.created cr " +
+            "from sungero_wf_assignment a left join sungero_core_recipient r on r.id=a.performer " +
+            $"where a.task=t.id{NoticeNotIn} order by a.created desc limit 1) la on true " +
+            $"where {p.Where} and ((@k=0 and t.processkind is null) or t.processkind=@k) " +
+            "order by case when coalesce(la.st, t.status::text)='InProcess' then 0 else 1 end, la.dl nulls last";
+        using var cmd = new NpgsqlCommand(sql, c);
+        cmd.Parameters.AddWithValue("k", kindId);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            DateTime? dl = r.IsDBNull(3) ? (DateTime?)null : r.GetDateTime(3);
+            string st = r.GetString(4);
+            double age = r.IsDBNull(5) ? 0 : r.GetDouble(5);
+            bool over = st == "InProcess" && dl.HasValue && dl.Value < DateTime.Now;
+            items.Add(new
+            {
+                id = r.GetInt64(0),
+                subject = r.GetString(1),
+                performer = r.GetString(2),
+                deadline = dl?.ToString("yyyy-MM-dd"),
+                status = st == "Completed" ? "done" : (over ? "overdue" : "inwork"),
+                ageDays = (int)Math.Round(age),
+                rxLink = RxTaskLink(r.GetInt64(0), r.IsDBNull(6) ? null : r.GetString(6))
             });
         }
         return new { count = items.Count, items };
@@ -790,14 +913,14 @@ class Program
         using var c = new NpgsqlConnection(Cs); c.Open();
         var items = new List<object>();
         using var cmd = new NpgsqlCommand(
-            "select coalesce(pk.name::text,'(не указан)') kind, count(*) total, " +
+            "select coalesce(pk.id,0) kind_id, coalesce(pk.name::text,'(не указан)') kind, count(*) total, " +
             "count(*) filter (where t.status::text='InProcess') inwork, " +
-            "count(*) filter (where exists (select 1 from sungero_wf_assignment a where a.task=t.id and a.status::text='InProcess' and a.deadline is not null and a.deadline<now())) overdue " +
+            $"count(*) filter (where exists (select 1 from sungero_wf_assignment a where a.task=t.id{NoticeNotIn} and a.status::text='InProcess' and a.deadline is not null and a.deadline<now())) overdue " +
             "from sungero_wf_task t left join sungero_wf_processkind pk on pk.id=t.processkind " +
-            $"where {p.Where} group by pk.name order by total desc", c);
+            $"where {p.Where} group by pk.id, pk.name order by total desc", c);
         using var r = cmd.ExecuteReader();
         while (r.Read())
-            items.Add(new { label = r.GetString(0), total = (int)r.GetInt64(1), inwork = (int)r.GetInt64(2), overdue = (int)r.GetInt64(3) });
+            items.Add(new { kindId = r.GetInt64(0), label = r.GetString(1), total = (int)r.GetInt64(2), inwork = (int)r.GetInt64(3), overdue = (int)r.GetInt64(4) });
         return new { items };
     }
 
@@ -828,7 +951,7 @@ class Program
                 "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline) ontime, " +
                 "coalesce(avg(extract(epoch from (coalesce(a.completed,now())-a.created))/86400.0),0) avghold " +
                 "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer " +
-                $"where {p.Where} and a.performer is not null group by r.name order by active desc", c);
+                $"where {p.Where}{NoticeNotIn} and a.performer is not null group by r.name order by active desc", c);
             using var r = cmd.ExecuteReader();
             while (r.Read())
             {
@@ -844,9 +967,9 @@ class Program
             string sql =
                 "with td as (select distinct on (a.task) a.task tid, d.name::text dept from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
                 "left join sungero_core_recipient e on e.id=a.performer left join sungero_core_recipient d on d.id=e.department_company_sungero " +
-                $"where {p.Where} order by a.task, a.created desc), " +
+                $"where {p.Where}{NoticeNotIn} order by a.task, a.created desc), " +
                 "ov as (select a.task tid, max((a.status::text='InProcess' and a.deadline is not null and a.deadline<now())::int) isover, max((a.status::text='InProcess')::int) isactive " +
-                $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where} group by a.task) " +
+                $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn} group by a.task) " +
                 "select coalesce(td.dept,'(без подразделения)') dept, count(*) total, coalesce(sum(ov.isactive),0) inwork, coalesce(sum(ov.isover),0) overdue " +
                 "from td left join ov on ov.tid=td.tid group by td.dept order by total desc";
             using var cmd = new NpgsqlCommand(sql, c); using var r = cmd.ExecuteReader();
@@ -857,16 +980,16 @@ class Program
         Row("Тема", "Этап", "Исполнитель", "Срок", "Дней просрочки", "Ссылка RX");
         using (var cmd = new NpgsqlCommand(
             "select coalesce(t.subject,'(без темы)'), a.discriminator::text, coalesce(r.name,'(не назначен)'), a.deadline, " +
-            "extract(epoch from (now()-a.deadline))/86400.0 od, t.id " +
+            "extract(epoch from (now()-a.deadline))/86400.0 od, t.id, t.discriminator::text " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer " +
-            $"where {p.Where} and a.status::text='InProcess' and a.deadline is not null and a.deadline<now() order by a.deadline asc", c))
+            $"where {p.Where}{NoticeNotIn} and a.status::text='InProcess' and a.deadline is not null and a.deadline<now() order by a.deadline asc", c))
         using (var r = cmd.ExecuteReader())
         {
             int i = 0;
             while (r.Read())
                 Row(r.GetString(0), StageName(r.IsDBNull(1) ? null : r.GetString(1), i++), r.GetString(2),
                     r.IsDBNull(3) ? "" : r.GetDateTime(3).ToString("yyyy-MM-dd"),
-                    ((int)Math.Round(r.GetDouble(4))).ToString(), RxBase + "Task/" + r.GetInt64(5));
+                    ((int)Math.Round(r.GetDouble(4))).ToString(), RxTaskLink(r.GetInt64(5), r.IsDBNull(6) ? null : r.GetString(6)));
         }
         return ($"overdue_{key}.csv", sb.ToString());
     }
@@ -876,14 +999,14 @@ class Program
     {
         using var c = new NpgsqlConnection(Cs); c.Open();
         object header = null;
-        using (var cmd = new NpgsqlCommand("select id, coalesce(subject,'(без темы)'), status::text, importance::text, created from sungero_wf_task where id=" + id, c))
+        using (var cmd = new NpgsqlCommand("select id, coalesce(subject,'(без темы)'), status::text, importance::text, created, discriminator::text from sungero_wf_task where id=" + id, c))
         using (var r = cmd.ExecuteReader())
-            if (r.Read()) header = new { id = r.GetInt64(0), subject = r.GetString(1), status = r.GetString(2), importance = r.IsDBNull(3) ? "" : r.GetString(3), created = r.IsDBNull(4) ? "" : r.GetDateTime(4).ToString("yyyy-MM-dd"), rxLink = RxBase + "Task/" + r.GetInt64(0) };
+            if (r.Read()) header = new { id = r.GetInt64(0), subject = r.GetString(1), status = r.GetString(2), importance = r.IsDBNull(3) ? "" : r.GetString(3), created = r.IsDBNull(4) ? "" : r.GetDateTime(4).ToString("yyyy-MM-dd"), rxLink = RxTaskLink(r.GetInt64(0), r.IsDBNull(5) ? null : r.GetString(5)) };
         if (header == null) return new { error = "не найдено" };
         var stages = new List<object>();
         using (var cmd = new NpgsqlCommand(
             "select a.discriminator::text, coalesce(r.name,'(не назначен)'), a.status::text, a.created, a.deadline, a.completed " +
-            "from sungero_wf_assignment a left join sungero_core_recipient r on r.id=a.performer where a.task=" + id + " order by a.created asc", c))
+            "from sungero_wf_assignment a left join sungero_core_recipient r on r.id=a.performer where a.task=" + id + NoticeNotIn + " order by a.created asc", c))
         using (var r = cmd.ExecuteReader())
         {
             int i = 0;
@@ -916,7 +1039,7 @@ class Program
             "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline) ontime, " +
             "count(*) filter (where (a.status::text='Completed' and a.completed is not null and a.completed>a.deadline) or (a.status::text='InProcess' and a.deadline<now())) overdue " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
-            $"where {where} and a.performer={pid} and a.deadline is not null group by 1 order by 1", c))
+            $"where {where}{NoticeNotIn} and a.performer={pid} and a.deadline is not null group by 1 order by 1", c))
         using (var r = cmd.ExecuteReader())
             while (r.Read()) { int on = (int)r.GetInt64(1), ov = (int)r.GetInt64(2); tOn += on; tOver += ov; points.Add(new { month = r.GetString(0), ontime = on, overdue = ov }); }
 
@@ -924,9 +1047,9 @@ class Program
         var tasks = new List<object>();
         using (var cmd = new NpgsqlCommand(
             "select t.id, coalesce(t.subject,'(без темы)'), a.discriminator::text, a.deadline, " +
-            "extract(epoch from (now()-a.created))/86400.0 age " +
+            "extract(epoch from (now()-a.created))/86400.0 age, t.discriminator::text " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
-            $"where {where} and a.performer={pid} and a.status::text='InProcess' " +
+            $"where {where}{NoticeNotIn} and a.performer={pid} and a.status::text='InProcess' " +
             "order by (a.deadline is not null and a.deadline<now()) desc, age desc limit 50", c))
         using (var r = cmd.ExecuteReader())
         {
@@ -945,7 +1068,7 @@ class Program
                     ageDays = (int)Math.Round(age),
                     overdueDays = over ? (int)Math.Round((DateTime.Now - dl.Value).TotalDays) : 0,
                     overdue = over,
-                    rxLink = RxBase + "Task/" + r.GetInt64(0)
+                    rxLink = RxTaskLink(r.GetInt64(0), r.IsDBNull(5) ? null : r.GetString(5))
                 });
             }
         }

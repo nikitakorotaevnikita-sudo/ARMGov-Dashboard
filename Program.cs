@@ -181,6 +181,7 @@ class Program
             case "/api/process/dept-tasks": JCached(ctx, ck, () => BuildDeptTasks(q["key"], q["dept"], q["period"])); return;
             case "/api/process/kind-tasks": JCached(ctx, ck, () => BuildKindTasks(q["key"], q["kind"], q["period"])); return;
             case "/api/process/by-kind": JCached(ctx, ck, () => BuildByKind(q["key"], q["period"])); return;
+            case "/api/appeals/topics": JCached(ctx, ck, () => BuildAppealTopics()); return;
             case "/api/export":
             {
                 var (fn, csv) = BuildExport(q["what"], q["key"], q["period"]);
@@ -479,8 +480,8 @@ class Program
                 {
                     disc = r.IsDBNull(0) ? null : r.GetString(0),
                     name = StageName(r.IsDBNull(0) ? null : r.GetString(0), i++),
-                    p50 = r.IsDBNull(1) ? 0.0 : Math.Round(r.GetDouble(1), 1),
-                    p95 = r.IsDBNull(2) ? 0.0 : Math.Round(r.GetDouble(2), 1),
+                    p50 = r.IsDBNull(1) ? 0.0 : Math.Round(r.GetDouble(1), 4),  // в днях, точнее — для адаптивного формата (ч/мин) на клиенте
+                    p95 = r.IsDBNull(2) ? 0.0 : Math.Round(r.GetDouble(2), 4),
                     active = (int)r.GetInt64(3),
                     overdue = (int)r.GetInt64(4),
                     done = (int)r.GetInt64(5),
@@ -924,6 +925,79 @@ class Program
         return new { items };
     }
 
+    // ---------- /api/appeals/topics (тематики обращений граждан, классификатор ТОТКОГ) ----------
+    // Источник — модуль gd_citizen: reqquestions (вопросы обращений) + classifierbase (раздел→тема→вопрос).
+    // Это НЕ задания процесса, поэтому фильтр уведомлений тут не применяется.
+    static object BuildAppealTopics()
+    {
+        using var c = new NpgsqlConnection(Cs); c.Open();
+
+        long requests = 0, questions = 0; double avgPer = 0, multiPct = 0;
+        using (var cmd = new NpgsqlCommand(
+            "select count(distinct edoc), count(*), round(count(*)::numeric/nullif(count(distinct edoc),0),2), " +
+            "(select round(100.0*count(*) filter(where cc>1)/nullif(count(*),0),1) from " +
+            "(select edoc,count(*) cc from gd_citizen_reqquestions where question is not null group by edoc) z) " +
+            "from gd_citizen_reqquestions where question is not null", c))
+        using (var r = cmd.ExecuteReader())
+            if (r.Read()) { requests = r.GetInt64(0); questions = r.GetInt64(1); avgPer = r.IsDBNull(2) ? 0 : (double)r.GetDecimal(2); multiPct = r.IsDBNull(3) ? 0 : (double)r.GetDecimal(3); }
+        double tot = questions > 0 ? questions : 1;
+
+        // разбивка по разделам
+        var sections = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "with q as (select cb.section sid from gd_citizen_reqquestions rq join gd_citizen_classifierbase cb on cb.id=rq.question) " +
+            "select coalesce(s.displayname::text,s.name::text,'(не указан)') nm, count(*) n from q " +
+            "left join gd_citizen_classifierbase s on s.id=q.sid group by 1 order by n desc", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) { long n = r.GetInt64(1); sections.Add(new { name = r.GetString(0), n = (int)n, pct = Math.Round(100.0 * n / tot, 1) }); }
+
+        // тепловая карта: раздел -> тема
+        var trMap = new Dictionary<string, (long n, List<object> topics)>();
+        var trOrder = new List<string>();
+        using (var cmd = new NpgsqlCommand(
+            // код темы выводим из fullcode самого вопроса (первые 2 сегмента = раздел.тема),
+            // т.к. у тема-уровневых записей классификатора fullcode пустой
+            "with q as (select cb.section sid, cb.topic tid, substring(cb.fullcode::text from '^[0-9]+\\.[0-9]+') tcode from gd_citizen_reqquestions rq join gd_citizen_classifierbase cb on cb.id=rq.question) " +
+            "select coalesce(s.displayname::text,s.name::text,'(не указан)') section, coalesce(t.displayname::text,t.name::text,'(не указана)') topic, coalesce(max(q.tcode),'') tcode, count(*) n " +
+            "from q left join gd_citizen_classifierbase s on s.id=q.sid left join gd_citizen_classifierbase t on t.id=q.tid " +
+            "group by 1,2 order by 4 desc", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read())
+            {
+                string sec = r.GetString(0), top = r.GetString(1), tcode = r.GetString(2); long n = r.GetInt64(3);
+                if (!trMap.ContainsKey(sec)) { trMap[sec] = (0, new List<object>()); trOrder.Add(sec); }
+                var e = trMap[sec]; e.n += n; e.topics.Add(new { name = top, code = tcode, n = (int)n, pct = Math.Round(100.0 * n / tot, 1) }); trMap[sec] = e;
+            }
+        var treemap = trOrder.OrderByDescending(s => trMap[s].n).Select(s => (object)new {
+            section = s, n = (int)trMap[s].n, pct = Math.Round(100.0 * trMap[s].n / tot, 1), topics = trMap[s].topics
+        }).ToList();
+
+        // топ вопросов (возвращаем все — фронт покажет топ + «показать все»)
+        var topQuestions = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "with q as (select rq.question qid, rq.edoc from gd_citizen_reqquestions rq where rq.question is not null) " +
+            "select coalesce(cb.fullcode::text,'') code, coalesce(cb.displayname::text,cb.name::text,'(вопрос)') nm, count(*) n, count(distinct q.edoc) reqs " +
+            "from q join gd_citizen_classifierbase cb on cb.id=q.qid group by cb.id, cb.fullcode, cb.displayname, cb.name order by n desc", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) { long n = r.GetInt64(2); topQuestions.Add(new { code = r.GetString(0), name = r.GetString(1), n = (int)n, pct = Math.Round(100.0 * n / tot, 1), requests = (int)r.GetInt64(3) }); }
+
+        // куда направлено (transferredto -> counterparty); % считаем от направленных
+        var rt = new List<(string name, int n)>(); long routed = 0;
+        using (var cmd = new NpgsqlCommand(
+            "select coalesce(cp.name::text,'(орган)') org, count(*) n from gd_citizen_reqquestions rq " +
+            "join sungero_parties_counterparty cp on cp.id=rq.transferredto where rq.transferredto is not null " +
+            "group by cp.id, cp.name order by n desc", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) { string nm = r.GetString(0); int n = (int)r.GetInt64(1); routed += n; rt.Add((nm, n)); }
+        var routedTo = rt.Select(x => (object)new { name = x.name, n = x.n, pct = routed > 0 ? Math.Round(100.0 * x.n / routed, 1) : 0 }).ToList();
+
+        return new {
+            kpi = new { requests, questions, avgPerRequest = avgPer, multiPct },
+            sections, treemap, topQuestions, routedTo,
+            routedCoverage = new { routed, total = questions, pct = questions > 0 ? Math.Round(100.0 * routed / questions, 1) : 0 }
+        };
+    }
+
     // ---------- /api/export (CSV для Excel: просроченные / загрузка / подразделения) ----------
     static string CsvCell(string s)
     {
@@ -1149,12 +1223,43 @@ class Program
     static string Trunc(string s, int n) => s != null && s.Length > n ? s.Substring(0, n) + "…" : s;
 
     // Машиночитаемый агрегат всех метрик — общий контекст для сводки и чата.
+    // Компактный срез тематик обращений для контекста LLM (без всех 334 вопросов):
+    // KPI + разделы + темы + топ-10 вопросов + топ-10 органов. Через JSON-проекцию полного ответа.
+    static object AppealTopicsAiSlice()
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(BuildAppealTopics()));
+            var root = doc.RootElement;
+            object Arr(JsonElement el, int take) => el.EnumerateArray().Take(take)
+                .Select(o => (object)new { name = o.GetProperty("name").GetString(), n = o.GetProperty("n").GetInt32(), pct = o.GetProperty("pct").GetDouble() }).ToList();
+            var темы = new List<object>();
+            foreach (var s in root.GetProperty("treemap").EnumerateArray())
+                foreach (var t in s.GetProperty("topics").EnumerateArray())
+                    темы.Add(new { раздел = s.GetProperty("section").GetString(), тема = t.GetProperty("name").GetString(), n = t.GetProperty("n").GetInt32(), pct = t.GetProperty("pct").GetDouble() });
+            var k = root.GetProperty("kpi"); var rc = root.GetProperty("routedCoverage");
+            return new
+            {
+                обращений = k.GetProperty("requests").GetInt64(),
+                вопросов = k.GetProperty("questions").GetInt64(),
+                вопросов_на_обращение = k.GetProperty("avgPerRequest").GetDouble(),
+                разделы = Arr(root.GetProperty("sections"), 10),
+                темы,
+                топ_вопросов = root.GetProperty("topQuestions").EnumerateArray().Take(10)
+                    .Select(q => (object)new { вопрос = q.GetProperty("name").GetString(), n = q.GetProperty("n").GetInt32(), pct = q.GetProperty("pct").GetDouble() }).ToList(),
+                куда_направлено = Arr(root.GetProperty("routedTo"), 10),
+                покрытие_направлено_pct = rc.GetProperty("pct").GetDouble()
+            };
+        }
+        catch { return null; }
+    }
+
     static object BuildAiBundle()
     {
         var detail = new Dictionary<string, object>();
         foreach (var p in Procs)
             detail[p.Key] = new { process = BuildProcess(p.Key), workload = BuildWorkload(p.Key) };
-        return new { generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"), overview = BuildOverview(), detail };
+        return new { generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"), overview = BuildOverview(), detail, тематика_обращений = AppealTopicsAiSlice() };
     }
     static object _bundleCache; static DateTime _bundleAt;
     static object GetBundleCached()
@@ -1188,6 +1293,8 @@ class Program
                 "'2. Тренды', '3. Кто хуже всех справляется и вероятные причины'. В каждом разделе — маркированные " +
                 "пункты (через '- '), конкретно, с реальными цифрами из данных, без воды и без выдумок. " +
                 "Связывай причины: возвраты на доработку, формальные решения (закрыто за минуты), узкие горлышки, перегруз. " +
+                "В данных есть и структура тематик обращений граждан (поле 'тематика_обращений': разделы/темы, топ вопросов, куда направлено) — " +
+                "используй её для выводов о СОДЕРЖАНИИ обращений (о чём чаще пишут, куда чаще направляют), а не только о сроках. " +
                 "Если данных мало — скажи об этом прямо. Отвечай по-русски.";
         }
         var messages = new object[]
@@ -1211,7 +1318,9 @@ class Program
         var msgs = new List<object>();
         const string sys =
             "Ты — ассистент-аналитик по процессам региона для руководителя. Отвечай ТОЛЬКО на основе " +
-            "предоставленного JSON с метриками (поручения, обращения граждан, НПА). Если в данных нет ответа — " +
+            "предоставленного JSON с метриками (поручения, обращения граждан, НПА). В данных есть и структура тематик " +
+            "обращений граждан (поле 'тематика_обращений': разделы/темы, топ вопросов, куда направлено) — используй её " +
+            "для вопросов о содержании обращений. Если в данных нет ответа — " +
             "честно скажи, что данных нет. По-русски, кратко и по делу, с конкретными цифрами. Не выдумывай факты.";
         var bundleJson = JsonSerializer.Serialize(GetBundleCached());
         msgs.Add(new { role = "system", content = sys + "\n\nДанные (JSON):\n" + bundleJson });

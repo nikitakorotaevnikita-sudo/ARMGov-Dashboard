@@ -65,9 +65,18 @@ a{color:var(--accent)}
 .expl:hover{border-color:var(--accent);background:var(--accent-soft)}
 .cardhead{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
 .pcard.wide{grid-column:1/-1}
+.psection-h{display:flex;align-items:center;gap:10px;font-size:12px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.08em;margin:18px 0 10px}
+.psection-h::after{content:"";flex:1;height:2px;background:var(--border);border-radius:2px}
+.psection-h:first-of-type{margin-top:4px}
 .drag{cursor:grab;color:var(--subtle);font-size:13px;margin-right:7px;user-select:none;flex:0 0 auto}
 .drag:hover{color:var(--accent)} .drag:active{cursor:grabbing}
 .wbtn{cursor:pointer;color:var(--subtle);font-size:11px;border:1px solid var(--border);border-radius:var(--radius-pill);padding:1px 9px;white-space:nowrap;flex-shrink:0}
+.tm-wrap{display:flex;gap:5px;height:380px;align-items:stretch}
+.tm-col{display:flex;flex-direction:column;min-width:70px;gap:3px}
+.tm-sec{font-size:11px;font-weight:700;color:var(--navy,#1f3a5f);text-transform:uppercase;letter-spacing:.02em;line-height:1.15;min-height:34px}
+.tm-tile{border-radius:5px;padding:6px 8px;overflow:hidden;cursor:pointer;color:#fff;font-size:11px;line-height:1.2;display:flex;flex-direction:column;justify-content:flex-start;min-height:18px;transition:filter .1s}
+.tm-tile:hover{filter:brightness(1.1)}
+.tm-tile .v{font-weight:700;font-size:12px}
 .wbtn:hover{border-color:var(--accent);color:var(--accent)}
 .card.dragover{outline:2px dashed var(--accent);outline-offset:-2px}
 .card.dragging{opacity:.5}
@@ -89,7 +98,7 @@ a{color:var(--accent)}
   </div>
 </header>
 <aside class="sidebar"><nav id="nav"></nav></aside>
-<main><div id="view-start"></div><div id="view-process" class="hidden"></div><div id="view-backoffice" class="hidden"></div></main>
+<main><div id="view-start"></div><div id="view-process" class="hidden"></div><div id="view-appeals" class="hidden"></div><div id="view-backoffice" class="hidden"></div></main>
 
 <div id="taskDrawer" class="drawer hidden" onclick="if(event.target===this)closeTask()">
   <div class="drawerbox">
@@ -141,6 +150,33 @@ a{color:var(--accent)}
   <div class="modalbox">
     <div class="row" style="justify-content:space-between;align-items:flex-start"><div id="om-title" style="font-size:16px;font-weight:700">Просроченные задания <span class="subtle" style="font-size:12px;font-weight:400">(клик → маршрут + ссылка в RX)</span></div><button class="btn-ghost" onclick="closeOverdue()">✕</button></div>
     <div style="max-height:70vh;overflow:auto;margin-top:12px;border:1px solid var(--border);border-radius:var(--radius)"><div id="om-list" style="padding:0 14px"></div></div>
+  </div>
+</div>
+
+<div id="aiModal" class="overlay hidden" onclick="if(event.target===this)closeAi()">
+  <div class="modalbox" style="max-width:760px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div style="font-size:18px;font-weight:700">🧠 ИИ-аналитика по региону <span class="subtle" style="font-size:12px;font-weight:400">(Qwen 3.6 · по всем процессам)</span></div>
+      <div class="row" style="gap:8px"><button class="btn-ghost" id="aiRefreshBtn" onclick="loadAiSummary(true)">обновить</button><button class="btn-ghost" onclick="closeAi()">✕</button></div>
+    </div>
+    <div style="max-height:72vh;overflow:auto;margin-top:14px">
+      <div id="ai-forecast"></div>
+      <div id="ai-body" style="margin-top:16px"></div>
+    </div>
+  </div>
+</div>
+
+<div id="workloadModal" class="overlay hidden" onclick="if(event.target===this)closeWorkloadAll()">
+  <div class="modalbox" style="max-width:860px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start"><div id="wl-title" style="font-size:16px;font-weight:700">Загрузка исполнителей</div><button class="btn-ghost" onclick="closeWorkloadAll()">✕</button></div>
+    <div style="max-height:72vh;overflow:auto;margin-top:12px"><div id="wl-list"></div></div>
+  </div>
+</div>
+
+<div id="appealModal" class="overlay hidden" onclick="if(event.target===this)closeAppeal()">
+  <div class="modalbox" style="max-width:760px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start"><div id="ap-title" style="font-size:16px;font-weight:700">Вопросы</div><button class="btn-ghost" onclick="closeAppeal()">✕</button></div>
+    <div style="max-height:72vh;overflow:auto;margin-top:14px"><div id="ap-list"></div></div>
   </div>
 </div>
 
@@ -239,13 +275,16 @@ function renderNav(){
   var n='<div class="nav-item'+(CUR===null?' active':'')+'" onclick="goStart()">Обзор для руководителя</div>';
   PROCS.forEach(function(p){var sv=SEV[p.severity]||SEV.green;
     n+='<div class="nav-item'+(CUR===p.key?' active':'')+'" onclick="goProcess(\''+p.key+'\')"><span class="nav-dot" style="background:'+sv.c+'"></span>'+esc(p.name)+'</div>';});
+  n+='<div class="nav-item'+(CUR==='__appeals'?' active':'')+'" onclick="goAppeals()" style="margin-top:8px">📊 Тематики обращений</div>';
   n+='<div class="nav-item'+(CUR==='__bo'?' active':'')+'" onclick="goBackoffice()" style="margin-top:14px;border-top:1px solid var(--sidebar-border);padding-top:16px">⚙ Бэк-офис</div>';
   document.getElementById('nav').innerHTML=n;
 }
 
 /* ---------- Обзор ---------- */
-function goStart(){CUR=null;CURDATA=null;renderNav();document.getElementById('view-process').classList.add('hidden');document.getElementById('view-backoffice').classList.add('hidden');document.getElementById('view-start').classList.remove('hidden');}
-function goBackoffice(){CUR='__bo';CURDATA=null;renderNav();document.getElementById('view-start').classList.add('hidden');document.getElementById('view-process').classList.add('hidden');document.getElementById('view-backoffice').classList.remove('hidden');renderBackoffice();}
+function hideViews(){['view-start','view-process','view-appeals','view-backoffice'].forEach(function(v){document.getElementById(v).classList.add('hidden');});}
+function goStart(){CUR=null;CURDATA=null;renderNav();hideViews();document.getElementById('view-start').classList.remove('hidden');}
+function goBackoffice(){CUR='__bo';CURDATA=null;renderNav();hideViews();document.getElementById('view-backoffice').classList.remove('hidden');renderBackoffice();}
+function goAppeals(){CUR='__appeals';CURDATA=null;renderNav();hideViews();document.getElementById('view-appeals').classList.remove('hidden');renderAppeals();}
 var BOCFG=null, BO_PROF_IDX=0;
 var OVB_LABELS={throughput:'Пропускная способность',bottleneck:'Узкое горлышко',longrunners:'Долгострои',burning:'Что горит',svetofor:'Светофор процессов'};
 var PRB_LABELS={funnel:'Воронка',stages:'Время цикла',hist:'Длительность маршрута',trend:'Тренд дисциплины',risk:'Прогноз срыва',neg:'Топ по просрочкам',pos:'Лучшие исполнители',rework:'Возвраты',formal:'Качество решения',workload:'Загрузка',overdue:'Просроченные',backlog:'Приток/отток',flow:'Поток-эффективность',pickup:'Скорость реакции',ftr:'С первого раза',loops:'Петли',breakdown:'Разрезы'};
@@ -354,11 +393,14 @@ function renderStart(){
       }).join('')+'</div>';
   }
 
-  // ----- ИИ-аналитика -----
-  html+='<div class="card" id="c-ai" style="margin-bottom:20px"></div>';
+  // ----- ИИ-аналитика: вызов по кнопке (модалка), без авто-LLM на загрузке -----
+  html+='<div style="margin-bottom:20px"><button class="btn" onclick="openAi()" style="font-size:14px;padding:10px 16px">🧠 ИИ-аналитика и прогноз</button></div>';
+
+  // ----- Краткая аналитика тематик обращений (заполняется отдельно) -----
+  html+='<div class="card" id="start-appeals" style="margin-bottom:20px"></div>';
 
   // ----- Светофор процессов (худшие сверху) -----
-  if(!ovHas('svetofor')){document.getElementById('view-start').innerHTML=html;renderAi();return;}
+  if(!ovHas('svetofor')){document.getElementById('view-start').innerHTML=html;renderStartAppeals();return;}
   html+='<div class="cardhead" style="margin:0 0 6px"><div class="card-h" style="margin:0">Процессы'+hlp('Процессы','svetofor',null)+'</div></div>';
   var sc='16px 1.7fr 0.8fr 0.9fr 1.4fr 0.9fr 2.2fr 18px';
   html+='<div class="card" style="padding:6px 20px">';
@@ -377,7 +419,7 @@ function renderStart(){
   }).join('');
   html+='</div>';
   document.getElementById('view-start').innerHTML=html;
-  renderAi();
+  renderStartAppeals();
 }
 
 /* ---------- ИИ-аналитика (подсистема C) ---------- */
@@ -390,17 +432,20 @@ function mdLite(t){
     return '<div style="margin:5px 0">'+e+'</div>';
   }).join('');
 }
+function openAi(){
+  document.getElementById('aiModal').classList.remove('hidden');
+  renderForecast(); renderAi();
+  if(!AISUM) loadAiSummary(false);   // сводка грузится только при открытии модалки
+}
+function closeAi(){document.getElementById('aiModal').classList.add('hidden');}
 function renderAi(){
-  var el=document.getElementById('c-ai');if(!el)return;
-  var busy=AISUM&&AISUM.loading;
-  var head='<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px"><div class="card-h" style="margin:0">🧠 ИИ-аналитика по региону <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(Qwen 3.6 · по всем процессам)</span></div>'+
-    '<button class="btn-ghost" onclick="loadAiSummary(true)"'+(busy?' disabled':'')+'>обновить</button></div>';
+  var el=document.getElementById('ai-body');if(!el)return;
   var b;
-  if(!AISUM){ el.innerHTML=head+'<div class="sub">ИИ анализирует данные…</div>'; loadAiSummary(false); return; }
-  if(AISUM.loading) b='<div class="sub">ИИ анализирует данные… (до ~30 сек)</div>';
+  if(!AISUM||AISUM.loading) b='<div class="sub">ИИ анализирует данные… (до ~30 сек)</div>';
   else if(AISUM.error) b='<div class="sub" style="color:var(--red)">ИИ недоступен: '+esc(AISUM.error)+'</div>';
   else b='<div style="font-size:14px;line-height:1.5">'+mdLite(AISUM.text||'')+'</div>'+(AISUM.generatedAt?'<div class="subtle" style="font-size:11px;margin-top:12px">сгенерировано '+esc(AISUM.generatedAt)+' · модель '+esc(AISUM.model||'')+'</div>':'');
-  el.innerHTML=head+b;
+  el.innerHTML='<div class="card-h" style="margin:0 0 6px">Сводка ИИ</div>'+b;
+  var rb=document.getElementById('aiRefreshBtn'); if(rb) rb.disabled=!!(AISUM&&AISUM.loading);
 }
 function loadAiSummary(force){
   if(AISUM&&AISUM.loading)return;
@@ -408,6 +453,54 @@ function loadAiSummary(force){
   fetch('/api/ai/summary'+(force?'?force=1':''),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     AISUM=d.error?{error:d.error}:{text:d.text,generatedAt:d.generatedAt,model:d.model};renderAi();
   }).catch(function(e){AISUM={error:String(e)};renderAi();});
+}
+/* ---------- Числовой прогноз по тренду (на клиенте, из OVR) ---------- */
+// линейный тренд (МНК) по последним ≤6 точкам, экстраполяция на h месяцев вперёд
+function projTrend(arr,h){
+  var pts=[]; for(var i=0;i<arr.length;i++) if(arr[i]!=null) pts.push([i,arr[i]]);
+  pts=pts.slice(-6); var n=pts.length; if(n<2) return null;
+  var sx=0,sy=0,sxx=0,sxy=0;
+  pts.forEach(function(p){sx+=p[0];sy+=p[1];sxx+=p[0]*p[0];sxy+=p[0]*p[1];});
+  var den=n*sxx-sx*sx; if(den===0) return null;
+  var b=(n*sxy-sx*sy)/den, a=(sy-b*sx)/n;
+  return a+b*((arr.length-1)+h);
+}
+function renderForecast(){
+  var el=document.getElementById('ai-forecast'); if(!el) return;
+  var H=3;  // горизонт прогноза, мес
+  // агрегируем помесячный тренд по всем процессам региона
+  var map={};
+  ((OVR&&OVR.processes)||[]).forEach(function(p){ (p.trend||[]).forEach(function(t){
+    if(!map[t.month]) map[t.month]={ontime:0,overdue:0};
+    map[t.month].ontime+=t.ontime||0; map[t.month].overdue+=t.overdue||0;
+  });});
+  // только месяцы по текущий включительно — будущие дедлайны (разрежённые, 100%) искажают тренд
+  var nowM=(function(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);})();
+  var months=Object.keys(map).filter(function(m){return m<=nowM;}).sort();
+  var head='<div class="card-h" style="margin:0 0 8px">Прогноз <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(на '+H+' мес, при сохранении тренда)</span></div>';
+  if(months.length<2){ el.innerHTML=head+'<div class="sub">недостаточно данных для прогноза</div>'; return; }
+  var thr=months.map(function(m){var o=map[m],tot=o.ontime+o.overdue;return tot>0?100*o.ontime/tot:null;});
+  var ovd=months.map(function(m){return map[m].overdue;});
+  var curThr=thr[thr.length-1], fThr=projTrend(thr,H);
+  var curOvd=ovd[ovd.length-1], fOvd=projTrend(ovd,H);
+  if(fThr!=null) fThr=Math.max(0,Math.min(100,fThr));
+  if(fOvd!=null) fOvd=Math.max(0,fOvd);
+  function row(label,cur,fc,unit,goodUp){
+    if(fc==null) return '';
+    var d=Math.round(fc-cur), arr=d>0?'▲':(d<0?'▼':'→');
+    var good=(goodUp? d>0 : d<0); var c=d===0?'var(--subtle)':(good?'var(--green)':'var(--red)');
+    return '<div class="row" style="justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">'+
+      '<span style="font-size:13px">'+label+'</span>'+
+      '<span style="font-size:13px"><b>'+Math.round(cur)+unit+'</b> <span class="subtle">→ через '+H+' мес</span> '+
+      '<b style="color:'+c+'">~'+Math.round(fc)+unit+' '+arr+'</b></span></div>';
+  }
+  var rows=row('Пропускная способность (в срок)',curThr,fThr,'%',true)+
+           row('Просрочка (заданий/мес)',curOvd,fOvd,'',false);
+  // история помесячно (для контекста), последние 8 точек
+  var hist=months.slice(-8).map(function(m){return {month:m.slice(5),ontime:map[m].ontime,overdue:map[m].overdue};});
+  el.innerHTML=head+rows+
+    '<div class="subtle" style="font-size:11px;margin:10px 0 4px">История по месяцам (в срок / просрочено)</div>'+
+    svgStack(hist,120,true,0);
 }
 
 /* ---------- ИИ-чат (дрилдаун) ---------- */
@@ -463,8 +556,7 @@ function sendChat(){
 /* ---------- Процесс ---------- */
 function goProcess(key){
   CUR=key;renderNav();
-  document.getElementById('view-start').classList.add('hidden');
-  document.getElementById('view-backoffice').classList.add('hidden');
+  hideViews();
   var v=document.getElementById('view-process');v.classList.remove('hidden');v.innerHTML='<div class="sub">загрузка…</div>';
   fetch('/api/process?key='+key+'&period='+PERIOD,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     if(d.error){v.innerHTML='<div class="sub">ошибка: '+d.error+'</div>';return;}
@@ -494,6 +586,16 @@ var PCARDS=[
   ['workload','Загрузка исполнителей','<div id="c-workload"><div class="sub">загрузка…</div></div>',true],
   ['overdue','Просроченные задания — по дням просрочки','<div id="c-overdue"><div class="sub">загрузка…</div></div>',true]
 ];
+// смысловые секции страницы процесса (порядок секций = логика разбора)
+var PSECTIONS=[
+  ['Объём и поток',        ['funnel','backlog']],
+  ['Скорость и качество',  ['stages','hist','pickup','flow','formal']],
+  ['Дисциплина и риск',    ['trend','risk','overdue']],
+  ['Переделки и возвраты', ['rework','ftr','loops']],
+  ['Люди',                 ['workload','neg','pos']],
+  ['Срезы',                ['breakdown']]
+];
+function sectionOf(key){for(var i=0;i<PSECTIONS.length;i++){if(PSECTIONS[i][1].indexOf(key)>=0)return i;}return -1;}
 function pcDefaultWide(){return PCARDS.filter(function(c){return c[3];}).map(function(c){return c[0];});}
 function loadLayout(key){try{return JSON.parse(localStorage.getItem('armgov.layout.'+key))||{};}catch(e){return {};}}
 function saveLayout(key,l){try{localStorage.setItem('armgov.layout.'+key,JSON.stringify(l));}catch(e){}}
@@ -501,7 +603,9 @@ function processOrder(key){var def=PCARDS.map(function(c){return c[0];});var l=l
 function processWide(key){var l=loadLayout(key);return l.wide?l.wide.slice():pcDefaultWide();}
 var DRAG_KEY=null;
 function pDragStart(e,key){DRAG_KEY=key;try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',key);}catch(_){}}
-function pDrop(e,targetKey){e.preventDefault();if(!DRAG_KEY||DRAG_KEY===targetKey){DRAG_KEY=null;return;}var l=loadLayout(CUR);var ord=processOrder(CUR).filter(function(k){return k!==DRAG_KEY;});var ti=ord.indexOf(targetKey);if(ti<0)ti=ord.length;ord.splice(ti,0,DRAG_KEY);l.order=ord;saveLayout(CUR,l);DRAG_KEY=null;renderProcess(CURDATA);}
+function pDrop(e,targetKey){e.preventDefault();if(!DRAG_KEY||DRAG_KEY===targetKey){DRAG_KEY=null;return;}
+  if(sectionOf(DRAG_KEY)!==sectionOf(targetKey)){DRAG_KEY=null;return;}   // перетаскивание только внутри своей секции
+  var l=loadLayout(CUR);var ord=processOrder(CUR).filter(function(k){return k!==DRAG_KEY;});var ti=ord.indexOf(targetKey);if(ti<0)ti=ord.length;ord.splice(ti,0,DRAG_KEY);l.order=ord;saveLayout(CUR,l);DRAG_KEY=null;renderProcess(CURDATA);}
 function pToggleWide(key){var l=loadLayout(CUR);var w=processWide(CUR);var i=w.indexOf(key);if(i>=0)w.splice(i,1);else w.push(key);l.wide=w;saveLayout(CUR,l);renderProcess(CURDATA);}
 function resetLayout(){try{localStorage.removeItem('armgov.layout.'+CUR);}catch(e){}renderProcess(CURDATA);}
 
@@ -513,11 +617,24 @@ function renderProcess(d){
     kpi('Всего',k.total,'','accent-blue')+kpi('В работе',k.inwork,'','accent-blue')+
     kpi('Просрочено',k.overdue,'заданий','accent-red')+kpi('Средний цикл',k.avgCycleDays+' дн','от старта до завершения','accent-amber')+kpi('95% проходят за',k.p95RouteDays+' дн','дольше — лишь 5% самых тяжёлых','accent-amber')+'</div>';
   var order=processOrder(CUR),wide=processWide(CUR),defmap={};PCARDS.forEach(function(c){defmap[c[0]]=c;});
-  html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(380px,1fr))">'+order.map(function(key){var c=defmap[key];if(!c)return '';var isW=wide.indexOf(key)>=0;
+  function cardHtml(key){var c=defmap[key];if(!c)return '';var isW=wide.indexOf(key)>=0;
     return '<div class="card pcard'+(isW?' wide':'')+(prHas(key)?'':' hidden')+'" data-k="'+key+'" ondragover="event.preventDefault()" ondrop="pDrop(event,\''+key+'\')">'+
       '<div class="cardhead"><div class="card-h" style="margin:0;display:flex;align-items:center"><span class="drag" draggable="true" ondragstart="pDragStart(event,\''+key+'\')" title="перетащите, чтобы переставить">⠿</span>'+c[1]+hlp(c[1],key)+'</div>'+
       '<span class="wbtn" onclick="pToggleWide(\''+key+'\')">'+(isW?'◧ обычный':'▭ на строку')+'</span></div>'+c[2]+'</div>';
-  }).join('')+'</div>';
+  }
+  // рендер по секциям: блоки секции в сохранённом порядке; секция без видимых блоков — скрыта
+  PSECTIONS.forEach(function(sec){
+    var keys=order.filter(function(k){return sec[1].indexOf(k)>=0;});
+    if(!keys.some(function(k){return prHas(k);}))return;   // все скрыты профилем — секцию не показываем
+    html+='<div class="psection-h">'+sec[0]+'</div>';
+    html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(380px,1fr))">'+keys.map(cardHtml).join('')+'</div>';
+  });
+  // страховка: блоки, не попавшие ни в одну секцию (если добавили PCARD без PSECTIONS) — не теряем
+  var rest=order.filter(function(k){return defmap[k]&&sectionOf(k)<0;});
+  if(rest.some(function(k){return prHas(k);})){
+    html+='<div class="psection-h">Прочее</div>';
+    html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(380px,1fr))">'+rest.map(cardHtml).join('')+'</div>';
+  }
   document.getElementById('view-process').innerHTML=html;
 
   // #5 С первого раза
@@ -624,11 +741,13 @@ function renderProcess(d){
   // Просроченные задания — грузим здесь, чтобы блок наполнялся при ЛЮБОЙ перерисовке (смена профиля, drag, ширина)
   fetch('/api/process/stuck?key='+CUR+'&period='+PERIOD,{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){renderOverdue(s.items||[]);});
 
-  // cycle-time bars (horizontal P50/P95)
-  var maxP=Math.max.apply(null,d.stages.map(function(s){return s.p95||0;}).concat([1]));
+  // cycle-time bars (horizontal P50/P95). Длительность в днях; короткие этапы — в ч/мин + минимально видимый бар.
+  function fmtDur(x){x=+x||0;if(x<=0)return '0';if(x>=1)return (Math.round(x*10)/10)+' дн';var h=x*24;if(h>=1)return (Math.round(h*10)/10)+' ч';return Math.max(1,Math.round(h*60))+' мин';}
+  var maxP=Math.max.apply(null,d.stages.map(function(s){return s.p95||0;}).concat([1e-9]));
+  function pbw(v){return v>0?Math.max(2,Math.round(v/maxP*100)):0;}   // ширина бара, мин. 2% для ненулевых
   document.getElementById('c-stages').innerHTML=d.stages.map(function(s){
-    var w50=Math.round((s.p50||0)/maxP*100),w95=Math.round((s.p95||0)/maxP*100);
-    return '<div style="margin-bottom:14px"><div class="row" style="justify-content:space-between;font-size:13px;margin-bottom:5px"><span><b>'+esc(s.name)+'</b> <span class="subtle">'+s.total+' зад.</span></span><span class="muted">P50 '+s.p50+' · P95 '+s.p95+'</span></div>'+
+    var w50=pbw(s.p50||0),w95=pbw(s.p95||0);
+    return '<div style="margin-bottom:14px"><div class="row" style="justify-content:space-between;font-size:13px;margin-bottom:5px"><span><b>'+esc(s.name)+'</b> <span class="subtle">'+s.total+' зад.</span></span><span class="muted">P50 '+fmtDur(s.p50)+' · P95 '+fmtDur(s.p95)+'</span></div>'+
       '<div class="bar-track" style="position:relative;height:12px"><div style="position:absolute;left:0;top:0;bottom:0;width:'+w95+'%;background:var(--blue-soft)"></div><div style="position:absolute;left:0;top:0;bottom:0;width:'+w50+'%;background:var(--accent)"></div></div>'+
       '<div style="font-size:12px;margin-top:4px" class="'+(s.overdue>0?'':'muted')+'">'+(s.overdue>0?'<span class="muted">в работе '+s.active+'</span> · <span style="color:var(--red)">просрочено '+s.overdue+'</span>':'в работе '+s.active)+'</div></div>';
   }).join('');
@@ -659,18 +778,13 @@ function perfRows(arr,col){
       '<div class="bar-track"><div style="height:100%;width:'+pct+'%;background:'+col+'"></div></div></div>';
   }).join('');
 }
-function renderWorkload(w){
-  var el=document.getElementById('c-workload');if(!el)return;
-  var items=w.items||[];
-  if(!items.length){el.innerHTML='<div class="sub">нет данных</div>';return;}
-  // масштаб бара = max(вовремя + активные) по команде; сегменты: вовремя / в работе(на ходу) / просрочено
-  var mx=items.reduce(function(a,x){return Math.max(a,(x.ontime||0)+(x.active||0));},1);
-  var head='<div class="row" style="justify-content:space-between"><div class="sub" style="margin:0 0 4px">Средняя текущая загрузка: <b>'+w.teamAvgActive+'</b> активных · перегружено: <b style="color:var(--red)">'+w.overloadedCount+'</b></div>'+csvLink('workload')+'</div>'+
-    '<div class="row" style="gap:16px;font-size:12px;margin:0 0 12px">'+legend('var(--green)','','вовремя завершено')+legend('var(--accent)','','в работе (в срок)')+legend('var(--red)','','просрочено')+'</div>';
+var WL=null;
+// строки таблицы загрузки (шапка колонок + строки). Используется и в блоке (топ-10), и в модалке (все).
+function wlTable(items,mx){
   var cols='1.6fr 2.2fr 0.7fr 0.7fr 0.9fr';
-  var rows='<div style="display:grid;grid-template-columns:'+cols+';gap:10px;font-size:11px;color:var(--subtle);text-transform:uppercase;letter-spacing:.04em;padding:0 0 6px">'+
+  var out='<div style="display:grid;grid-template-columns:'+cols+';gap:10px;font-size:11px;color:var(--subtle);text-transform:uppercase;letter-spacing:.04em;padding:0 0 6px">'+
     '<span>Исполнитель</span><span>Состав работы (вовремя · в работе · просрочено)</span><span>Активно</span><span>В срок</span><span>Удержание</span></div>';
-  rows+=items.map(function(x){
+  out+=items.map(function(x){
     var inworkOk=Math.max(0,(x.active||0)-(x.overdue||0));
     var wOn=(x.ontime||0)/mx*100,wIn=inworkOk/mx*100,wOv=(x.overdue||0)/mx*100;
     return '<div class="listrow" onclick="openPerf('+x.id+',\''+esc(x.name).replace(/\x27/g,"")+'\')" style="display:grid;grid-template-columns:'+cols+';gap:10px;align-items:center;padding:9px 0">'+
@@ -684,7 +798,97 @@ function renderWorkload(w){
       '<span style="font-size:13px" class="muted">'+(x.onTimePct>=0?x.onTimePct+'%':'—')+'</span>'+
       '<span style="font-size:13px" class="muted">'+x.avgHold+' д</span></div>';
   }).join('');
-  el.innerHTML=head+rows;
+  return out;
+}
+var WL_LIMIT=10;
+function renderWorkload(w){
+  WL=w;
+  var el=document.getElementById('c-workload');if(!el)return;
+  var items=w.items||[];
+  if(!items.length){el.innerHTML='<div class="sub">нет данных</div>';return;}
+  // масштаб бара = max(вовремя + активные) по команде; сегменты: вовремя / в работе(на ходу) / просрочено
+  var mx=items.reduce(function(a,x){return Math.max(a,(x.ontime||0)+(x.active||0));},1);
+  var head='<div class="row" style="justify-content:space-between"><div class="sub" style="margin:0 0 4px">Средняя текущая загрузка: <b>'+w.teamAvgActive+'</b> активных · перегружено: <b style="color:var(--red)">'+w.overloadedCount+'</b></div>'+csvLink('workload')+'</div>'+
+    '<div class="row" style="gap:16px;font-size:12px;margin:0 0 12px">'+legend('var(--green)','','вовремя завершено')+legend('var(--accent)','','в работе (в срок)')+legend('var(--red)','','просрочено')+'</div>';
+  var more=items.length>WL_LIMIT?'<div class="listrow" onclick="openWorkloadAll()" style="text-align:center;padding:11px 0;margin-top:2px;color:var(--accent);font-weight:600;border-top:1px solid var(--border)">Показать всех ('+items.length+') →</div>':'';
+  el.innerHTML=head+wlTable(items.slice(0,WL_LIMIT),mx)+more;
+}
+function openWorkloadAll(){
+  if(!WL)return;var items=WL.items||[];
+  var mx=items.reduce(function(a,x){return Math.max(a,(x.ontime||0)+(x.active||0));},1);
+  document.getElementById('wl-title').textContent='Загрузка исполнителей · все '+items.length;
+  document.getElementById('wl-list').innerHTML=wlTable(items,mx);
+  document.getElementById('workloadModal').classList.remove('hidden');
+}
+function closeWorkloadAll(){document.getElementById('workloadModal').classList.add('hidden');}
+
+/* ---------- Тематики обращений граждан ---------- */
+var APP=null;
+function appealBars(items){
+  if(!items||!items.length)return '<div class="sub">нет данных</div>';
+  var mx=items.reduce(function(a,x){return Math.max(a,x.pct||0);},0.1);
+  return '<div style="display:flex;flex-direction:column;gap:7px">'+items.map(function(x){
+    var w=Math.max(2,Math.round((x.pct||0)/mx*100));
+    return '<div><div class="row" style="justify-content:space-between;font-size:13px;margin-bottom:2px"><span style="max-width:74%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.name)+'">'+esc(x.name)+'</span><span class="muted"><b style="color:var(--text)">'+x.n+'</b> · '+x.pct+'%</span></div>'+
+      '<div class="bar-track" style="height:9px"><div style="height:100%;width:'+w+'%;background:var(--accent);border-radius:5px"></div></div></div>';
+  }).join('')+'</div>';
+}
+function tmHeat(t){var a=[212,225,238],b=[31,58,95];var c=function(i){return Math.round(a[i]+(b[i]-a[i])*t);};return 'rgb('+c(0)+','+c(1)+','+c(2)+')';}
+function renderTreemap(tm){
+  if(!tm||!tm.length)return '<div class="sub">нет данных</div>';
+  var maxTp=0;tm.forEach(function(s){(s.topics||[]).forEach(function(t){if(t.pct>maxTp)maxTp=t.pct;});});
+  return '<div class="tm-wrap">'+tm.map(function(s){
+    var tiles=(s.topics||[]).map(function(t){
+      var inten=maxTp>0?t.pct/maxTp:0,bg=tmHeat(0.22+0.78*inten);
+      var nm=t.name.replace(/^[0-9.]+\s*/,'');
+      return '<div class="tm-tile" style="flex:'+t.n+' 1 0;background:'+bg+'" title="'+esc(t.name)+': '+t.n+' ('+t.pct+'%)" onclick="openAppealTopic(\''+(t.code||'')+'\',\''+esc(t.name).replace(/\x27/g,"")+'\')"><span class="v">'+t.pct+'%</span><span style="opacity:.93">'+esc(nm)+'</span></div>';
+    }).join('');
+    var snm=s.section.replace(/^[0-9.]+\s*/,'');
+    return '<div class="tm-col" style="flex:'+s.n+' 1 0"><div class="tm-sec" title="'+esc(s.section)+'">'+esc(snm)+' <span class="muted" style="font-weight:400">'+s.pct+'%</span></div>'+tiles+'</div>';
+  }).join('')+'</div>';
+}
+function renderAppeals(){
+  var el=document.getElementById('view-appeals');el.innerHTML='<div class="sub">загрузка…</div>';
+  fetch('/api/appeals/topics',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    APP=d;
+    if(d.error){el.innerHTML='<div class="sub">ошибка: '+esc(d.error)+'</div>';return;}
+    var k=d.kpi;
+    var html='<div class="row" style="margin-bottom:12px"><button class="btn-ghost" onclick="goStart()">← Обзор</button><span class="h2" style="margin:0">Обращения граждан · тематики</span></div>';
+    html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:18px">'+
+      kpi('Обращений',k.requests,'','accent-blue')+kpi('Вопросов в них',k.questions,'','accent-blue')+
+      kpi('Вопросов / обращение',k.avgPerRequest,'в среднем','accent-amber')+kpi('С неск. вопросами',k.multiPct+'%','доля обращений','accent-amber')+'</div>';
+    html+='<div class="card" style="margin-bottom:16px"><div class="card-h">Тепловая карта тематик <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(раздел → тема · размер и цвет = доля · клик по теме → вопросы)</span></div>'+renderTreemap(d.treemap)+'</div>';
+    html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(360px,1fr))">';
+    html+='<div class="card"><div class="card-h">Топ вопросов</div>'+appealBars((d.topQuestions||[]).slice(0,15))+
+      ((d.topQuestions||[]).length>15?'<div class="listrow" style="text-align:center;color:var(--accent);font-weight:600;padding:9px 0 2px;border-top:1px solid var(--border);margin-top:8px" onclick="openAppealQuestions()">Показать все '+d.topQuestions.length+' →</div>':'')+'</div>';
+    html+='<div class="card"><div class="card-h">Куда направлено <span class="subtle" style="text-transform:none;letter-spacing:0;font-weight:400">(по направленным: '+d.routedCoverage.routed+' из '+d.routedCoverage.total+' · '+d.routedCoverage.pct+'%)</span></div>'+appealBars((d.routedTo||[]).slice(0,12))+'</div>';
+    html+='</div>';
+    html+='<div class="card" style="margin-top:16px"><div class="card-h">Разделы классификатора</div>'+appealBars(d.sections||[])+'</div>';
+    el.innerHTML=html;
+  }).catch(function(e){el.innerHTML='<div class="sub">ошибка связи: '+esc(String(e))+'</div>';});
+}
+function openAppealTopic(code,name){
+  var items=(APP&&APP.topQuestions||[]).filter(function(q){return code&&q.code&&(q.code===code||q.code.indexOf(code+'.')===0);});
+  showAppealList('Вопросы темы «'+name+'» · '+items.length,items);
+}
+function openAppealQuestions(){showAppealList('Все вопросы · '+((APP&&APP.topQuestions||[]).length),(APP&&APP.topQuestions)||[]);}
+function showAppealList(title,items){
+  document.getElementById('ap-title').textContent=title;
+  document.getElementById('ap-list').innerHTML=items.length?appealBars(items):'<div class="sub">нет вопросов</div>';
+  document.getElementById('appealModal').classList.remove('hidden');
+}
+function closeAppeal(){document.getElementById('appealModal').classList.add('hidden');}
+function renderStartAppeals(){
+  var el=document.getElementById('start-appeals');if(!el)return;
+  function fill(){var d=APP;if(!d||d.error){el.innerHTML='';return;}
+    var q=(d.topQuestions||[]).slice(0,5);
+    el.innerHTML='<div class="cardhead" style="margin-bottom:6px"><div class="card-h" style="margin:0">Топ вопросов · обращения граждан</div><span class="subtle" style="font-size:12px">всего '+d.kpi.requests+' обращений</span></div>'+
+      q.map(function(x){return '<div class="row" style="justify-content:space-between;font-size:13px;padding:5px 0;border-top:1px solid var(--border)"><span style="max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.name)+'">'+esc(x.name)+'</span><span class="muted">'+x.pct+'%</span></div>';}).join('')+
+      '<div class="listrow" style="text-align:center;color:var(--accent);font-weight:600;padding:9px 0 2px" onclick="goAppeals()">Тематики обращений →</div>';
+  }
+  if(APP){fill();return;}
+  el.innerHTML='<div class="sub">загрузка тематик обращений…</div>';
+  fetch('/api/appeals/topics',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){APP=d;if(document.getElementById('start-appeals'))fill();}).catch(function(){if(document.getElementById('start-appeals'))document.getElementById('start-appeals').innerHTML='';});
 }
 var OVERDUE=[], OVB=[];
 function overdueBuckets(items){
@@ -701,13 +905,13 @@ function renderOverdue(items){
     var n=b.items.length,h=Math.round(n/mx*150),dis=n===0;
     var col=b.lo>=181?'#7a1f12':b.lo>=91?'#b3471f':'var(--red)';
     return '<div '+(dis?'':'onclick="openOverdueModal('+i+')"')+' title="'+n+' заданий просрочено на '+b.label+'" '+
-      'style="flex:1;min-width:80px;cursor:'+(dis?'default':'pointer')+';display:flex;flex-direction:column;align-items:center;justify-content:flex-end;opacity:'+(dis?0.4:1)+';transition:opacity .1s"'+(dis?'':' onmouseover="this.style.opacity=.75" onmouseout="this.style.opacity=1"')+'>'+
+      'style="flex:1 1 0;min-width:0;cursor:'+(dis?'default':'pointer')+';display:flex;flex-direction:column;align-items:center;justify-content:flex-end;opacity:'+(dis?0.4:1)+';transition:opacity .1s"'+(dis?'':' onmouseover="this.style.opacity=.75" onmouseout="this.style.opacity=1"')+'>'+
       '<span style="font-size:15px;font-weight:700;color:'+col+'">'+n+'</span>'+
       '<div style="width:72%;max-width:84px;height:'+(h+2)+'px;background:'+col+';border-radius:5px 5px 0 0;margin-top:4px"></div>'+
       '<span style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center">'+b.label+'</span></div>';
   }).join('');
   el.innerHTML='<div class="row" style="justify-content:space-between;margin:0 0 10px"><span class="sub" style="margin:0">Распределение <b>'+OVERDUE.length+'</b> просроченных заданий по длительности просрочки · клик по столбцу → список</span>'+csvLink('overdue','CSV списка')+'</div>'+
-    '<div style="display:flex;align-items:flex-end;gap:16px;height:200px;padding:0 8px">'+bars+'</div>';
+    '<div style="display:flex;align-items:flex-end;gap:10px;height:200px;padding:0 4px;overflow:hidden">'+bars+'</div>';
 }
 function openOverdueModal(bucketIdx){
   var b=OVB[bucketIdx];if(!b)return;
@@ -895,7 +1099,7 @@ function openKindTasks(key,kindId,kindName){
   });
 }
 
-document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeTask();closePerf();closeOverdue();closeDept();closeProc();}});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeTask();closePerf();closeOverdue();closeDept();closeProc();closeAi();closeWorkloadAll();closeAppeal();}});
 
 function load(){
   fetch('/api/overview?period='+PERIOD,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){

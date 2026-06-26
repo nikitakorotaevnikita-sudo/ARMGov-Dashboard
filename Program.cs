@@ -440,7 +440,8 @@ class Program
             "select to_char(date_trunc('month',a.deadline),'YYYY-MM') m, " +
             "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline) ontime, " +
             "count(*) filter (where (a.status::text='Completed' and a.completed is not null and a.completed>a.deadline) or (a.status::text='InProcess' and a.deadline<now())) overdue " +
-            $"{AsgJoin(p)} and a.deadline is not null group by 1 order by 1", c);
+            // только месяцы по текущий включительно: будущие дедлайны ещё не просрочены и дают ложные 100%
+            $"{AsgJoin(p)} and a.deadline is not null and a.deadline < date_trunc('month', now()) + interval '1 month' group by 1 order by 1", c);
         using var r = cmd.ExecuteReader();
         while (r.Read()) pts.Add(new { month = r.GetString(0), ontime = (int)r.GetInt64(1), overdue = (int)r.GetInt64(2) });
         return pts;
@@ -1113,7 +1114,7 @@ class Program
             "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.completed<=a.deadline) ontime, " +
             "count(*) filter (where (a.status::text='Completed' and a.completed is not null and a.completed>a.deadline) or (a.status::text='InProcess' and a.deadline<now())) overdue " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
-            $"where {where}{NoticeNotIn} and a.performer={pid} and a.deadline is not null group by 1 order by 1", c))
+            $"where {where}{NoticeNotIn} and a.performer={pid} and a.deadline is not null and a.deadline < date_trunc('month', now()) + interval '1 month' group by 1 order by 1", c))
         using (var r = cmd.ExecuteReader())
             while (r.Read()) { int on = (int)r.GetInt64(1), ov = (int)r.GetInt64(2); tOn += on; tOver += ov; points.Add(new { month = r.GetString(0), ontime = on, overdue = ov }); }
 

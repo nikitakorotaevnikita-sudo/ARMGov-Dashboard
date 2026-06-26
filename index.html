@@ -74,9 +74,10 @@ a{color:var(--accent)}
 .tm-wrap{display:flex;gap:5px;height:380px;align-items:stretch}
 .tm-col{display:flex;flex-direction:column;min-width:70px;gap:3px}
 .tm-sec{font-size:11px;font-weight:700;color:var(--navy,#1f3a5f);text-transform:uppercase;letter-spacing:.02em;line-height:1.15;min-height:34px}
-.tm-tile{border-radius:5px;padding:6px 8px;overflow:hidden;cursor:pointer;color:#fff;font-size:11px;line-height:1.2;display:flex;flex-direction:column;justify-content:flex-start;min-height:18px;transition:filter .1s}
+.tm-tile{border-radius:5px;padding:5px 7px;overflow:hidden;cursor:pointer;color:#fff;font-size:11px;line-height:1.18;display:flex;flex-direction:column;justify-content:flex-start;min-width:0;min-height:16px;transition:filter .1s}
 .tm-tile:hover{filter:brightness(1.1)}
-.tm-tile .v{font-weight:700;font-size:12px}
+.tm-tile .v{font-weight:700;font-size:12px;flex:0 0 auto}
+.tm-nm{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;opacity:.93;margin-top:1px;word-break:break-word}
 .wbtn:hover{border-color:var(--accent);color:var(--accent)}
 .card.dragover{outline:2px dashed var(--accent);outline-offset:-2px}
 .card.dragging{opacity:.5}
@@ -192,6 +193,8 @@ a{color:var(--accent)}
 var SEV={green:{c:'var(--green)',b:'b-green',a:'accent-green',l:'В норме'},amber:{c:'var(--amber)',b:'b-amber',a:'accent-amber',l:'Внимание'},red:{c:'var(--red)',b:'b-red',a:'accent-red',l:'Высокий риск'}};
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 var PROCS=[], CUR=null, CURDATA=null, OVR=null, AISUM=null, CHAT=[], ACTIVE_PROFILE=null, PERIOD='all';
+// текущий месяц YYYY-MM — для отсечения будущих месяцев в трендах (дедлайны в будущем дают ложные 100%)
+var NOWM=(function(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);})();
 
 /* ---------- профили / период / подсказки ---------- */
 var PERIOD_LABEL={all:'Весь период',month:'Месяц',quarter:'Квартал',year:'Год'};
@@ -256,6 +259,26 @@ function svgStack(data,h,showVal,minSlots){
     return s;
   }).join('');
   return '<svg viewBox="0 0 '+W+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="xMidYMid meet" style="max-width:100%;display:block">'+rect(pl,pt+ch,W-pl-pr,1,'var(--border)')+body+'</svg>';
+}
+// спарклайн дисциплины: линия доли «в срок» (ontime/(ontime+overdue)) по месяцам
+function svgSpark(data,h){
+  h=h||42;if(!data||!data.length)return '<span class="subtle" style="font-size:12px">—</span>';
+  var pts=data.map(function(d){var t=(d.ontime||0)+(d.overdue||0);return t>0?100*(d.ontime||0)/t:null;});
+  var idx=[];pts.forEach(function(v,i){if(v!=null)idx.push(i);});
+  if(idx.length<2)return '<span class="subtle" style="font-size:12px">мало данных</span>';
+  var W=200,pad=5,n=pts.length,ch=h-pad*2;
+  var X=function(i){return pad+(n>1?i/(n-1):0)*(W-pad*2);};
+  var Y=function(v){return pad+(1-v/100)*ch;};
+  var seg=idx.map(function(i,k){return (k?'L':'M')+X(i).toFixed(1)+' '+Y(pts[i]).toFixed(1);}).join(' ');
+  var li=idx[idx.length-1],last=pts[li],lx=X(li),ly=Y(last);
+  var col=last>=75?'var(--green)':(last>=50?'var(--amber)':'var(--red)');
+  var area=seg+' L'+lx.toFixed(1)+' '+(pad+ch).toFixed(1)+' L'+X(idx[0]).toFixed(1)+' '+(pad+ch).toFixed(1)+' Z';
+  var base=Y(50).toFixed(1);
+  return '<svg viewBox="0 0 '+W+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="none" style="display:block;max-width:240px">'+
+    '<line x1="'+pad+'" y1="'+base+'" x2="'+(W-pad)+'" y2="'+base+'" stroke="var(--border)" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>'+
+    '<path d="'+area+'" fill="'+col+'" opacity="0.12"/>'+
+    '<path d="'+seg+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>'+
+    '<circle cx="'+lx.toFixed(1)+'" cy="'+ly.toFixed(1)+'" r="2.6" fill="'+col+'" vector-effect="non-scaling-stroke"/></svg>';
 }
 function svgBars(data,h,color){
   h=h||180; if(!data||!data.length)return '<div class="sub">нет данных</div>';
@@ -405,16 +428,18 @@ function renderStart(){
   var sc='16px 1.7fr 0.8fr 0.9fr 1.4fr 0.9fr 2.2fr 18px';
   html+='<div class="card" style="padding:6px 20px">';
   html+='<div style="display:grid;grid-template-columns:'+sc+';gap:14px;font-size:11px;color:var(--subtle);text-transform:uppercase;letter-spacing:.04em;padding:8px 0 6px;border-bottom:1px solid var(--border)">'+
-    '<span></span><span>Процесс</span><span>Здоровье</span><span>Количество</span><span>Узкое горлышко</span><span>Просрочено</span><span>Дисциплина (в срок / просроч.)</span><span></span></div>';
+    '<span></span><span>Процесс</span><span>Здоровье</span><span>Количество</span><span>Узкое горлышко</span><span>Просрочено</span><span>Тренд дисциплины (% в срок)</span><span></span></div>';
   html+=PROCS.slice().sort(function(a,b){return sevRank(a.severity)-sevRank(b.severity)||(b.overdue-a.overdue);}).map(function(p){var sv=SEV[p.severity]||SEV.green;
+    var tr=(p.trend||[]).filter(function(d){return d.month<=NOWM;}),ld=null;for(var i=tr.length-1;i>=0;i--){var tt=(tr[i].ontime||0)+(tr[i].overdue||0);if(tt>0){ld=Math.round(100*(tr[i].ontime||0)/tt);break;}}
+    var ldCol=ld==null?'var(--muted)':(ld>=75?'var(--green)':ld>=50?'var(--amber)':'var(--red)');
     return '<div class="listrow" onclick="openProcModal(\''+p.key+'\')" style="display:grid;grid-template-columns:'+sc+';gap:14px;align-items:center;padding:14px 0">'+
       '<span style="width:12px;height:12px;border-radius:50%;background:'+sv.c+'"></span>'+
       '<span><span style="font-size:15px;font-weight:600">'+esc(p.name)+'</span>'+(p.chronic?' <span class="badge b-red" style="font-size:10px;padding:1px 6px">⚠ хрон.</span>':'')+(p.throughputDelta!=null?' <span style="font-size:11px">'+deltaArrow(p.throughputDelta)+'</span>':'')+'</span>'+
       '<span><span style="font-size:18px;font-weight:700;color:'+sv.c+'">'+p.health+'</span><span class="subtle" style="font-size:11px">/100</span></span>'+
       '<span><span style="font-size:18px;font-weight:700">'+(p.total!=null?p.total:'—')+'</span><span class="subtle" style="font-size:11px"> · в работе '+(p.inwork!=null?p.inwork:'—')+'</span></span>'+
-      '<span class="muted" style="font-size:12px">'+esc(p.bottleneckStage||'—')+(p.bottleneckMedianDays?' <span class="subtle">· '+p.bottleneckMedianDays+' дн</span>':'')+'</span>'+
+      '<span style="font-size:13px;line-height:1.25"><span style="color:var(--navy);font-weight:600">'+esc(p.bottleneckStage||'—')+'</span>'+(p.bottleneckMedianDays?'<span class="badge b-amber" style="margin-left:6px;font-size:11px;padding:1px 7px;white-space:nowrap">'+p.bottleneckMedianDays+' дн</span>':'')+'</span>'+
       '<span style="font-size:15px;font-weight:700;color:'+(p.overdue>0?'var(--red)':'var(--muted)')+'">'+p.overdue+'</span>'+
-      '<span>'+svgStack(p.trend,68,false,maxMonths)+'</span>'+
+      '<span style="display:flex;align-items:center;gap:10px"><span style="flex:1;min-width:60px">'+svgSpark(tr,40)+'</span>'+(ld!=null?'<span style="font-size:14px;font-weight:700;color:'+ldCol+'">'+ld+'%</span>':'')+'</span>'+
       '<span class="subtle" style="text-align:right;font-size:18px">›</span></div>';
   }).join('');
   html+='</div>';
@@ -837,11 +862,16 @@ function tmHeat(t){var a=[212,225,238],b=[31,58,95];var c=function(i){return Mat
 function renderTreemap(tm){
   if(!tm||!tm.length)return '<div class="sub">нет данных</div>';
   var maxTp=0;tm.forEach(function(s){(s.topics||[]).forEach(function(t){if(t.pct>maxTp)maxTp=t.pct;});});
-  return '<div class="tm-wrap">'+tm.map(function(s){
+  var H=440,contentH=H-52;  // высота под плитки в колонке (за вычетом заголовка раздела)
+  return '<div class="tm-wrap" style="height:'+H+'px">'+tm.map(function(s){
+    var secN=s.n||1;
     var tiles=(s.topics||[]).map(function(t){
       var inten=maxTp>0?t.pct/maxTp:0,bg=tmHeat(0.22+0.78*inten);
+      var tileH=t.n/secN*contentH;                 // оценка высоты плитки
       var nm=t.name.replace(/^[0-9.]+\s*/,'');
-      return '<div class="tm-tile" style="flex:'+t.n+' 1 0;background:'+bg+'" title="'+esc(t.name)+': '+t.n+' ('+t.pct+'%)" onclick="openAppealTopic(\''+(t.code||'')+'\',\''+esc(t.name).replace(/\x27/g,"")+'\')"><span class="v">'+t.pct+'%</span><span style="opacity:.93">'+esc(nm)+'</span></div>';
+      var lines=tileH>=66?3:(tileH>=48?2:1);
+      var body='<span class="v">'+t.pct+'%</span>'+(tileH>=32?'<span class="tm-nm" style="-webkit-line-clamp:'+lines+'">'+esc(nm)+'</span>':'');
+      return '<div class="tm-tile" style="flex:'+t.n+' 1 0;background:'+bg+'" title="'+esc(t.name)+': '+t.n+' ('+t.pct+'%)" onclick="openAppealTopic(\''+(t.code||'')+'\',\''+esc(t.name).replace(/\x27/g,"")+'\')">'+body+'</div>';
     }).join('');
     var snm=s.section.replace(/^[0-9.]+\s*/,'');
     return '<div class="tm-col" style="flex:'+s.n+' 1 0"><div class="tm-sec" title="'+esc(s.section)+'">'+esc(snm)+' <span class="muted" style="font-weight:400">'+s.pct+'%</span></div>'+tiles+'</div>';

@@ -600,7 +600,7 @@ var PCARDS=[
   ['risk','Прогноз срыва срока','<div id="c-risk"></div>',false],
   ['neg','Топ по просрочкам','<div id="c-neg"></div>',false],
   ['pos','Лучшие исполнители','<div id="c-pos"></div>',false],
-  ['rework','Возвраты и избыточность маршрута','<div id="c-rework"></div>',false],
+  ['rework','Возвраты на доработку и варианты маршрута','<div id="c-rework"></div>',false],
   ['formal','Время и качество решения','<div id="c-formal"></div>',false],
   ['backlog','Приток / отток (растёт ли завал)','<div id="c-backlog"></div>',false],
   ['flow','Поток-эффективность (работа vs ожидание)','<div id="c-flow"></div>',false],
@@ -737,11 +737,10 @@ function renderProcess(d){
   })();
 
   // B. Возвраты + «битва правок» + избыточность
-  var rw=d.rework||{},vrs=d.variants||[],ra=d.returnAuthors||[];
+  var vrs=d.variants||[],ra=d.returnAuthors||[];
   document.getElementById('c-rework').innerHTML=
     '<div class="row" style="gap:24px;margin-bottom:14px">'+
-    '<div><div class="kpi-value" style="font-size:24px;color:'+(rw.pct>=20?'var(--red)':'var(--text)')+'">'+(rw.pct||0)+'%</div><div class="subtle" style="font-size:12px">возвраты на доработку ('+(rw.tasksRework||0)+' из '+(rw.tasksTotal||0)+')</div></div>'+
-    '<div><div class="kpi-value" style="font-size:24px;color:'+((d.returnsTotal||0)>0?'var(--amber)':'var(--text)')+'">'+(d.returnsTotal||0)+'</div><div class="subtle" style="font-size:12px">возвратов всего</div></div>'+
+    '<div><div class="kpi-value" style="font-size:24px;color:'+((d.returnsTotal||0)>0?'var(--amber)':'var(--text)')+'">'+(d.returnsTotal||0)+'</div><div class="subtle" style="font-size:12px">возвратов на доработку всего</div></div>'+
     '<div><div class="kpi-value" style="font-size:24px">'+(d.repeatPerformer||0)+'</div><div class="subtle" style="font-size:12px">повторное участие</div></div></div>'+
     (ra.length?'<div class="subtle" style="font-size:12px;margin:2px 0 6px">«Битва правок» — кто отправляет на доработку (клик → профиль)</div>'+perfRows(ra,'var(--amber)'):'')+
     '<div class="subtle" style="font-size:12px;margin:14px 0 6px">Варианты маршрута (по частоте)</div>'+

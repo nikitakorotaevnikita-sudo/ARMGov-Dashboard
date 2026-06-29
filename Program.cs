@@ -529,14 +529,16 @@ class Program
         bool chronic = redMonths >= 3;
 
         // ----- B. Возвраты + избыточность маршрута -----
-        long rwTotal = 0, rwTasks = 0;
+        long rwTasks = 0;
         using (var cmd = new NpgsqlCommand(
-            "select count(*) total, count(*) filter (where rep>1) rw from (" +
+            "select count(*) filter (where rep>1) rw from (" +
             "select t.id, coalesce(max(c.cnt),1) rep from sungero_wf_task t " +
             $"join (select task, discriminator, count(*) cnt from sungero_wf_assignment where discriminator not in ({NoticeList}) group by task, discriminator) c on c.task=t.id " +
             $"where {p.Where} group by t.id) z", c))
-        using (var r = cmd.ExecuteReader()) { if (r.Read()) { rwTotal = r.GetInt64(0); rwTasks = r.GetInt64(1); } }
-        int reworkPct = rwTotal > 0 ? (int)Math.Round(100.0 * rwTasks / rwTotal) : 0;
+        using (var r = cmd.ExecuteReader()) { if (r.Read()) { rwTasks = r.GetInt64(0); } }
+        // Знаменатель — общий total процесса (как у блока «Петли»), чтобы одна и та же метрика
+        // «повторное прохождение этапа» совпадала в обоих блоках (задачи без заданий = не зациклились).
+        int reworkPct = total > 0 ? (int)Math.Round(100.0 * rwTasks / total) : 0;
 
         var variants = new List<object>();
         using (var cmd = new NpgsqlCommand(
@@ -665,7 +667,7 @@ class Program
             routeHist = hist,
             trend, healthTrend,
             risk = new { normal = rNorm, atRisk = rRisk, critical = rCrit, overdue = rOver },
-            rework = new { tasksTotal = rwTotal, tasksRework = rwTasks, pct = reworkPct },
+            rework = new { tasksTotal = total, tasksRework = rwTasks, pct = reworkPct },
             variants, repeatPerformer = repeatPerf,
             formal = new { completedTotal = fTotal, formalCount = fFormal, formalPct, avgDecisionHours = Math.Round(fAvgH, 1) },
             returnsTotal, returnAuthors,

@@ -218,6 +218,7 @@ var HELP={
   risk:['Активные задания по близости к сроку: просрочено / критично (≤3 дн) / под риском (≤7 дн) / норма.','Тревожно: много «критично» и «под риском».','Что сорвётся в ближайшую неделю.'],
   neg:['Исполнители с наибольшим числом просрочек.','Тревожно: концентрация на одном-двух.','Клик — карточка исполнителя.'],
   pos:['Исполнители с наибольшим числом заданий, закрытых вовремя.','—','Опереться на них / тиражировать практики.'],
+  eff:['Доля заданий, закрытых в срок, из «оценённых» (в срок + сорвано). Порог — от 10 оценённых заданий. В отличие от топов по объёму, показывает реальную эффективность, а не загруженность.','Тревожно: у ключевых людей КПД низкий даже при малой нагрузке.','Учиться у лидеров КПД; сравнивать с объёмом.'],
   rework:['Возвраты на доработку и «битва правок» — кто чаще отправляет на доработку.','Тревожно: один человек возвращает почти всё (или возвратов очень много).','Эксперт это или «тормоз» системы.'],
   formal:['Время и качество решения: как быстро принимают решение и нет ли «пустых» согласований.','Тревожно: решение за минуты по объёмному документу — формализм.','Качество, а не только скорость.'],
   workload:['Загрузка исполнителей: вовремя / в работе / просрочено + перегруз.','Тревожно: «перегруз» и низкая доля «в срок».','Перераспределить нагрузку.'],
@@ -309,8 +310,8 @@ function goStart(){CUR=null;CURDATA=null;renderNav();hideViews();document.getEle
 function goBackoffice(){CUR='__bo';CURDATA=null;renderNav();hideViews();document.getElementById('view-backoffice').classList.remove('hidden');renderBackoffice();}
 function goAppeals(){CUR='__appeals';CURDATA=null;renderNav();hideViews();document.getElementById('view-appeals').classList.remove('hidden');renderAppeals();}
 var BOCFG=null, BO_PROF_IDX=0;
-var OVB_LABELS={throughput:'Пропускная способность',bottleneck:'Узкое горлышко',longrunners:'Долгострои',burning:'Что горит',svetofor:'Светофор процессов'};
-var PRB_LABELS={funnel:'Воронка',stages:'Время цикла',hist:'Длительность маршрута',trend:'Тренд дисциплины',risk:'Прогноз срыва',neg:'Топ по просрочкам',pos:'Лучшие исполнители',rework:'Возвраты',formal:'Качество решения',workload:'Загрузка',overdue:'Просроченные',backlog:'Приток/отток',flow:'Поток-эффективность',pickup:'Скорость реакции',ftr:'С первого раза',loops:'Петли',breakdown:'Разрезы'};
+var OVB_LABELS={throughput:'Соблюдение сроков',bottleneck:'Узкое горлышко',longrunners:'Долгострои',burning:'Что горит',svetofor:'Светофор процессов'};
+var PRB_LABELS={funnel:'Воронка',stages:'Длительность этапов',hist:'Длительность маршрута',trend:'Тренд дисциплины',risk:'Прогноз срыва',neg:'Топ по просрочкам',pos:'Лучшие исполнители',eff:'Наивысший КПД',rework:'Возвраты',formal:'Качество решения',workload:'Загрузка',overdue:'Просроченные',backlog:'Приток/отток',flow:'Работа vs ожидание',pickup:'Скорость реакции',ftr:'С первого раза',loops:'Петли',breakdown:'Разрезы'};
 function renderBackoffice(){
   var el=document.getElementById('view-backoffice');
   el.innerHTML='<div class="h2">Бэк-офис · настройки</div><div class="sub">Подключения, профили (состав блоков по ролям), пороги и быстрые промпты чата. Сохраняется в config.json; секреты в браузер не возвращаются.</div>'+
@@ -395,7 +396,7 @@ function renderStart(){
 
   // ----- HERO-полоса -----
   var hero='';
-  if(ovHas('throughput')) hero+='<div class="card '+thrAcc+'"><div class="cardhead"><div class="kpi-label">Сквозная пропускная способность'+hlp('Сквозная пропускная способность','throughput',null)+'</div></div>'+
+  if(ovHas('throughput')) hero+='<div class="card '+thrAcc+'"><div class="cardhead"><div class="kpi-label">Соблюдение сроков'+hlp('Соблюдение сроков','throughput',null)+'</div></div>'+
     '<div class="row" style="gap:8px;align-items:baseline;margin:8px 0 4px"><span style="font-size:42px;font-weight:700;color:'+thrCol+'">'+(thr.pct!=null?thr.pct:'—')+'%</span><span class="subtle">в срок</span></div>'+
     '<div class="subtle" style="font-size:12px">'+(thr.onTimeTotal||0)+' из '+(thr.ratedTotal||0)+' заданий с наступившим сроком — вовремя</div>'+
     (thr.deltaPp!=null?'<div style="font-size:12px;margin-top:5px">'+deltaArrow(thr.deltaPp)+' <span class="subtle">к прошлому месяцу</span></div>':'')+'</div>';
@@ -407,6 +408,9 @@ function renderStart(){
     '<div class="row" style="gap:8px;align-items:baseline;margin:8px 0 4px"><span style="font-size:42px;font-weight:700;color:'+lrcol+'">'+(lr.count!=null?lr.count:'—')+'</span><span class="subtle">заданий</span></div>'+
     '<div class="subtle" style="font-size:12px">просрочены более чем на '+(lr.thresholdDays||3)+' дня</div></div>';}
   if(hero)html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-bottom:20px">'+hero+'</div>';
+
+  // ----- Мои задания (демо-руководитель): заполняется отдельным запросом -----
+  html+='<div class="card" id="start-mytasks" style="margin-bottom:20px"></div>';
 
   // ----- Что горит -----
   if(ovHas('burning')){var wb=OVR.whatsBurning||[];
@@ -423,7 +427,7 @@ function renderStart(){
   html+='<div class="card" id="start-appeals" style="margin-bottom:20px"></div>';
 
   // ----- Светофор процессов (худшие сверху) -----
-  if(!ovHas('svetofor')){document.getElementById('view-start').innerHTML=html;renderStartAppeals();return;}
+  if(!ovHas('svetofor')){document.getElementById('view-start').innerHTML=html;renderStartAppeals();renderMyTasks();return;}
   html+='<div class="cardhead" style="margin:0 0 6px"><div class="card-h" style="margin:0">Процессы'+hlp('Процессы','svetofor',null)+'</div></div>';
   var sc='16px 1.7fr 0.8fr 0.9fr 1.4fr 0.9fr 2.2fr 18px';
   html+='<div class="card" style="padding:6px 20px">';
@@ -445,6 +449,24 @@ function renderStart(){
   html+='</div>';
   document.getElementById('view-start').innerHTML=html;
   renderStartAppeals();
+  renderMyTasks();
+}
+function renderMyTasks(){
+  var el=document.getElementById('start-mytasks'); if(!el) return;
+  fetch('/api/my/tasks',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    var el=document.getElementById('start-mytasks'); if(!el) return;
+    var top=d.top||[];
+    var head='<div class="cardhead" style="margin-bottom:10px"><div class="card-h" style="margin:0">📋 Мои задания · '+esc(d.user||'')+'</div>'+
+      '<div class="subtle" style="font-size:12px">в работе '+(d.active||0)+' · <span style="color:var(--red)">просрочено '+(d.overdue||0)+'</span></div></div>';
+    if(!top.length){el.innerHTML=head+'<div class="sub">нет активных заданий</div>';return;}
+    el.innerHTML=head+'<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">'+
+      top.map(function(t){var col=t.dueKind==='overdue'?'var(--red)':t.dueKind==='soon'?'var(--amber)':'var(--muted)';
+        return '<a href="'+t.rxLink+'" target="_blank" style="text-decoration:none;color:inherit;display:block;border:1px solid var(--border);border-left:3px solid '+col+';border-radius:var(--radius-sm);padding:12px">'+
+          '<div style="font-weight:600;font-size:14px;line-height:1.3;margin-bottom:6px">'+esc(t.subject)+'</div>'+
+          '<div class="subtle" style="font-size:12px;margin-bottom:6px">'+esc(t.stage)+(t.process?' · '+esc(t.process):'')+'</div>'+
+          '<div style="font-size:12px;font-weight:700;color:'+col+'">'+esc(t.dueLabel)+'</div></a>';
+      }).join('')+'</div>';
+  }).catch(function(){var el=document.getElementById('start-mytasks');if(el)el.innerHTML='';});
 }
 
 /* ---------- ИИ-аналитика (подсистема C) ---------- */
@@ -519,7 +541,7 @@ function renderForecast(){
       '<span style="font-size:13px"><b>'+Math.round(cur)+unit+'</b> <span class="subtle">→ через '+H+' мес</span> '+
       '<b style="color:'+c+'">~'+Math.round(fc)+unit+' '+arr+'</b></span></div>';
   }
-  var rows=row('Пропускная способность (в срок)',curThr,fThr,'%',true)+
+  var rows=row('Соблюдение сроков (в срок)',curThr,fThr,'%',true)+
            row('Просрочка (заданий/мес)',curOvd,fOvd,'',false);
   // история помесячно (для контекста), последние 8 точек
   var hist=months.slice(-8).map(function(m){return {month:m.slice(5),ontime:map[m].ontime,overdue:map[m].overdue};});
@@ -594,16 +616,17 @@ function kpi(label,val,sub,cls){return '<div class="kpi '+cls+'"><div class="kpi
 // [ключ, заголовок, внутренний html, шир.по-умолчанию]
 var PCARDS=[
   ['funnel','Воронка согласования','<div id="c-funnel"></div>',false],
-  ['stages','Время цикла по этапам (P50 / P95)','<div id="c-stages"></div>',false],
+  ['stages','Сколько длится каждый этап (обычно / в худшем случае)','<div id="c-stages"></div>',false],
   ['hist','Длительность маршрута','<div id="c-hist"></div>',false],
   ['trend','Тренд дисциплины','<div id="c-trend"></div><div class="row" style="gap:16px;font-size:12px;margin-top:6px">'+legend('var(--green)','','вовремя')+legend('var(--red)','','просрочено')+'</div>',false],
   ['risk','Прогноз срыва срока','<div id="c-risk"></div>',false],
   ['neg','Топ по просрочкам','<div id="c-neg"></div>',false],
   ['pos','Лучшие исполнители','<div id="c-pos"></div>',false],
-  ['rework','Возвраты на доработку и варианты маршрута','<div id="c-rework"></div>',false],
+  ['eff','Сотрудники с наивысшим КПД','<div id="c-eff"></div>',false],
+  ['rework','Переделки: кто возвращает / кто дольше держит','<div id="c-rework"></div>',false],
   ['formal','Время и качество решения','<div id="c-formal"></div>',false],
   ['backlog','Приток / отток (растёт ли завал)','<div id="c-backlog"></div>',false],
-  ['flow','Поток-эффективность (работа vs ожидание)','<div id="c-flow"></div>',false],
+  ['flow','На что уходит время: работа или ожидание в очереди','<div id="c-flow"></div>',false],
   ['pickup','Скорость реакции (создано → взято в работу)','<div id="c-pickup"></div>',false],
   ['ftr','С первого раза (без возвратов)','<div id="c-ftr"></div>',false],
   ['loops','Петли','<div id="c-loops"></div>',false],
@@ -617,7 +640,7 @@ var PSECTIONS=[
   ['Скорость и качество',  ['stages','hist','pickup','flow','formal']],
   ['Дисциплина и риск',    ['trend','risk','overdue']],
   ['Переделки и возвраты', ['rework','ftr','loops']],
-  ['Люди',                 ['workload','neg','pos']],
+  ['Люди',                 ['workload','neg','pos','eff']],
   ['Срезы',                ['breakdown']]
 ];
 function sectionOf(key){for(var i=0;i<PSECTIONS.length;i++){if(PSECTIONS[i][1].indexOf(key)>=0)return i;}return -1;}
@@ -634,13 +657,40 @@ function pDrop(e,targetKey){e.preventDefault();if(!DRAG_KEY||DRAG_KEY===targetKe
 function pToggleWide(key){var l=loadLayout(CUR);var w=processWide(CUR);var i=w.indexOf(key);if(i>=0)w.splice(i,1);else w.push(key);l.wide=w;saveLayout(CUR,l);renderProcess(CURDATA);}
 function resetLayout(){try{localStorage.removeItem('armgov.layout.'+CUR);}catch(e){}renderProcess(CURDATA);}
 
+/* ---------- блок «Переделки»: 2 режима — кто возвращает / кто дольше держит ---------- */
+var REWORK_MODE='returns';
+function setReworkMode(m){REWORK_MODE=m;renderRework();}
+function fmtHold(h){h=+h||0;return h>=48?(Math.round(h/24*10)/10)+' дн':h>=1?(Math.round(h)+' ч'):(Math.round(h*60)+' мин');}
+function renderRework(){
+  var el=document.getElementById('c-rework'); if(!el||!CURDATA) return; var d=CURDATA;
+  var vrs=d.variants||[],ra=d.returnAuthors||[],hd=d.holders||[];
+  var tabs='<div class="row" style="gap:8px;margin-bottom:12px">'+
+    '<button class="'+(REWORK_MODE==='returns'?'btn':'btn-ghost')+'" style="font-size:12px;padding:5px 10px" onclick="setReworkMode(\'returns\')">Кто возвращает</button>'+
+    '<button class="'+(REWORK_MODE==='holders'?'btn':'btn-ghost')+'" style="font-size:12px;padding:5px 10px" onclick="setReworkMode(\'holders\')">Кто дольше держит</button></div>';
+  var body;
+  if(REWORK_MODE==='holders'){
+    body = hd.length
+      ? '<div class="subtle" style="font-size:12px;margin:2px 0 6px">Медиана «получил задание → завершил» (клик → профиль)</div>'+
+        hd.map(function(x){return '<div class="listrow" onclick="openPerf('+x.id+',\''+esc(x.name).replace(/\x27/g,'')+'\')" style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-top:1px solid var(--border);cursor:pointer"><span>'+esc(x.name)+'</span><span class="muted">'+fmtHold(x.medianHours)+' · '+x.count+' зад.</span></div>';}).join('')
+      : '<div class="sub">недостаточно завершённых заданий для оценки удержания</div>';
+  } else {
+    body = '<div class="row" style="gap:24px;margin-bottom:14px">'+
+      '<div><div class="kpi-value" style="font-size:24px;color:'+((d.returnsTotal||0)>0?'var(--amber)':'var(--text)')+'">'+(d.returnsTotal||0)+'</div><div class="subtle" style="font-size:12px">возвратов на доработку всего</div></div>'+
+      '<div><div class="kpi-value" style="font-size:24px">'+(d.repeatPerformer||0)+'</div><div class="subtle" style="font-size:12px">повторное участие</div></div></div>'+
+      (ra.length?'<div class="subtle" style="font-size:12px;margin:2px 0 6px">«Битва правок» — кто отправляет на доработку (клик → профиль)</div>'+perfRows(ra,'var(--amber)')
+                :'<div class="sub" style="margin:0">В этом процессе нет заданий типа «Доработка» — возвраты идут повторным прохождением этапа (см. блок «Петли»).</div>');
+  }
+  var vblock='<div class="subtle" style="font-size:12px;margin:14px 0 6px">Варианты маршрута (по частоте)</div>'+
+    vrs.map(function(v){return '<div class="row" style="justify-content:space-between;font-size:13px;padding:4px 0;border-top:1px solid var(--border)"><span>'+esc(v.route)+'</span><span class="muted">'+v.count+'</span></div>';}).join('');
+  el.innerHTML=tabs+body+vblock;
+}
 function renderProcess(d){
   var k=d.kpi;
   var html='<div class="row" style="margin-bottom:12px"><button class="btn-ghost" onclick="goStart()">← Обзор</button><span class="h2" style="margin:0">'+esc(d.name)+'</span>'+(d.chronic?'<span class="badge b-red" title="стабильно в красной зоне ≥3 месяцев">⚠ хронический</span>':'')+'<button class="btn" style="margin-left:auto" onclick="aiProcessSummary()">✦ Сводка ИИ</button><button class="btn-ghost" onclick="resetLayout()" title="вернуть блоки в исходный порядок и ширину">↺ сбросить раскладку</button></div>';
   html+='<div class="sub" style="margin:-6px 0 12px">Блоки можно перетаскивать за ⠿ и менять ширину — раскладка сохраняется в этом браузере.</div>';
   html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:16px">'+
-    kpi('Всего',k.total,'','accent-blue')+kpi('В работе',k.inwork,'','accent-blue')+
-    kpi('Просрочено',k.overdue,'заданий','accent-red')+kpi('Средний цикл',k.avgCycleDays+' дн','от старта до завершения','accent-amber')+kpi('95% проходят за',k.p95RouteDays+' дн','дольше — лишь 5% самых тяжёлых','accent-amber')+'</div>';
+    kpi('Всего',k.total,'задач','accent-blue')+kpi('В работе',k.inwork,'задач','accent-blue')+
+    kpi('Просрочено',k.overdue,'заданий (шагов)','accent-red')+kpi('Средний цикл',k.avgCycleDays+' дн','от старта до завершения','accent-amber')+kpi('95% проходят за',k.p95RouteDays+' дн','дольше — лишь 5% самых тяжёлых','accent-amber')+'</div>';
   var order=processOrder(CUR),wide=processWide(CUR),defmap={};PCARDS.forEach(function(c){defmap[c[0]]=c;});
   function cardHtml(key){var c=defmap[key];if(!c)return '';var isW=wide.indexOf(key)>=0;
     return '<div class="card pcard'+(isW?' wide':'')+(prHas(key)?'':' hidden')+'" data-k="'+key+'" ondragover="event.preventDefault()" ondrop="pDrop(event,\''+key+'\')">'+
@@ -664,8 +714,9 @@ function renderProcess(d){
 
   // #5 С первого раза
   (function(){var el=document.getElementById('c-ftr');if(!el)return;var f=d.firstTimeRight||{};var col=(f.pct>=80?'var(--green)':f.pct>=50?'var(--amber)':'var(--red)');
+    var rework=(f.total||0)-(f.clean||0);
     el.innerHTML='<div class="row" style="gap:8px;align-items:baseline"><span style="font-size:34px;font-weight:700;color:'+col+'">'+(f.pct!=null?f.pct:'—')+'%</span><span class="subtle">с первого раза</span></div>'+
-    '<div class="sub" style="margin:8px 0 0"><b>'+(f.clean||0)+'</b> из <b>'+(f.total||0)+'</b> задач прошли без единого возврата на доработку. Остальные потребовали переделки.</div>';})();
+    '<div class="sub" style="margin:8px 0 0"><b>'+(f.clean||0)+'</b> из <b>'+(f.total||0)+'</b> задач прошли без переделок — ни возврата на доработку, ни повторного прохождения этапа. Остальным <b>'+rework+'</b> потребовалась переделка (см. «Петли»).</div>';})();
 
   // #6 Петли и пинг-понг
   (function(){var el=document.getElementById('c-loops');if(!el)return;var lp=d.loops||{},tr=lp.transitions||[];
@@ -704,11 +755,13 @@ function renderProcess(d){
   // #2 Скорость реакции (создано → взято в работу)
   (function(){var el=document.getElementById('c-pickup');if(!el)return;var pk=d.pickup||{};
     if(!pk.sample){el.innerHTML='<div class="sub">нет данных об открытии заданий</div>';return;}
-    function hb(x){return x>=48?(Math.round(x/24*10)/10)+' дн':(x+' ч');}
-    var bs=pk.byStage||[],col=(pk.avgHours>=48?'var(--red)':pk.avgHours>=8?'var(--amber)':'var(--green)');
-    el.innerHTML='<div class="row" style="gap:8px;align-items:baseline"><span style="font-size:30px;font-weight:700;color:'+col+'">'+hb(pk.avgHours)+'</span><span class="subtle">лежит до взятия в работу (в среднем)</span></div>'+
-      '<div class="sub" style="margin:6px 0 10px">медиана '+hb(pk.medianHours)+' · '+pk.sample+' заданий с отметкой открытия.</div>'+
-      '<div class="subtle" style="font-size:12px;margin-bottom:4px">Где задания дольше залёживаются</div>'+
+    // адаптивные единицы: <1мин почти сразу; <1ч минуты; <2дн часы; иначе дни
+    function hb(x){return x<0.017?'почти сразу':x<1?(Math.round(x*60)+' мин'):x<48?(Math.round(x*10)/10+' ч'):(Math.round(x/24*10)/10+' дн');}
+    var bs=pk.byStage||[],med=pk.medianHours||0,col=(med>=48?'var(--red)':med>=8?'var(--amber)':'var(--green)');
+    var fastPct=pk.sample?Math.round(100*(pk.fastCount||0)/pk.sample):0, slow=pk.slowCount||0;
+    el.innerHTML='<div class="row" style="gap:8px;align-items:baseline"><span style="font-size:30px;font-weight:700;color:'+col+'">'+hb(med)+'</span><span class="subtle">типично лежит до взятия в работу (медиана)</span></div>'+
+      '<div class="sub" style="margin:6px 0 10px"><b>'+fastPct+'%</b> заданий берут в работу в течение часа'+(slow>0?', но <b style="color:var(--amber)">'+slow+'</b> пролежали больше суток (до '+hb(pk.p90Hours)+' у 10% самых медленных)':'')+'. n='+pk.sample+'.</div>'+
+      '<div class="subtle" style="font-size:12px;margin-bottom:4px">Где задания дольше залёживаются (среднее по этапу)</div>'+
       bs.map(function(t){return '<div class="row" style="justify-content:space-between;font-size:13px;padding:4px 0;border-top:1px solid var(--border)"><span>'+esc(t.stage)+'</span><span class="muted">'+hb(t.avgHours)+' · '+t.count+'×</span></div>';}).join('');
   })();
 
@@ -723,28 +776,22 @@ function renderProcess(d){
     var fmax=fs.reduce(function(a,s){return Math.max(a,s.total);},1);
     el.innerHTML=fs.map(function(s){
       var w=Math.max(5,Math.round(s.total/fmax*100));
-      var done=s.done||0,ov=s.overdue||0,act=Math.max(0,(s.active||0)-ov),t=s.total||1;
-      var wDone=done/t*100,wAct=act/t*100,wOv=ov/t*100,isRet=/доработ/i.test(s.name);
+      var done=s.done||0,ov=s.overdue||0,act=Math.max(0,(s.active||0)-ov),ab=s.aborted||0,t=s.total||1;
+      var wDone=done/t*100,wAct=act/t*100,wOv=ov/t*100,wAb=ab/t*100,isRet=/доработ/i.test(s.name);
       return '<div style="margin-bottom:12px">'+
         '<div class="row" style="justify-content:space-between;margin-bottom:5px;font-size:13px"><span><b>'+esc(s.name)+'</b>'+(isRet?' <span class="badge b-red" style="font-size:10px;padding:1px 6px">возврат</span>':'')+'</span>'+
-        '<span class="muted" style="font-size:12px">'+s.total+' зад. · <span style="color:var(--green)">✓'+done+'</span> · <span style="color:var(--accent)">в работе '+act+'</span>'+(ov>0?' · <span style="color:var(--red)">просроч. '+ov+'</span>':'')+'</span></div>'+
+        '<span class="muted" style="font-size:12px">'+s.total+' зад. · <span style="color:var(--green)">✓'+done+'</span> · <span style="color:var(--accent)">в работе '+act+'</span>'+(ov>0?' · <span style="color:var(--red)">просроч. '+ov+'</span>':'')+(ab>0?' · <span class="subtle">⊘ прервано '+ab+'</span>':'')+'</span></div>'+
         '<div style="height:16px;background:var(--surface-2);border-radius:8px;overflow:hidden"><div style="display:flex;height:100%;width:'+w+'%;min-width:8px;border-radius:8px;overflow:hidden">'+
           (wDone>0?'<span style="height:100%;flex:'+wDone+';background:var(--green)"></span>':'')+
           (wAct>0?'<span style="height:100%;flex:'+wAct+';background:var(--accent)"></span>':'')+
           (wOv>0?'<span style="height:100%;flex:'+wOv+';background:var(--red)"></span>':'')+
+          (wAb>0?'<span style="height:100%;flex:'+wAb+';background:var(--border)" title="прервано/снято"></span>':'')+
         '</div></div></div>';
-    }).join('')+'<div class="sub" style="margin:10px 0 0">На доработку (возврат) ушло <b style="color:var(--red)">'+(d.returnsTotal||0)+'</b> заданий · зелёное завершено · синее в работе · красное просрочено</div>';
+    }).join('')+'<div class="sub" style="margin:10px 0 0">✓ завершено · синее в работе · красное просрочено · серое прервано/снято. Разбивка сходится к числу заданий этапа.</div>';
   })();
 
-  // B. Возвраты + «битва правок» + избыточность
-  var vrs=d.variants||[],ra=d.returnAuthors||[];
-  document.getElementById('c-rework').innerHTML=
-    '<div class="row" style="gap:24px;margin-bottom:14px">'+
-    '<div><div class="kpi-value" style="font-size:24px;color:'+((d.returnsTotal||0)>0?'var(--amber)':'var(--text)')+'">'+(d.returnsTotal||0)+'</div><div class="subtle" style="font-size:12px">возвратов на доработку всего</div></div>'+
-    '<div><div class="kpi-value" style="font-size:24px">'+(d.repeatPerformer||0)+'</div><div class="subtle" style="font-size:12px">повторное участие</div></div></div>'+
-    (ra.length?'<div class="subtle" style="font-size:12px;margin:2px 0 6px">«Битва правок» — кто отправляет на доработку (клик → профиль)</div>'+perfRows(ra,'var(--amber)'):'')+
-    '<div class="subtle" style="font-size:12px;margin:14px 0 6px">Варианты маршрута (по частоте)</div>'+
-    vrs.map(function(v){return '<div class="row" style="justify-content:space-between;font-size:13px;padding:4px 0;border-top:1px solid var(--border)"><span>'+esc(v.route)+'</span><span class="muted">'+v.count+'</span></div>';}).join('');
+  // B. Возвраты / удержание — переключатель режимов + варианты маршрута
+  renderRework();
 
   // D. Время и качество решения
   var fm=d.formal||{},dc=d.decision||{};
@@ -769,9 +816,11 @@ function renderProcess(d){
   function fmtDur(x){x=+x||0;if(x<=0)return '0';if(x>=1)return (Math.round(x*10)/10)+' дн';var h=x*24;if(h>=1)return (Math.round(h*10)/10)+' ч';return Math.max(1,Math.round(h*60))+' мин';}
   var maxP=Math.max.apply(null,d.stages.map(function(s){return s.p95||0;}).concat([1e-9]));
   function pbw(v){return v>0?Math.max(2,Math.round(v/maxP*100)):0;}   // ширина бара, мин. 2% для ненулевых
-  document.getElementById('c-stages').innerHTML=d.stages.map(function(s){
+  document.getElementById('c-stages').innerHTML=
+    '<div class="row" style="gap:16px;font-size:12px;margin-bottom:10px">'+legend('var(--accent)','','обычно (половина заданий — быстрее)')+legend('var(--blue-soft)','','дольше всего (95% укладываются)')+'</div>'+
+    d.stages.map(function(s){
     var w50=pbw(s.p50||0),w95=pbw(s.p95||0);
-    return '<div style="margin-bottom:14px"><div class="row" style="justify-content:space-between;font-size:13px;margin-bottom:5px"><span><b>'+esc(s.name)+'</b> <span class="subtle">'+s.total+' зад.</span></span><span class="muted">P50 '+fmtDur(s.p50)+' · P95 '+fmtDur(s.p95)+'</span></div>'+
+    return '<div style="margin-bottom:14px"><div class="row" style="justify-content:space-between;font-size:13px;margin-bottom:5px"><span><b>'+esc(s.name)+'</b> <span class="subtle">'+s.total+' зад.</span></span><span class="muted">обычно '+fmtDur(s.p50)+' · дольше всего '+fmtDur(s.p95)+'</span></div>'+
       '<div class="bar-track" style="position:relative;height:12px"><div style="position:absolute;left:0;top:0;bottom:0;width:'+w95+'%;background:var(--blue-soft)"></div><div style="position:absolute;left:0;top:0;bottom:0;width:'+w50+'%;background:var(--accent)"></div></div>'+
       '<div style="font-size:12px;margin-top:4px" class="'+(s.overdue>0?'':'muted')+'">'+(s.overdue>0?'<span class="muted">в работе '+s.active+'</span> · <span style="color:var(--red)">просрочено '+s.overdue+'</span>':'в работе '+s.active)+'</div></div>';
   }).join('');
@@ -779,19 +828,30 @@ function renderProcess(d){
   document.getElementById('c-hist').innerHTML='<div class="subtle" style="font-size:12px;margin-bottom:2px">ось X — длительность маршрута, дней · ось Y — число поручений</div>'+svgBars(d.routeHist.map(function(b){return {label:b.bucket.replace(' дн',''),value:b.count};}),190);
   document.getElementById('c-trend').innerHTML=svgStack(d.trend,190);
 
-  // risk forecast — по близости срока активных заданий
-  var rk=d.risk,inwork=rk.normal+rk.atRisk+rk.critical+rk.overdue||0,t=inwork||1;
+  // risk forecast — по близости срока активных ЗАДАНИЙ (assignment). Задачи (task) в работе — d.kpi.inwork.
+  var rk=d.risk,asgActive=rk.normal+rk.atRisk+rk.critical+rk.overdue||0,t=asgActive||1,tasksInwork=(d.kpi&&d.kpi.inwork)||0;
   function seg(v,col,ttl){return v>0?'<div title="'+ttl+': '+v+'" style="width:'+(v/t*100)+'%;background:'+col+'"></div>':'';}
   document.getElementById('c-risk').innerHTML=
-    '<div class="subtle" style="font-size:12px;margin-bottom:8px">Активные задания, сгруппированные по тому, сколько осталось до срока</div>'+
+    '<div class="subtle" style="font-size:12px;margin-bottom:8px">Открытые задания (текущие шаги), сгруппированные по тому, сколько осталось до срока</div>'+
     '<div style="display:flex;height:30px;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px;border:1px solid var(--border)">'+
     seg(rk.overdue,'var(--red)','срок прошёл')+seg(rk.critical,'#b3471f','до срока ≤3 дн')+seg(rk.atRisk,'var(--amber)','до срока ≤7 дн')+seg(rk.normal,'var(--green)','запас >7 дн')+'</div>'+
     '<div class="row" style="gap:16px;font-size:13px;margin-bottom:12px">'+
     legend('var(--red)',rk.overdue,'уже просрочено')+legend('#b3471f',rk.critical,'критично (≤3 дн)')+legend('var(--amber)',rk.atRisk,'под риском (≤7 дн)')+legend('var(--green)',rk.normal,'в норме (>7 дн)')+'</div>'+
-    '<div class="sub" style="margin:0">Из <b>'+inwork+'</b> активных заданий <b style="color:var(--red)">'+rk.overdue+'</b> уже просрочено, ещё <b style="color:var(--amber)">'+(rk.atRisk+rk.critical)+'</b> сорвут срок в ближайшую неделю, если не вмешаться.</div>';
+    '<div class="sub" style="margin:0">Открыто <b>'+asgActive+'</b> заданий по <b>'+tasksInwork+'</b> задачам в работе. Из заданий <b style="color:var(--red)">'+rk.overdue+'</b> уже просрочено, ещё <b style="color:var(--amber)">'+(rk.atRisk+rk.critical)+'</b> сорвут срок в ближайшую неделю, если не вмешаться.</div>';
 
   document.getElementById('c-neg').innerHTML=perfRows(d.topNeg,'var(--red)');
   document.getElementById('c-pos').innerHTML=perfRows(d.topPos,'var(--green)');
+  var effEl=document.getElementById('c-eff');if(effEl)effEl.innerHTML=effRows(d.topEff);
+}
+function effRows(arr){
+  if(!arr||!arr.length)return '<div class="sub">нет сотрудников с достаточным объёмом (от 10 оценённых заданий)</div>';
+  return '<div class="subtle" style="font-size:12px;margin-bottom:8px">Доля в срок из «оценённых» (в срок + сорвано) — эффективность, а не объём. Клик → профиль.</div>'+
+    arr.map(function(x){var col=x.kpd>=80?'var(--green)':x.kpd>=50?'var(--amber)':'var(--red)';
+    return '<div class="listrow" onclick="openPerf('+(x.id||0)+',\''+esc(x.name).replace(/\x27/g,"")+'\')">'+
+      '<div class="row" style="justify-content:space-between;margin-bottom:5px"><span style="font-size:14px">'+esc(x.name)+'</span><span style="font-size:14px;font-weight:700;color:'+col+'">'+x.kpd+'%</span></div>'+
+      '<div class="bar-track"><div style="height:100%;width:'+x.kpd+'%;background:'+col+'"></div></div>'+
+      '<div class="subtle" style="font-size:11px;margin-top:3px">в срок '+x.ontime+' из '+x.rated+' · сорвано '+x.breached+'</div></div>';
+  }).join('');
 }
 function perfRows(arr,col){
   if(!arr||!arr.length)return '<div class="sub">нет данных</div>';

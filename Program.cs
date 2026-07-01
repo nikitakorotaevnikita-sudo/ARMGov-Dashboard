@@ -58,15 +58,15 @@ class Program
     public class Thresholds { public int ThroughputRed { get; set; } = 50; public int ThroughputAmber { get; set; } = 75; public int LongRunnerDays { get; set; } = 3; }
     public class Profile { public string Name { get; set; } = ""; public List<string> Overview { get; set; } = new(); public List<string> Process { get; set; } = new(); }
     // Ключи блоков: overview = throughput|bottleneck|longrunners|burning|svetofor
-    // process = funnel|stages|hist|trend|risk|neg|pos|rework|formal|workload|overdue|backlog|ftr|loops|breakdown
+    // process = funnel|stages|hist|trend|risk|neg|pos|eff|rework|formal|workload|overdue|backlog|ftr|loops|breakdown
     static List<Profile> DefaultProfiles() => new()
     {
         new Profile{ Name="Руководитель", Overview=new(){"throughput","bottleneck","longrunners","burning","svetofor"},
-            Process=new(){"funnel","backlog","flow","pickup","ftr","risk","neg","workload","overdue","trend","breakdown"} },
+            Process=new(){"funnel","backlog","flow","pickup","ftr","risk","neg","eff","workload","overdue","trend","breakdown"} },
         new Profile{ Name="Контроль исполнения", Overview=new(){"longrunners","bottleneck","burning","svetofor"},
-            Process=new(){"overdue","neg","rework","loops","pickup","ftr","flow","backlog","risk","workload","funnel","breakdown"} },
+            Process=new(){"overdue","neg","eff","rework","loops","pickup","ftr","flow","backlog","risk","workload","funnel","breakdown"} },
         new Profile{ Name="Аналитик", Overview=new(){"throughput","bottleneck","longrunners","burning","svetofor"},
-            Process=new(){"funnel","stages","hist","trend","backlog","flow","pickup","ftr","loops","risk","neg","pos","rework","formal","workload","overdue","breakdown"} },
+            Process=new(){"funnel","stages","hist","trend","backlog","flow","pickup","ftr","loops","risk","neg","pos","eff","rework","formal","workload","overdue","breakdown"} },
     };
     static string CfgPath => Path.Combine(AppContext.BaseDirectory, "config.json");
     static readonly JsonSerializerOptions JsonCfg = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
@@ -108,6 +108,14 @@ class Program
         new Proc{ Key="npa", Name="НПА (регламентирующие)", Where="(t.subject ilike '%НПА%' or t.subject ilike '%регламент%' or t.subject ilike '%правов%акт%' or t.subject ilike '%нормативн%')" },
     };
     static Proc P(string key) => Procs.FirstOrDefault(p => p.Key == key);
+
+    // Демо-персона «руководитель» для блока «Мои задания» (в прототипе нет авторизации).
+    // Учётка boss = «Босов Александр», recipient id 53.
+    const long DemoUserId = 53;
+    const string DemoUserName = "Босов Александр";
+    static string ProcNameByDisc(string disc) =>
+        disc == "c290b098-12c7-487d-bb38-73e2c98f9789" ? "Поручения" :
+        disc == "4ef03457-8b42-4239-a3c5-d4d05e61f0b6" ? "Обращения граждан" : "";
 
     // Этап = тип задания (a.discriminator). Локализованных имён в БД нет (только .NET-типы
     // в sungero_system_entitytype), поэтому русские названия заданы вручную по типу задания.
@@ -174,6 +182,7 @@ class Program
             case "/api/refresh": Cache.Clear(); J(ctx, new { ok = true }); return;
             case "/api/processes": JCached(ctx, ck, () => BuildProcesses()); return;
             case "/api/overview": JCached(ctx, ck, () => BuildOverview(q["period"])); return;
+            case "/api/my/tasks": JCached(ctx, ck, () => BuildMyTasks()); return;
             case "/api/process": JCached(ctx, ck, () => BuildProcess(q["key"], q["period"])); return;
             case "/api/process/stuck": JCached(ctx, ck, () => BuildStuck(q["key"], q["period"])); return;
             case "/api/process/workload": JCached(ctx, ck, () => BuildWorkload(q["key"], q["period"])); return;
@@ -448,6 +457,42 @@ class Program
     }
 
     // ---------- /api/process ----------
+    // Блок «Мои задания» демо-руководителя: сводка + топ-3 (просроченные, затем ближайший срок).
+    static object BuildMyTasks()
+    {
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        long active = 0, overdue = 0;
+        using (var cmd = new NpgsqlCommand(
+            "select count(*) filter (where a.status::text='InProcess') act, " +
+            "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline<now()) ovd " +
+            $"from sungero_wf_assignment a where a.performer={DemoUserId} and a.discriminator not in ({NoticeList})", c))
+        using (var r = cmd.ExecuteReader()) if (r.Read()) { active = r.GetInt64(0); overdue = r.GetInt64(1); }
+
+        var top = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "select a.id, coalesce(nullif(a.subject::text,''),'(без темы)') subj, a.discriminator::text disc, a.deadline, a.task, t.discriminator::text tdisc " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            $"where a.performer={DemoUserId} and a.discriminator not in ({NoticeList}) and a.status::text='InProcess' " +
+            "order by case when a.deadline is not null and a.deadline<now() then 0 when a.deadline is not null then 1 else 2 end, a.deadline asc limit 3", c))
+        using (var r = cmd.ExecuteReader())
+        {
+            var now = DateTime.Now;
+            while (r.Read())
+            {
+                long aid = r.GetInt64(0); string subj = r.GetString(1);
+                string disc = r.IsDBNull(2) ? null : r.GetString(2);
+                DateTime? dl = r.IsDBNull(3) ? (DateTime?)null : r.GetDateTime(3);
+                long taskId = r.GetInt64(4); string tdisc = r.IsDBNull(5) ? null : r.GetString(5);
+                bool ov = dl.HasValue && dl.Value < now;
+                string dueKind, dueLabel;
+                if (!dl.HasValue) { dueKind = "none"; dueLabel = "без срока"; }
+                else { int days = (int)Math.Round(Math.Abs((dl.Value - now).TotalDays)); dueKind = ov ? "overdue" : "soon"; dueLabel = ov ? ("просрочено на " + days + " дн") : ("срок через " + days + " дн"); }
+                top.Add(new { id = aid, subject = subj, stage = StageName(disc, 0), process = ProcNameByDisc(tdisc), deadline = dl?.ToString("yyyy-MM-dd"), overdue = ov, dueKind, dueLabel, rxLink = RxTaskLink(taskId, tdisc) });
+            }
+        }
+        return new { user = DemoUserName, active, overdue, top };
+    }
+
     static object BuildProcess(string key, string period = null)
     {
         var p0 = P(key); if (p0 == null) return new { error = "unknown process" };
@@ -477,16 +522,18 @@ class Program
             int i = 0;
             while (r.Read())
             {
+                int _act = (int)r.GetInt64(3), _done = (int)r.GetInt64(5), _tot = (int)r.GetInt64(6);
                 stages.Add(new
                 {
                     disc = r.IsDBNull(0) ? null : r.GetString(0),
                     name = StageName(r.IsDBNull(0) ? null : r.GetString(0), i++),
                     p50 = r.IsDBNull(1) ? 0.0 : Math.Round(r.GetDouble(1), 4),  // в днях, точнее — для адаптивного формата (ч/мин) на клиенте
                     p95 = r.IsDBNull(2) ? 0.0 : Math.Round(r.GetDouble(2), 4),
-                    active = (int)r.GetInt64(3),
+                    active = _act,
                     overdue = (int)r.GetInt64(4),
-                    done = (int)r.GetInt64(5),
-                    total = (int)r.GetInt64(6)
+                    done = _done,
+                    total = _tot,
+                    aborted = Math.Max(0, _tot - _done - _act)  // прервано/снято: чтобы разбивка воронки сходилась к total
                 });
             }
         }
@@ -496,27 +543,22 @@ class Program
 
         // Deadline-risk: активные задания по близости срока (интуитивно для руководителя):
         //   просрочено = срок прошёл; критично = срок ≤3 дн; под риском = срок ≤7 дн; в норме = дальше/без срока.
+        // Считаем в SQL с now() — теми же границами, что и просрочка в KPI (иначе rOver и overdueAsg расходятся на 1 у границы).
         int rNorm = 0, rRisk = 0, rCrit = 0, rOver = 0;
         using (var cmd = new NpgsqlCommand(
-            "select a.deadline " +
+            "select " +
+            "count(*) filter (where a.deadline is not null and a.deadline < now()) over_, " +
+            "count(*) filter (where a.deadline is not null and a.deadline >= now() and a.deadline < now()+interval '3 days') crit, " +
+            "count(*) filter (where a.deadline is not null and a.deadline >= now()+interval '3 days' and a.deadline < now()+interval '7 days') risk, " +
+            "count(*) filter (where a.deadline is null or a.deadline >= now()+interval '7 days') norm " +
             $"{AsgJoin(p)} and a.status::text='InProcess'", c))
         using (var r = cmd.ExecuteReader())
-        {
-            var now = DateTime.Now;
-            while (r.Read())
-            {
-                if (r.IsDBNull(0)) { rNorm++; continue; }
-                double days = (r.GetDateTime(0) - now).TotalDays;
-                if (days < 0) rOver++;
-                else if (days <= 3) rCrit++;
-                else if (days <= 7) rRisk++;
-                else rNorm++;
-            }
-        }
+            if (r.Read()) { rOver = (int)r.GetInt64(0); rCrit = (int)r.GetInt64(1); rRisk = (int)r.GetInt64(2); rNorm = (int)r.GetInt64(3); }
 
         // Топы исполнителей: негативные (просрочка) и позитивные (вовремя завершено)
         var topNeg = TopPerformers(c, p, true);
         var topPos = TopPerformers(c, p, false);
+        var topEff = TopEfficiency(c, p);
 
         // ----- A. Хронические отклонения: индекс состояния по месяцам + флаг хронического -----
         var trend = Trend(c, p);
@@ -593,8 +635,12 @@ class Program
             $"where {p.Where}{NoticeNotIn} and a.status::text='Completed' and a.completed is not null and mr.first_read<=a.completed) z", c))
         using (var r = cmd.ExecuteReader()) if (r.Read()) { openDecMedian = Math.Round(r.GetDouble(0), 1); openDecN = r.GetInt64(1); instant = r.GetInt64(2); }
 
-        // #5 С первого раза (first-time-right): задачи без единого возврата на Доработку
-        long ftrClean = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where} and not exists (select 1 from sungero_wf_assignment a where a.task=t.id and a.discriminator='{DorabotkaDisc}')");
+        // #5 С первого раза (first-time-right) = задача прошла БЕЗ переделок: ни возврата на Доработку,
+        // ни повторного прохождения этапа. Единое определение «возврата» с блоком «Петли» —
+        // так FTR% и loop% не конфликтуют: непрошедшие с первого раза = петли (+ явная доработка, если тип есть).
+        long ftrClean = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where} " +
+            $"and not exists (select 1 from sungero_wf_assignment a where a.task=t.id and a.discriminator='{DorabotkaDisc}') " +
+            $"and not exists (select 1 from sungero_wf_assignment a where a.task=t.id and a.discriminator not in ({NoticeList}) group by a.discriminator having count(*)>1)");
         int ftrPct = total > 0 ? (int)Math.Round(100.0 * ftrClean / total) : 100;
 
         // #6 Петли/пинг-понг: задачи с повторным прохождением этапа + топ переходов между этапами
@@ -649,26 +695,38 @@ class Program
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
             "join (select entityid, min(historydate) first_read from sungero_wf_workflowhistory where operation='MarkRead' group by entityid) mr on mr.entityid=a.id " +
             $"where {p.Where}{NoticeNotIn} and mr.first_read >= a.created) ";
-        long pkN = 0; double pkAvgH = 0, pkMedH = 0;
-        using (var cmd = new NpgsqlCommand(pkCte + "select count(*) n, coalesce(avg(ph),0) a, coalesce(percentile_cont(0.5) within group (order by ph),0) m from pk", c))
+        // Медиана робастна (среднее задрано выбросами в годы). Добавляем p90 и доли «быстрых»/«хвоста».
+        long pkN = 0, pkFast = 0, pkSlow = 0; double pkAvgH = 0, pkMedH = 0, pkP90 = 0;
+        using (var cmd = new NpgsqlCommand(pkCte + "select count(*) n, coalesce(avg(ph),0) a, coalesce(percentile_cont(0.5) within group (order by ph),0) m, coalesce(percentile_cont(0.9) within group (order by ph),0) p90, count(*) filter (where ph<1) fast, count(*) filter (where ph>=24) slow from pk", c))
         using (var r = cmd.ExecuteReader())
-            if (r.Read()) { pkN = r.GetInt64(0); pkAvgH = Math.Round(r.GetDouble(1), 1); pkMedH = Math.Round(r.GetDouble(2), 1); }
+            if (r.Read()) { pkN = r.GetInt64(0); pkAvgH = Math.Round(r.GetDouble(1), 1); pkMedH = Math.Round(r.GetDouble(2), 2); pkP90 = Math.Round(r.GetDouble(3), 1); pkFast = r.GetInt64(4); pkSlow = r.GetInt64(5); }
         var pkByStage = new List<object>();
         using (var cmd = new NpgsqlCommand(pkCte + "select d, count(*) c, coalesce(avg(ph),0) ag from pk group by d order by ag desc limit 6", c))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
                 pkByStage.Add(new { stage = StageName(r.IsDBNull(0) ? null : r.GetString(0), 0), count = (int)r.GetInt64(1), avgHours = Math.Round(r.GetDouble(2), 1) });
 
+        // Фильтр «Переделки»: кто дольше держит документ — медиана «получил задание → завершил» по исполнителю.
+        var holders = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "select a.performer, coalesce(r.name::text,'(неизвестно)') nm, count(*) n, " +
+            "percentile_cont(0.5) within group (order by extract(epoch from (a.completed-a.created))/3600.0) med " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer " +
+            $"where {p.Where}{NoticeNotIn} and a.status::text='Completed' and a.completed is not null and a.performer is not null " +
+            "group by a.performer, r.name having count(*)>=3 order by med desc limit 8", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) holders.Add(new { id = r.GetInt64(0), name = r.GetString(1), count = (int)r.GetInt64(2), medianHours = Math.Round(r.GetDouble(3), 1) });
+
         return new
         {
             key = p.Key, name = p.Name, chronic,
             kpi = new { total, inwork, completed, overdue = overdueAsg, avgCycleDays = Math.Round(avgCycle, 1), p95RouteDays = Math.Round(p95Route, 1) },
-            stages = stages.Select(s => new { s.name, s.p50, s.p95, s.active, s.overdue, s.done, s.total }).ToList(),
+            stages = stages.Select(s => new { s.name, s.p50, s.p95, s.active, s.overdue, s.done, s.total, s.aborted }).ToList(),
             routeHist = hist,
             trend, healthTrend,
             risk = new { normal = rNorm, atRisk = rRisk, critical = rCrit, overdue = rOver },
             rework = new { tasksTotal = total, tasksRework = rwTasks, pct = reworkPct },
-            variants, repeatPerformer = repeatPerf,
+            variants, repeatPerformer = repeatPerf, holders,
             formal = new { completedTotal = fTotal, formalCount = fFormal, formalPct, avgDecisionHours = Math.Round(fAvgH, 1) },
             returnsTotal, returnAuthors,
             decision = new { medianHours = Math.Round(decMedian, 1), openToDecideMedianMin = openDecMedian, sample = openDecN, instantCount = instant, instantThresholdMin = 5 },
@@ -676,8 +734,8 @@ class Program
             loops = new { loopTasks, loopPct, transitions },
             backlog,
             flow = new { sample = flowN, waitAvgHours = flowWaitAvgH, workAvgHours = flowWorkAvgH, effPct = flowEffPct },
-            pickup = new { sample = pkN, avgHours = pkAvgH, medianHours = pkMedH, byStage = pkByStage },
-            topNeg, topPos
+            pickup = new { sample = pkN, avgHours = pkAvgH, medianHours = pkMedH, p90Hours = pkP90, fastCount = pkFast, slowCount = pkSlow, byStage = pkByStage },
+            topNeg, topPos, topEff
         };
     }
 
@@ -717,6 +775,37 @@ class Program
             " order by val desc limit 5", c);
         using var r = cmd.ExecuteReader();
         while (r.Read()) list.Add(new { id = r.IsDBNull(0) ? 0 : r.GetInt64(0), name = r.GetString(1), value = (int)r.GetInt64(2) });
+        return list;
+    }
+
+    // Сотрудники с наивысшим КПД: доля заданий, закрытых в срок, из «оценённых»
+    // (в срок + сорвано). Отделяет эффективность от объёма — в отличие от топов «в срок»/«просрочка»,
+    // где лидируют одни и те же загруженные люди. Порог по объёму — чтобы 3/3=100% не всплывали.
+    static List<object> TopEfficiency(NpgsqlConnection c, Proc p)
+    {
+        var list = new List<object>();
+        const int minRated = 10;   // минимум «оценённых» заданий, чтобы КПД был осмысленным
+        using var cmd = new NpgsqlCommand(
+            "select a.performer, coalesce(r.name,'(не назначен)'), " +
+            "count(*) filter (where a.status::text='Completed' and a.completed is not null and a.deadline is not null and a.completed<=a.deadline) ontime, " +
+            "count(*) filter (where (a.status::text='Completed' and a.completed is not null and a.deadline is not null and a.completed>a.deadline) " +
+            "or (a.status::text='InProcess' and a.deadline is not null and a.deadline<now())) breached " +
+            "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
+            $"left join sungero_core_recipient r on r.id=a.performer where {p.Where}{NoticeNotIn} and a.performer is not null " +
+            "group by a.performer, r.name " +
+            $"having (count(*) filter (where a.status::text='Completed' and a.completed is not null and a.deadline is not null and a.completed<=a.deadline) " +
+            "+ count(*) filter (where (a.status::text='Completed' and a.completed is not null and a.deadline is not null and a.completed>a.deadline) " +
+            $"or (a.status::text='InProcess' and a.deadline is not null and a.deadline<now()))) >= {minRated} " +
+            "order by (count(*) filter (where a.status::text='Completed' and a.completed is not null and a.deadline is not null and a.completed<=a.deadline))::float " +
+            "/ nullif((count(*) filter (where a.status::text='Completed' and a.completed is not null and a.deadline is not null and a.completed<=a.deadline) " +
+            "+ count(*) filter (where (a.status::text='Completed' and a.completed is not null and a.deadline is not null and a.completed>a.deadline) " +
+            "or (a.status::text='InProcess' and a.deadline is not null and a.deadline<now()))),0) desc, ontime desc limit 5", c);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            int ontime = (int)r.GetInt64(2), breached = (int)r.GetInt64(3), rated = ontime + breached;
+            list.Add(new { id = r.IsDBNull(0) ? 0 : r.GetInt64(0), name = r.GetString(1), ontime, breached, rated, kpd = rated > 0 ? (int)Math.Round(100.0 * ontime / rated) : 0 });
+        }
         return list;
     }
 

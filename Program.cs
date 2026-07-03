@@ -191,6 +191,7 @@ class Program
             case "/api/process/kind-tasks": JCached(ctx, ck, () => BuildKindTasks(q["key"], q["kind"], q["period"])); return;
             case "/api/process/by-kind": JCached(ctx, ck, () => BuildByKind(q["key"], q["period"])); return;
             case "/api/appeals/topics": JCached(ctx, ck, () => BuildAppealTopics()); return;
+            case "/api/appeals/systemic": J(ctx, BuildAppealSystemic(q["force"] == "1")); return;
             case "/api/export":
             {
                 var (fn, csv) = BuildExport(q["what"], q["key"], q["period"]);
@@ -1313,6 +1314,81 @@ class Program
         return doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
     }
     static string Trunc(string s, int n) => s != null && s.Length > n ? s.Substring(0, n) + "…" : s;
+
+    // ИИ-разбор системных проблем по топ-3 темам обращений.
+    // Источник текста — тема документа-обращения (sungero_content_edoc.name): «Обращение от {ФИО} "{суть}"».
+    // Полное тело письма во вложении (бинарь) — недоступно; берём суть (до ~250–300 симв), этого хватает на выводы.
+    static readonly Dictionary<string, (object data, DateTime at)> _sysCache = new();
+    static object BuildAppealSystemic(bool force)
+    {
+        if (!force && _sysCache.TryGetValue("appeals", out var cc) && (DateTime.Now - cc.at).TotalMinutes < 30) return cc.data;
+        using var c = new NpgsqlConnection(Cs); c.Open();
+
+        // Фильтр «настоящее письмо гражданина»: тема начинается с «Обращение…», содержит суть (длина ≥80),
+        // и это не служебная пересылка/тест. Отсекаем маршрутные записи, которые классифицированы как обращения.
+        const string realAppeal =
+            " and e.name::text ilike 'Обращение%'" +
+            " and e.name::text not ilike '%аправление на рассмотрение%'" +
+            " and e.name::text not ilike '%еренаправл%'" +
+            " and e.name::text not ilike '%Тест%'" +
+            " and length(e.name::text)>=80";
+
+        // топ-3 темы по числу РЕАЛЬНЫХ обращений граждан (служебные пересылки/тесты исключены фильтром realAppeal).
+        // Осознанно отличается от «Топ вопросов» на странице (там все записи классификатора) — в UI даём оговорку.
+        var topics = new List<(long id, string name, int n)>();
+        using (var cmd = new NpgsqlCommand(
+            "select cb.id, coalesce(nullif(cb.displayname::text,''),cb.name::text) nm, count(*) n " +
+            "from gd_citizen_reqquestions rq join gd_citizen_classifierbase cb on cb.id=rq.question " +
+            "join sungero_content_edoc e on e.id=rq.edoc " +
+            "where rq.question is not null" + realAppeal + " " +
+            "group by cb.id, cb.displayname, cb.name order by n desc limit 3", c))
+        using (var r = cmd.ExecuteReader())
+            while (r.Read()) topics.Add((r.GetInt64(0), r.GetString(1), (int)r.GetInt64(2)));
+
+        var sb = new StringBuilder();
+        var topicMeta = new List<object>();
+        foreach (var (id, name, n) in topics)
+        {
+            var texts = new List<string>();
+            using (var cmd = new NpgsqlCommand(
+                "select e.name::text t from gd_citizen_reqquestions rq join sungero_content_edoc e on e.id=rq.edoc " +
+                "where rq.question=@id and e.name is not null" + realAppeal + " " +
+                "order by length(e.name::text) desc limit 40", c))
+            {
+                cmd.Parameters.AddWithValue("id", id);
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) texts.Add(Trunc(r.GetString(0), 300).Replace("\r", " ").Replace("\n", " "));
+            }
+            topicMeta.Add(new { name, n, used = texts.Count });
+            sb.Append("\n\n=== ТЕМА: ").Append(name).Append(" (обращений по теме: ").Append(n)
+              .Append(", текстов в выборке: ").Append(texts.Count).Append(") ===\n");
+            for (int i = 0; i < texts.Count; i++) sb.Append(i + 1).Append(". ").Append(texts[i]).Append('\n');
+        }
+        if (topicMeta.Count == 0) return new { error = "нет данных по обращениям" };
+
+        string sysPrompt =
+            "Ты — старший аналитик аппарата руководителя региона. Тебе даны реальные тексты обращений граждан, " +
+            "сгруппированные по 3 самым частым темам. Для КАЖДОЙ темы: прочитай тексты, выяви СИСТЕМНЫЕ проблемы " +
+            "(повторяющиеся у многих заявителей, а не единичные случаи) и сделай практический вывод для первого лица. " +
+            "Формат строго: для каждой темы — строка-заголовок вида '1. <название темы>' (нумеруй 1, 2, 3), " +
+            "далее маркированные пункты '- <системная проблема, опираясь на тексты>', " +
+            "и в конце темы отдельная строка '- Вывод: <что предпринять руководителю>'. " +
+            "Только по существу, с опорой на тексты, без воды и без выдумок. " +
+            "Если по теме обращения разрозненные и системности не видно — прямо напиши это. По-русски.";
+        var messages = new object[]
+        {
+            new { role = "system", content = sysPrompt },
+            new { role = "user", content = "Тексты обращений по темам:" + sb.ToString() }
+        };
+        try
+        {
+            var text = LlmChat(messages, 1800, 0.3);
+            var data = new { text, topics = topicMeta, generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm"), model = LlmModel };
+            _sysCache["appeals"] = (data, DateTime.Now);
+            return data;
+        }
+        catch (Exception ex) { return new { error = ex.Message }; }
+    }
 
     // Машиночитаемый агрегат всех метрик — общий контекст для сводки и чата.
     // Компактный срез тематик обращений для контекста LLM (без всех 334 вопросов):

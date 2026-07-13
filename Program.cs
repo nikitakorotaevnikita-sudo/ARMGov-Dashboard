@@ -491,8 +491,7 @@ class Program
                 all.Add(new { id = aid, subject = subj, stage = StageName(disc, 0), process = ProcNameByDisc(tdisc), deadline = dl?.ToString("yyyy-MM-dd"), overdue = ov, dueKind, dueLabel, rxLink = RxTaskLink(taskId, tdisc) });
             }
         }
-        var top = all.Count > 3 ? all.GetRange(0, 3) : all;
-        return new { user = DemoUserName, active, overdue, all, top };
+        return new { user = DemoUserName, active, overdue, all };
     }
 
     static object BuildProcess(string key, string period = null)

@@ -188,6 +188,18 @@ a{color:var(--accent)}
   </div>
 </div>
 
+<div id="mycontrolModal" class="overlay hidden" onclick="if(event.target===this)closeMyControl()">
+  <div class="modalbox" style="max-width:720px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div style="font-size:18px;font-weight:700">📌 Задания на личный контроль</div>
+      <button class="btn-ghost" onclick="closeMyControl()">✕</button>
+    </div>
+    <div class="subtle" style="font-size:12px;margin-top:4px">Отметьте задания, которые всегда держать на дашборде. Закреплённые показываются сверху блока «Мои задания».</div>
+    <div id="mycontrol-hint" class="subtle" style="font-size:12px"></div>
+    <div id="mycontrol-list" style="max-height:64vh;overflow:auto;margin-top:14px"></div>
+  </div>
+</div>
+
 <button id="aiChatBtn" class="btn" onclick="toggleChat()" style="position:fixed;right:24px;bottom:24px;z-index:50;border-radius:24px;padding:12px 18px;box-shadow:var(--shadow-hover);font-size:14px">💬 Спросить ИИ</button>
 <div id="chatPanel" style="position:fixed;right:0;top:0;bottom:0;width:min(460px,96vw);background:var(--surface);box-shadow:var(--shadow-hover);z-index:75;display:none;flex-direction:column">
   <div class="row" style="justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border)"><div style="font-weight:700">🧠 ИИ-ассистент по процессам</div><button class="btn-ghost" onclick="toggleChat()">✕</button></div>
@@ -458,22 +470,34 @@ function renderStart(){
   renderStartAppeals();
   renderMyTasks();
 }
-function renderMyTasks(){
+function renderMyTasks(d){
+  if(!d){fetch('/api/my/tasks',{cache:'no-store'}).then(function(r){return r.json();}).then(function(x){MYTASKS=x;renderMyTasks(x);}).catch(function(){var el=document.getElementById('start-mytasks');if(el)el.innerHTML='';});return;}
+  MYTASKS=d;
   var el=document.getElementById('start-mytasks'); if(!el) return;
-  fetch('/api/my/tasks',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
-    var el=document.getElementById('start-mytasks'); if(!el) return;
-    var top=d.top||[];
-    var head='<div class="cardhead" style="margin-bottom:10px"><div class="card-h" style="margin:0">📋 Мои задания · '+esc(d.user||'')+'</div>'+
-      '<div class="subtle" style="font-size:12px">в работе '+(d.active||0)+' · <span style="color:var(--red)">просрочено '+(d.overdue||0)+'</span></div></div>';
-    if(!top.length){el.innerHTML=head+'<div class="sub">нет активных заданий</div>';return;}
-    el.innerHTML=head+'<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">'+
-      top.map(function(t){var col=t.dueKind==='overdue'?'var(--red)':t.dueKind==='soon'?'var(--amber)':'var(--muted)';
-        return '<a href="'+t.rxLink+'" target="_blank" style="text-decoration:none;color:inherit;display:block;border:1px solid var(--border);border-left:3px solid '+col+';border-radius:var(--radius-sm);padding:12px">'+
-          '<div style="font-weight:600;font-size:14px;line-height:1.3;margin-bottom:6px">'+esc(t.subject)+'</div>'+
-          '<div class="subtle" style="font-size:12px;margin-bottom:6px">'+esc(t.stage)+(t.process?' · '+esc(t.process):'')+'</div>'+
-          '<div style="font-size:12px;font-weight:700;color:'+col+'">'+esc(t.dueLabel)+'</div></a>';
-      }).join('')+'</div>';
-  }).catch(function(){var el=document.getElementById('start-mytasks');if(el)el.innerHTML='';});
+  var all=d.all||[];
+  var pins=loadPins();
+  // самозаживление: убрать из пинов id, которых больше нет в all
+  var alive={};all.forEach(function(t){alive[t.id]=t;});
+  var cleaned=pins.filter(function(id){return alive[id];});
+  if(cleaned.length!==pins.length)savePins(cleaned);
+  // закреплённые в порядке пина (кап 5)
+  var pinned=cleaned.map(function(id){return alive[id];}).slice(0,5);
+  var pinnedSet={};pinned.forEach(function(t){pinnedSet[t.id]=1;});
+  // авто-добор по срочности (all уже отсортирован сервером), пока total<3 и не более 5 всего
+  var show=pinned.slice();
+  for(var i=0;i<all.length && show.length<Math.max(3,pinned.length) && show.length<5;i++){if(!pinnedSet[all[i].id])show.push(all[i]);}
+  var head='<div class="cardhead" style="margin-bottom:10px"><div class="card-h" style="margin:0">📋 Мои задания · '+esc(d.user||'')+'</div>'+
+    '<div class="row" style="gap:12px;align-items:center"><div class="subtle" style="font-size:12px">в работе '+(d.active||0)+' · <span style="color:var(--red)">просрочено '+(d.overdue||0)+'</span></div>'+
+    '<button class="btn-ghost" onclick="openMyControl()">⚙ Настроить контроль</button></div></div>';
+  if(!show.length){el.innerHTML=head+'<div class="sub">нет активных заданий</div>';return;}
+  el.innerHTML=head+'<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">'+
+    show.map(function(t){var col=t.dueKind==='overdue'?'var(--red)':t.dueKind==='soon'?'var(--amber)':'var(--muted)';
+      var pin=pinnedSet[t.id]?'<span title="на личном контроле" style="float:right">📌</span>':'';
+      return '<a href="'+t.rxLink+'" target="_blank" style="text-decoration:none;color:inherit;display:block;border:1px solid var(--border);border-left:3px solid '+col+';border-radius:var(--radius-sm);padding:12px">'+
+        '<div style="font-weight:600;font-size:14px;line-height:1.3;margin-bottom:6px">'+pin+esc(t.subject)+'</div>'+
+        '<div class="subtle" style="font-size:12px;margin-bottom:6px">'+esc(t.stage)+(t.process?' · '+esc(t.process):'')+'</div>'+
+        '<div style="font-size:12px;font-weight:700;color:'+col+'">'+esc(t.dueLabel)+'</div></a>';
+    }).join('')+'</div>';
 }
 
 /* ---------- ИИ-аналитика (подсистема C) ---------- */
@@ -492,6 +516,24 @@ function openAi(){
   if(!AISUM) loadAiSummary(false);   // сводка грузится только при открытии модалки
 }
 function closeAi(){document.getElementById('aiModal').classList.add('hidden');}
+function openMyControl(){document.getElementById('mycontrolModal').classList.remove('hidden');renderMyControlModal();}
+function closeMyControl(){document.getElementById('mycontrolModal').classList.add('hidden');}
+function renderMyControlModal(){
+  var el=document.getElementById('mycontrol-list');if(!el)return;
+  var all=(MYTASKS&&MYTASKS.all)||[];
+  var active=(MYTASKS&&MYTASKS.active)||0;
+  var hintEl=document.getElementById('mycontrol-hint');
+  if(hintEl)hintEl.innerHTML=(all.length<active)?('показано '+all.length+' из '+active+' активных'):'';
+  var pins=loadPins();var pinnedSet={};pins.forEach(function(id){pinnedSet[id]=1;});
+  if(!all.length){el.innerHTML='<div class="sub">нет активных заданий</div>';return;}
+  el.innerHTML=all.map(function(t){var col=t.dueKind==='overdue'?'var(--red)':t.dueKind==='soon'?'var(--amber)':'var(--muted)';
+    var on=pinnedSet[t.id];
+    return '<div class="listrow" style="display:flex;gap:12px;align-items:center;padding:10px 2px;border-bottom:1px solid var(--border)">'+
+      '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px;line-height:1.3">'+esc(t.subject)+'</div>'+
+      '<div class="subtle" style="font-size:12px">'+esc(t.stage)+(t.process?' · '+esc(t.process):'')+' · <span style="color:'+col+'">'+esc(t.dueLabel)+'</span></div></div>'+
+      '<button class="'+(on?'btn':'btn-ghost')+'" style="flex-shrink:0" onclick="togglePin('+t.id+')">'+(on?'📌 на контроле':'📌 закрепить')+'</button></div>';
+  }).join('');
+}
 function renderAi(){
   var el=document.getElementById('ai-body');if(!el)return;
   var b;
@@ -654,6 +696,13 @@ function sectionOf(key){for(var i=0;i<PSECTIONS.length;i++){if(PSECTIONS[i][1].i
 function pcDefaultWide(){return PCARDS.filter(function(c){return c[3];}).map(function(c){return c[0];});}
 function loadLayout(key){try{return JSON.parse(localStorage.getItem('armgov.layout.'+key))||{};}catch(e){return {};}}
 function saveLayout(key,l){try{localStorage.setItem('armgov.layout.'+key,JSON.stringify(l));}catch(e){}}
+
+var MYTASKS=null; // кэш последнего ответа /api/my/tasks (для модалки и перерисовки)
+function pinKey(){return 'armgov.mycontrol.demo';}
+function loadPins(){try{var a=JSON.parse(localStorage.getItem(pinKey()));return Array.isArray(a)?a:[];}catch(e){return [];}}
+function savePins(a){try{localStorage.setItem(pinKey(),JSON.stringify(a));}catch(e){}}
+function togglePin(id){var p=loadPins();var i=p.indexOf(id);if(i>=0)p.splice(i,1);else p.push(id);savePins(p);
+  renderMyTasks(MYTASKS); if(!document.getElementById('mycontrolModal').classList.contains('hidden'))renderMyControlModal();}
 function processOrder(key){var def=PCARDS.map(function(c){return c[0];});var l=loadLayout(key);var ord=(l.order&&l.order.length)?l.order.slice():def.slice();def.forEach(function(k){if(ord.indexOf(k)<0)ord.push(k);});return ord.filter(function(k){return def.indexOf(k)>=0;});}
 function processWide(key){var l=loadLayout(key);return l.wide?l.wide.slice():pcDefaultWide();}
 var DRAG_KEY=null;

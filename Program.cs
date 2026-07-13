@@ -469,12 +469,12 @@ class Program
             $"from sungero_wf_assignment a where a.performer={DemoUserId} and a.discriminator not in ({NoticeList})", c))
         using (var r = cmd.ExecuteReader()) if (r.Read()) { active = r.GetInt64(0); overdue = r.GetInt64(1); }
 
-        var top = new List<object>();
+        var all = new List<object>();
         using (var cmd = new NpgsqlCommand(
             "select a.id, coalesce(nullif(a.subject::text,''),'(без темы)') subj, a.discriminator::text disc, a.deadline, a.task, t.discriminator::text tdisc " +
             "from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task " +
             $"where a.performer={DemoUserId} and a.discriminator not in ({NoticeList}) and a.status::text='InProcess' " +
-            "order by case when a.deadline is not null and a.deadline<now() then 0 when a.deadline is not null then 1 else 2 end, a.deadline asc limit 3", c))
+            "order by case when a.deadline is not null and a.deadline<now() then 0 when a.deadline is not null then 1 else 2 end, a.deadline asc limit 50", c))
         using (var r = cmd.ExecuteReader())
         {
             var now = DateTime.Now;
@@ -488,10 +488,11 @@ class Program
                 string dueKind, dueLabel;
                 if (!dl.HasValue) { dueKind = "none"; dueLabel = "без срока"; }
                 else { int days = (int)Math.Round(Math.Abs((dl.Value - now).TotalDays)); dueKind = ov ? "overdue" : "soon"; dueLabel = ov ? ("просрочено на " + days + " дн") : ("срок через " + days + " дн"); }
-                top.Add(new { id = aid, subject = subj, stage = StageName(disc, 0), process = ProcNameByDisc(tdisc), deadline = dl?.ToString("yyyy-MM-dd"), overdue = ov, dueKind, dueLabel, rxLink = RxTaskLink(taskId, tdisc) });
+                all.Add(new { id = aid, subject = subj, stage = StageName(disc, 0), process = ProcNameByDisc(tdisc), deadline = dl?.ToString("yyyy-MM-dd"), overdue = ov, dueKind, dueLabel, rxLink = RxTaskLink(taskId, tdisc) });
             }
         }
-        return new { user = DemoUserName, active, overdue, top };
+        var top = all.Count > 3 ? all.GetRange(0, 3) : all;
+        return new { user = DemoUserName, active, overdue, all, top };
     }
 
     static object BuildProcess(string key, string period = null)

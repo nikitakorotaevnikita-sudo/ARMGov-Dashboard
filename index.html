@@ -239,6 +239,17 @@ a{color:var(--accent)}
   </div>
 </div>
 
+<div id="leaderTasksModal" class="overlay hidden" onclick="if(event.target===this)closeLeaderTasks()">
+  <div class="modalbox" style="max-width:760px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><div id="ltTitle" style="font-size:18px;font-weight:700">Поручения</div>
+      <div class="subtle" style="font-size:12px;margin-top:4px">Отметьте 📌 поручения, которые взять на личный контроль — они появятся в блоке «Мои задания».</div></div>
+      <button class="btn-ghost" onclick="closeLeaderTasks()">✕</button>
+    </div>
+    <div id="ltList" style="max-height:64vh;overflow:auto;margin-top:14px"></div>
+  </div>
+</div>
+
 <button id="aiChatBtn" class="btn" onclick="toggleChat()" style="position:fixed;right:24px;bottom:24px;z-index:50;border-radius:24px;padding:12px 18px;box-shadow:var(--shadow-hover);font-size:14px">💬 Спросить ИИ</button>
 <div id="chatPanel" style="position:fixed;right:0;top:0;bottom:0;width:min(460px,96vw);background:var(--surface);box-shadow:var(--shadow-hover);z-index:75;display:none;flex-direction:column">
   <div class="row" style="justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border)"><div style="font-weight:700">🧠 ИИ-ассистент по процессам</div><button class="btn-ghost" onclick="toggleChat()">✕</button></div>
@@ -493,12 +504,12 @@ function renderMyTasks(d){
   var el=document.getElementById('start-mytasks'); if(!el) return;
   var all=d.all||[];
   var pins=loadPins();
-  // самозаживление: убрать из пинов id, которых больше нет в all
+  var snap=loadSnap();
   var alive={};all.forEach(function(t){alive[t.id]=t;});
-  var cleaned=pins.filter(function(id){return alive[id];});
+  // живой пин = есть в инбоксе (all) ИЛИ есть снимок (чужое поручение)
+  var cleaned=pins.filter(function(id){return alive[id]||snap[id];});
   if(cleaned.length!==pins.length)savePins(cleaned);
-  // закреплённые в порядке пина (кап 5)
-  var pinned=cleaned.map(function(id){return alive[id];}).slice(0,5);
+  var pinned=cleaned.map(function(id){return alive[id]||snap[id];}).slice(0,5);
   var pinnedSet={};pinned.forEach(function(t){pinnedSet[t.id]=1;});
   // авто-добор по срочности (all уже отсортирован сервером), пока total<3 и не более 5 всего
   var show=pinned.slice();
@@ -512,7 +523,7 @@ function renderMyTasks(d){
       var pin=pinnedSet[t.id]?'<span title="на личном контроле" style="float:right">📌</span>':'';
       return '<a href="'+t.rxLink+'" target="_blank" style="text-decoration:none;color:inherit;display:block;border:1px solid var(--border);border-left:3px solid '+col+';border-radius:var(--radius-sm);padding:12px">'+
         '<div style="font-weight:600;font-size:14px;line-height:1.3;margin-bottom:6px">'+pin+esc(t.subject)+'</div>'+
-        '<div class="subtle" style="font-size:12px;margin-bottom:6px">'+esc(t.stage)+(t.process?' · '+esc(t.process):'')+'</div>'+
+        '<div class="subtle" style="font-size:12px;margin-bottom:6px">'+esc(t.stage)+(t.process?' · '+esc(t.process):'')+(snap[t.id]&&!alive[t.id]&&t.performer?' · '+esc(t.performer):'')+'</div>'+
         '<div style="font-size:12px;font-weight:700;color:'+col+'">'+esc(t.dueLabel)+'</div></a>';
     }).join('')+'</div>';
 }
@@ -539,7 +550,7 @@ function leaderCard(x,by){
   var av;
   if(by==='dept'){ av='<div class="ld-av">🏛️</div>'; }
   else { var ph=LEADER_PHOTOS[Math.abs(x.id)%LEADER_PHOTOS.length]; av='<div class="ld-av" style="padding:0;overflow:hidden"><img src="'+ph+'" alt="" style="width:100%;height:100%;object-fit:cover"></div>'; }
-  return '<div class="ld-card '+(x.risk?'risk':'ok')+'">'+
+  return '<div class="ld-card '+(x.risk?'risk':'ok')+'" style="cursor:pointer" onclick="openLeaderTasks(\''+by+'\','+x.id+',\''+esc(String(x.name)).replace(/\x27/g,"&#39;")+'\')">'+
     '<div class="ld-h">'+av+'<div class="ld-nm">'+esc(x.name)+'</div></div>'+
     procRows+
     '<div class="ld-foot">'+(x.risk?'<span class="ld-pill risk">⚠ Под риском</span>':'<span class="ld-pill ok">✓ в норме</span>')+
@@ -594,6 +605,28 @@ function openAi(){
 function closeAi(){document.getElementById('aiModal').classList.add('hidden');}
 function openMyControl(){document.getElementById('mycontrolModal').classList.remove('hidden');renderMyControlModal();}
 function closeMyControl(){document.getElementById('mycontrolModal').classList.add('hidden');}
+var LTDATA=null;
+function openLeaderTasks(by,id,name){
+  document.getElementById('leaderTasksModal').classList.remove('hidden');
+  document.getElementById('ltTitle').textContent='Поручения · '+name;
+  document.getElementById('ltList').innerHTML='<div class="sub">загрузка…</div>';
+  fetch('/api/leader/tasks?by='+by+'&id='+id,{cache:'no-store'}).then(function(r){return r.json();})
+    .then(function(d){LTDATA=d;renderLeaderTasks();})
+    .catch(function(){document.getElementById('ltList').innerHTML='<div class="sub">не удалось загрузить</div>';});
+}
+function closeLeaderTasks(){document.getElementById('leaderTasksModal').classList.add('hidden');}
+function renderLeaderTasks(){
+  var el=document.getElementById('ltList'); if(!el||!LTDATA) return;
+  var items=LTDATA.items||[]; var pins=loadPins(); var pset={};pins.forEach(function(id){pset[id]=1;});
+  if(!items.length){el.innerHTML='<div class="sub">нет активных поручений</div>';return;}
+  el.innerHTML=items.map(function(t){var on=pset[t.id];
+    var col=t.dueKind==='overdue'?'var(--red)':t.dueKind==='soon'?'var(--amber)':'var(--muted)';
+    return '<div class="listrow" style="display:flex;gap:12px;align-items:center;padding:10px 2px;border-bottom:1px solid var(--border)">'+
+      '<div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--navy);font-size:13.5px;line-height:1.3">'+esc(t.subject)+'</div>'+
+      '<div class="subtle" style="font-size:12px">'+esc(t.stage)+(t.process?' · '+esc(t.process):'')+' · <span style="color:'+col+'">'+esc(t.dueLabel)+'</span></div></div>'+
+      '<button class="'+(on?'btn':'btn-ghost')+'" onclick=\'togglePinObj('+JSON.stringify(t).replace(/\x27/g,"&#39;")+')\'>'+(on?'📌 на контроле':'📌 закрепить')+'</button></div>';
+  }).join('');
+}
 function renderMyControlModal(){
   var el=document.getElementById('mycontrol-list');if(!el)return;
   var all=(MYTASKS&&MYTASKS.all)||[];
@@ -801,6 +834,18 @@ function loadPins(){try{var a=JSON.parse(localStorage.getItem(pinKey()));return 
 function savePins(a){try{localStorage.setItem(pinKey(),JSON.stringify(a));}catch(e){}}
 function togglePin(id){var p=loadPins();var i=p.indexOf(id);if(i>=0)p.splice(i,1);else p.push(id);savePins(p);
   renderMyTasks(MYTASKS); if(!document.getElementById('mycontrolModal').classList.contains('hidden'))renderMyControlModal();}
+function snapKey(){return 'armgov.mycontrol.snap';}
+function loadSnap(){try{return JSON.parse(localStorage.getItem(snapKey()))||{};}catch(e){return {};}}
+function saveSnap(m){try{localStorage.setItem(snapKey(),JSON.stringify(m));}catch(e){}}
+// пин из drill-модалки: храним снимок (поручение может быть не в моём инбоксе)
+function togglePinObj(t){
+  var p=loadPins(); var snap=loadSnap(); var i=p.indexOf(t.id);
+  if(i>=0){p.splice(i,1);delete snap[t.id];}
+  else{p.push(t.id);snap[t.id]={id:t.id,subject:t.subject,stage:t.stage,process:t.process,deadline:t.deadline,dueKind:t.dueKind,dueLabel:t.dueLabel,rxLink:t.rxLink,performer:t.performer};}
+  savePins(p);saveSnap(snap);
+  renderMyTasks(MYTASKS);
+  if(!document.getElementById('leaderTasksModal').classList.contains('hidden'))renderLeaderTasks();
+}
 function processOrder(key){var def=PCARDS.map(function(c){return c[0];});var l=loadLayout(key);var ord=(l.order&&l.order.length)?l.order.slice():def.slice();def.forEach(function(k){if(ord.indexOf(k)<0)ord.push(k);});return ord.filter(function(k){return def.indexOf(k)>=0;});}
 function processWide(key){var l=loadLayout(key);return l.wide?l.wide.slice():pcDefaultWide();}
 var DRAG_KEY=null;

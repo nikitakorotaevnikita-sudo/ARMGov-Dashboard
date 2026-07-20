@@ -832,7 +832,7 @@ var MYTASKS=null; // кэш последнего ответа /api/my/tasks (д�
 function pinKey(){return 'armgov.mycontrol.demo';}
 function loadPins(){try{var a=JSON.parse(localStorage.getItem(pinKey()));return Array.isArray(a)?a:[];}catch(e){return [];}}
 function savePins(a){try{localStorage.setItem(pinKey(),JSON.stringify(a));}catch(e){}}
-function togglePin(id){var p=loadPins();var i=p.indexOf(id);if(i>=0)p.splice(i,1);else p.push(id);savePins(p);
+function togglePin(id){var p=loadPins();var i=p.indexOf(id);if(i>=0){p.splice(i,1);var s=loadSnap();if(s[id]){delete s[id];saveSnap(s);}}else p.push(id);savePins(p);
   renderMyTasks(MYTASKS); if(!document.getElementById('mycontrolModal').classList.contains('hidden'))renderMyControlModal();}
 function snapKey(){return 'armgov.mycontrol.snap';}
 function loadSnap(){try{return JSON.parse(localStorage.getItem(snapKey()))||{};}catch(e){return {};}}

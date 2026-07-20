@@ -525,7 +525,7 @@ class Program
             "select a.id, coalesce(nullif(a.subject::text,''),'(без темы)') subj, a.discriminator::text disc, a.deadline, a.task, " +
             "t.discriminator::text tdisc, coalesce(r.name,'(не назначен)') perf " +
             $"from sungero_wf_assignment a {joins} " +
-            $"where {procUnion}{NoticeNotIn} and {filter} and a.status::text='InProcess' " +
+            $"where {procUnion}{NoticeNotIn} and {filter} and a.status::text='InProcess' and a.performer is not null " +
             "order by case when a.deadline is not null and a.deadline<now() then 0 when a.deadline is not null then 1 else 2 end, a.deadline asc limit 50", c))
         {
             cmd.Parameters.AddWithValue("id", gid);

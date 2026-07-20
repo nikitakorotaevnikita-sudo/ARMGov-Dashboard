@@ -223,6 +223,22 @@ a{color:var(--accent)}
   </div>
 </div>
 
+<div id="leadCompModal" class="overlay hidden" onclick="if(event.target===this)closeLeadComp()">
+  <div class="modalbox" style="max-width:720px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><div style="font-size:18px;font-weight:700">⚙ Настроить состав дашборда</div>
+      <div class="subtle" style="font-size:12px;margin-top:4px">Выберите подчинённых и подразделения, контроль над которыми держите на дашборде.</div></div>
+      <button class="btn-ghost" onclick="closeLeadComp()">✕</button>
+    </div>
+    <div style="max-height:64vh;overflow:auto;margin-top:14px">
+      <div class="subtle" style="font-weight:700;text-transform:uppercase;font-size:11px;margin:6px 0 4px">Подчинённые</div>
+      <div id="leadCompP"></div>
+      <div class="subtle" style="font-weight:700;text-transform:uppercase;font-size:11px;margin:16px 0 4px">Подразделения</div>
+      <div id="leadCompD"></div>
+    </div>
+  </div>
+</div>
+
 <button id="aiChatBtn" class="btn" onclick="toggleChat()" style="position:fixed;right:24px;bottom:24px;z-index:50;border-radius:24px;padding:12px 18px;box-shadow:var(--shadow-hover);font-size:14px">💬 Спросить ИИ</button>
 <div id="chatPanel" style="position:fixed;right:0;top:0;bottom:0;width:min(460px,96vw);background:var(--surface);box-shadow:var(--shadow-hover);z-index:75;display:none;flex-direction:column">
   <div class="row" style="justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border)"><div style="font-weight:700">🧠 ИИ-ассистент по процессам</div><button class="btn-ghost" onclick="toggleChat()">✕</button></div>
@@ -612,6 +628,28 @@ function renderMyControlModal(){
       '<div class="subtle" style="font-size:12px">'+esc(t.stage)+(t.process?' · '+esc(t.process):'')+' · <span style="color:'+col+'">'+esc(t.dueLabel)+'</span></div></div>'+
       '<button class="'+(on?'btn':'btn-ghost')+'" style="flex-shrink:0" onclick="togglePin('+t.id+')">'+(on?'📌 на контроле':'📌 закрепить')+'</button></div>';
   }).join('');
+}
+function openLeadComp(){document.getElementById('leadCompModal').classList.remove('hidden');renderLeadComp();}
+function closeLeadComp(){document.getElementById('leadCompModal').classList.add('hidden');}
+function toggleLead(by,id){
+  var items=LEADERS[by]||[];
+  var sel=ldLoadSel(by); if(sel===null){sel=ldSelected(by,items).map(function(x){return x.id;});}
+  var i=sel.indexOf(id); if(i>=0)sel.splice(i,1); else sel.push(id);
+  ldSaveSel(by,sel); renderLeaders(); renderLeadComp();
+}
+function renderLeadComp(){
+  function list(by,elId){
+    var items=LEADERS[by]||[];
+    var selIds={};ldSelected(by,items).forEach(function(x){selIds[x.id]=1;});
+    document.getElementById(elId).innerHTML=items.map(function(x){
+      var on=selIds[x.id];
+      return '<div class="listrow" style="display:flex;gap:12px;align-items:center;padding:9px 2px;border-bottom:1px solid var(--border)">'+
+        '<div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--navy);font-size:13.5px">'+esc(x.name)+'</div>'+
+        '<div class="subtle" style="font-size:12px">в работе '+x.inwork+' · <span style="color:var(--red)">просрочено '+x.overdue+'</span></div></div>'+
+        '<button class="'+(on?'btn':'btn-ghost')+'" onclick="toggleLead(\''+by+'\','+x.id+')">'+(on?'✓ на контроле':'добавить')+'</button></div>';
+    }).join('')||'<div class="sub">нет данных</div>';
+  }
+  list('performer','leadCompP'); list('dept','leadCompD');
 }
 function renderAi(){
   var el=document.getElementById('ai-body');if(!el)return;

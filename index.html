@@ -88,6 +88,29 @@ a{color:var(--accent)}
   .card{break-inside:avoid;box-shadow:none;border-color:#ccc}
   body{font-size:12px}
 }
+.ld-strip{display:flex;gap:22px;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 18px;margin-bottom:14px}
+.ld-ag{display:flex;flex-direction:column;gap:2px}
+.ld-ag .l{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+.ld-ag .v{font-size:20px;font-weight:800;color:var(--navy)} .ld-ag .v.r{color:var(--red)} .ld-ag .v.a{color:var(--amber)}
+.ld-tabs{display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--border)}
+.ld-tab{padding:9px 15px;font-weight:700;font-size:13.5px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.ld-tab.on{color:var(--navy);border-bottom-color:var(--accent)}
+.ld-tab .b{margin-left:7px;background:var(--surface-2);color:var(--muted);border-radius:999px;padding:1px 8px;font-size:11.5px}
+.ld-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.ld-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-sm);padding:15px 16px;cursor:pointer}
+.ld-card.risk{border-top:3px solid var(--red)} .ld-card.ok{border-top:3px solid var(--green)}
+.ld-h{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+.ld-av{width:46px;height:46px;border-radius:11px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--navy);font-size:16px;flex:none}
+.ld-nm{font-weight:800;color:var(--navy);font-size:14.5px;line-height:1.2}
+.ld-row{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:6px 0;border-top:1px dashed var(--border)}
+.ld-row .l{font-size:12.5px;color:var(--text)} .ld-row .c{font-weight:800;color:var(--navy);font-size:14px;min-width:40px;text-align:right}
+.ld-row .o{font-size:11.5px;font-weight:800;min-width:70px;text-align:right}
+.ld-row .o.r{color:var(--red)} .ld-row .o.g{color:var(--green)}
+.ld-foot{margin-top:11px;display:flex;justify-content:space-between;align-items:center}
+.ld-pill{font-size:11.5px;font-weight:800;padding:4px 10px;border-radius:999px}
+.ld-pill.risk{background:#FBE9E9;color:var(--red)} .ld-pill.ok{background:#E6F4EA;color:var(--green)}
+.ld-exp{font-size:12px;color:var(--amber);font-weight:700}
+@media (max-width:1150px){.ld-grid{grid-template-columns:repeat(2,1fr)}}
 </style></head>
 <body data-theme="state-1">
 <header class="app-header">
@@ -499,6 +522,62 @@ function renderMyTasks(d){
         '<div style="font-size:12px;font-weight:700;color:'+col+'">'+esc(t.dueLabel)+'</div></a>';
     }).join('')+'</div>';
 }
+
+/* ---------- Лид-блок «Исполнение по подчинённым/подразделениям» ---------- */
+var LEADERS={performer:null,dept:null}, curLeadTab=0;
+function ldKey(by){return 'armgov.leaders.'+by;}
+function ldLoadSel(by){try{var a=JSON.parse(localStorage.getItem(ldKey(by)));return Array.isArray(a)?a:null;}catch(e){return null;}}
+function ldSaveSel(by,a){try{localStorage.setItem(ldKey(by),JSON.stringify(a));}catch(e){}}
+function ldInitials(nm){var p=String(nm||'').replace(/["]/g,'').trim().split(/\s+/);return ((p[0]||'?')[0]||'')+((p[1]||'')[0]||'');}
+function ldSelected(by,items){
+  var sel=ldLoadSel(by);
+  if(sel===null){ // дефолт: подразделения — все; подчинённые — топ-8 по просрочке
+    return by==='dept'?items:items.slice(0,8);
+  }
+  var s={};sel.forEach(function(id){s[id]=1;});return items.filter(function(x){return s[x.id];});
+}
+function leaderCard(x,by){
+  var procRows=x.processes.map(function(p){
+    var ov=p.overdue>0?'<span class="o r">'+p.overdue+' просроч.</span>':'<span class="o g">в норме</span>';
+    return '<div class="ld-row"><span class="l">'+esc(p.name)+'</span><span class="c">'+p.inwork+'</span>'+ov+'</div>';
+  }).join('');
+  var av=by==='dept'?'🏛️':esc(ldInitials(x.name));
+  return '<div class="ld-card '+(x.risk?'risk':'ok')+'">'+
+    '<div class="ld-h"><div class="ld-av">'+av+'</div><div class="ld-nm">'+esc(x.name)+'</div></div>'+
+    procRows+
+    '<div class="ld-foot">'+(x.risk?'<span class="ld-pill risk">⚠ Под риском</span>':'<span class="ld-pill ok">✓ в норме</span>')+
+    '<span class="ld-exp">истекает 7 дн: '+x.exp7+'</span></div></div>';
+}
+function renderLeaders(){
+  var el=document.getElementById('start-leaders'); if(!el) return;
+  function draw(){
+    var by=curLeadTab===0?'performer':'dept';
+    var items=LEADERS[by]||[];
+    var shown=ldSelected(by,items);
+    var totIn=0,totOv=0,totExp=0,risk=0,appeals=0,poru=0;
+    items.forEach(function(x){totIn+=x.inwork;totOv+=x.overdue;totExp+=x.exp7;if(x.risk)risk++;
+      x.processes.forEach(function(p){if(p.key==='appeals')appeals+=p.inwork;if(p.key==='poruchenia')poru+=p.inwork;});});
+    var strip='<div class="ld-strip">'+
+      '<div class="ld-ag"><span class="l">Поручений в работе</span><span class="v">'+poru+'</span></div>'+
+      '<div class="ld-ag"><span class="l">Под риском</span><span class="v a">'+risk+'</span></div>'+
+      '<div class="ld-ag"><span class="l">Просрочено</span><span class="v r">'+totOv+'</span></div>'+
+      '<div class="ld-ag"><span class="l">Истекает 7 дней</span><span class="v a">'+totExp+'</span></div>'+
+      '<div class="ld-ag"><span class="l">Обращений в работе</span><span class="v">'+appeals+'</span></div></div>';
+    var head='<div class="cardhead" style="margin-bottom:10px"><div class="card-h" style="margin:0">Исполнение по подчинённым</div>'+
+      '<button class="btn-ghost" onclick="openLeadComp()">⚙ Настроить состав</button></div>';
+    var tabs='<div class="ld-tabs"><div class="ld-tab '+(curLeadTab===0?'on':'')+'" onclick="ldTab(0)">Подчинённые <span class="b">'+(ldSelected("performer",LEADERS.performer||[]).length)+'</span></div>'+
+      '<div class="ld-tab '+(curLeadTab===1?'on':'')+'" onclick="ldTab(1)">Подразделения <span class="b">'+(ldSelected("dept",LEADERS.dept||[]).length)+'</span></div></div>';
+    var grid=shown.length?('<div class="ld-grid">'+shown.map(function(x){return leaderCard(x,by);}).join('')+'</div>')
+      :'<div class="sub" style="padding:16px">Ничего не выбрано — нажмите «⚙ Настроить состав».</div>';
+    el.innerHTML=head+strip+tabs+grid;
+  }
+  if(LEADERS.performer&&LEADERS.dept){draw();return;}
+  Promise.all([fetch('/api/leaders?by=performer').then(function(r){return r.json();}),
+               fetch('/api/leaders?by=dept').then(function(r){return r.json();})])
+    .then(function(res){LEADERS.performer=res[0].items||[];LEADERS.dept=res[1].items||[];draw();})
+    .catch(function(){el.innerHTML='';});
+}
+function ldTab(i){curLeadTab=i;renderLeaders();}
 
 /* ---------- ИИ-аналитика (подсистема C) ---------- */
 function mdLite(t){

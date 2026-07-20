@@ -507,11 +507,18 @@ class Program
             ? "coalesce(r.department_company_sungero,0)=@id"
             : "a.performer=@id";
         using var c = new NpgsqlConnection(Cs); c.Open();
-        string name = "";
-        using (var nc = new NpgsqlCommand(dept
-            ? "select coalesce(d.name::text,'(без подразделения)') from sungero_core_recipient d where d.id=@id"
-            : "select coalesce(name,'(не назначен)') from sungero_core_recipient where id=@id", c))
-        { nc.Parameters.AddWithValue("id", gid); var o = nc.ExecuteScalar(); name = o == null || o is DBNull ? "" : o.ToString(); }
+        string name;
+        if (gid == 0)
+        {
+            name = dept ? "(без подразделения)" : "(не назначен)";
+        }
+        else
+        {
+            using (var nc = new NpgsqlCommand(dept
+                ? "select coalesce(d.name::text,'(без подразделения)') from sungero_core_recipient d where d.id=@id"
+                : "select coalesce(name,'(не назначен)') from sungero_core_recipient where id=@id", c))
+            { nc.Parameters.AddWithValue("id", gid); var o = nc.ExecuteScalar(); name = o == null || o is DBNull ? "" : o.ToString(); }
+        }
 
         var items = new List<object>();
         using (var cmd = new NpgsqlCommand(

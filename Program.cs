@@ -184,6 +184,7 @@ class Program
             case "/api/overview": JCached(ctx, ck, () => BuildOverview(q["period"])); return;
             case "/api/my/tasks": JCached(ctx, ck, () => BuildMyTasks()); return;
             case "/api/leaders": JCached(ctx, ck, () => BuildLeaders(q["by"])); return;
+            case "/api/leader/tasks": JCached(ctx, ck, () => BuildLeaderTasks(q["by"], q["id"])); return;
             case "/api/process": JCached(ctx, ck, () => BuildProcess(q["key"], q["period"])); return;
             case "/api/process/stuck": JCached(ctx, ck, () => BuildStuck(q["key"], q["period"])); return;
             case "/api/process/workload": JCached(ctx, ck, () => BuildWorkload(q["key"], q["period"])); return;
@@ -493,6 +494,51 @@ class Program
             }
         }
         return new { user = DemoUserName, active, overdue, all };
+    }
+
+    // ---------- /api/leader/tasks (поручения подчинённого/подразделения для drill-модалки) ----------
+    static object BuildLeaderTasks(string by, string idStr)
+    {
+        bool dept = by == "dept";
+        if (!long.TryParse(idStr, out long gid)) return new { name = "", items = new List<object>() };
+        string procUnion = "(" + string.Join(" or ", Procs.Select(p => p.Where)) + ")";
+        string joins = "join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer";
+        string filter = dept
+            ? "coalesce(r.department_company_sungero,0)=@id"
+            : "a.performer=@id";
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        string name = "";
+        using (var nc = new NpgsqlCommand(dept
+            ? "select coalesce(d.name::text,'(без подразделения)') from sungero_core_recipient d where d.id=@id"
+            : "select coalesce(name,'(не назначен)') from sungero_core_recipient where id=@id", c))
+        { nc.Parameters.AddWithValue("id", gid); var o = nc.ExecuteScalar(); name = o == null || o is DBNull ? "" : o.ToString(); }
+
+        var items = new List<object>();
+        using (var cmd = new NpgsqlCommand(
+            "select a.id, coalesce(nullif(a.subject::text,''),'(без темы)') subj, a.discriminator::text disc, a.deadline, a.task, " +
+            "t.discriminator::text tdisc, coalesce(r.name,'(не назначен)') perf " +
+            $"from sungero_wf_assignment a {joins} " +
+            $"where {procUnion}{NoticeNotIn} and {filter} and a.status::text='InProcess' " +
+            "order by case when a.deadline is not null and a.deadline<now() then 0 when a.deadline is not null then 1 else 2 end, a.deadline asc limit 50", c))
+        {
+            cmd.Parameters.AddWithValue("id", gid);
+            using var r = cmd.ExecuteReader();
+            var now = DateTime.Now;
+            while (r.Read())
+            {
+                long aid = r.GetInt64(0); string subj = r.GetString(1);
+                string disc = r.IsDBNull(2) ? null : r.GetString(2);
+                DateTime? dl = r.IsDBNull(3) ? (DateTime?)null : r.GetDateTime(3);
+                long taskId = r.GetInt64(4); string tdisc = r.IsDBNull(5) ? null : r.GetString(5);
+                string perf = r.GetString(6);
+                bool ov = dl.HasValue && dl.Value < now;
+                string dueKind, dueLabel;
+                if (!dl.HasValue) { dueKind = "none"; dueLabel = "без срока"; }
+                else { int days = (int)Math.Round(Math.Abs((dl.Value - now).TotalDays)); dueKind = ov ? "overdue" : "soon"; dueLabel = ov ? ("просрочено на " + days + " дн") : ("срок через " + days + " дн"); }
+                items.Add(new { id = aid, subject = subj, stage = StageName(disc, 0), process = ProcNameByDisc(tdisc), deadline = dl?.ToString("yyyy-MM-dd"), overdue = ov, dueKind, dueLabel, rxLink = RxTaskLink(taskId, tdisc), performer = perf });
+            }
+        }
+        return new { name, items };
     }
 
     static object BuildProcess(string key, string period = null)

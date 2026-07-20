@@ -446,37 +446,14 @@ function csvLink(what,label){return '<a href="/api/export?what='+what+'&key='+CU
 function deltaArrow(d,suffix){if(d==null)return '';var a=d>0?'▲':(d<0?'▼':'→');var c=d>0?'var(--green)':(d<0?'var(--red)':'var(--subtle)');return '<span title="дисциплина к прошлому месяцу" style="color:'+c+';font-weight:600">'+a+' '+Math.abs(d)+(suffix||' п.п.')+'</span>';}
 function renderStart(){
   if(!OVR){document.getElementById('view-start').innerHTML='<div class="sub">загрузка…</div>';return;}
-  var reg=OVR.region||{},thr=reg.throughput||{},bn=reg.bottleneck||{},lr=reg.longRunners||{};
-  var thrCol=SEV[thr.color]?SEV[thr.color].c:'var(--text)',thrAcc=SEV[thr.color]?SEV[thr.color].a:'accent-blue';
-  var maxMonths=PROCS.reduce(function(a,p){return Math.max(a,(p.trend||[]).length);},1);
   var perLbl=PERIOD!=='all'?' · '+PERIOD_LABEL[PERIOD].toLowerCase():'';
   var html='<div class="h2">Обзор для руководителя</div><div class="sub">Общая картина по процессам: где всё идёт штатно, а где копятся проблемы и срываются сроки'+perLbl+'. Нажмите на процесс — откроется подробная сводка.</div>';
 
-  // ----- HERO-полоса -----
-  var hero='';
-  if(ovHas('throughput')) hero+='<div class="card '+thrAcc+'"><div class="cardhead"><div class="kpi-label">Соблюдение сроков'+hlp('Соблюдение сроков','throughput',null)+'</div></div>'+
-    '<div class="row" style="gap:8px;align-items:baseline;margin:8px 0 4px"><span style="font-size:42px;font-weight:700;color:'+thrCol+'">'+(thr.pct!=null?thr.pct:'—')+'%</span><span class="subtle">в срок</span></div>'+
-    '<div class="subtle" style="font-size:12px">'+(thr.onTimeTotal||0)+' из '+(thr.ratedTotal||0)+' заданий с наступившим сроком — вовремя</div>'+
-    (thr.deltaPp!=null?'<div style="font-size:12px;margin-top:5px">'+deltaArrow(thr.deltaPp)+' <span class="subtle">к прошлому месяцу</span></div>':'')+'</div>';
-  if(ovHas('bottleneck')) hero+='<div class="card accent-amber" style="cursor:pointer" onclick="'+((bn&&bn.processKey)?'openProcModal(\''+bn.processKey+'\')':'')+'"><div class="cardhead"><div class="kpi-label">Где работа застревает'+hlp('Где работа застревает','bottleneck',null)+'</div></div>'+
-    ((bn&&bn.stage)?'<div style="font-size:20px;font-weight:700;margin:8px 0 3px;line-height:1.25">'+esc(bn.process)+' <span class="subtle">→</span> '+esc(bn.stage)+'</div>'+
-      '<div class="subtle" style="font-size:13px">медиана ожидания <b style="color:var(--amber)">'+bn.medianDays+' дн</b> · в очереди '+bn.queue+'</div>':'<div class="sub" style="margin-top:8px">нет активных заданий</div>')+'</div>';
-  if(ovHas('longrunners')){var lrcol=(lr.count>0)?'var(--red)':'var(--green)';
-    hero+='<div class="card accent-red"><div class="cardhead"><div class="kpi-label">Застрявшие задания'+hlp('Застрявшие задания','longrunners',null)+'</div></div>'+
-    '<div class="row" style="gap:8px;align-items:baseline;margin:8px 0 4px"><span style="font-size:42px;font-weight:700;color:'+lrcol+'">'+(lr.count!=null?lr.count:'—')+'</span><span class="subtle">заданий</span></div>'+
-    '<div class="subtle" style="font-size:12px">просрочены более чем на '+(lr.thresholdDays||3)+' дня</div></div>';}
-  if(hero)html+='<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-bottom:20px">'+hero+'</div>';
+  // ----- Лид-блок «Исполнение по подчинённым/подразделениям» -----
+  html+='<div class="card" id="start-leaders" style="margin-bottom:20px"></div>';
 
   // ----- Мои задания (демо-руководитель): заполняется отдельным запросом -----
   html+='<div class="card" id="start-mytasks" style="margin-bottom:20px"></div>';
-
-  // ----- Что горит -----
-  if(ovHas('burning')){var wb=OVR.whatsBurning||[];
-    html+='<div class="card" style="margin-bottom:20px"><div class="cardhead" style="margin-bottom:10px"><div class="card-h" style="margin:0">🔥 Что горит сейчас'+hlp('Что горит сейчас','burning',null)+'</div></div>'+
-      wb.map(function(b){var sv=SEV[b.severity]||SEV.green;
-        return '<div class="listrow" onclick="openProcModal(\''+b.processKey+'\')" style="display:flex;gap:12px;align-items:center;padding:9px 2px"><span style="width:10px;height:10px;border-radius:50%;background:'+sv.c+';flex-shrink:0"></span><span style="font-weight:600;min-width:200px">'+esc(b.process)+'</span><span class="muted" style="font-size:13px">'+esc(b.headline)+'</span></div>';
-      }).join('')+'</div>';
-  }
 
   // ----- ИИ-аналитика: вызов по кнопке (модалка), без авто-LLM на загрузке -----
   html+='<div style="margin-bottom:20px"><button class="btn" onclick="openAi()" style="font-size:14px;padding:10px 16px">🧠 ИИ-аналитика и прогноз</button></div>';
@@ -485,7 +462,7 @@ function renderStart(){
   html+='<div class="card" id="start-appeals" style="margin-bottom:20px"></div>';
 
   // ----- Светофор процессов (худшие сверху) -----
-  if(!ovHas('svetofor')){document.getElementById('view-start').innerHTML=html;renderStartAppeals();renderMyTasks();return;}
+  if(!ovHas('svetofor')){document.getElementById('view-start').innerHTML=html;renderLeaders();renderStartAppeals();renderMyTasks();return;}
   html+='<div class="cardhead" style="margin:0 0 6px"><div class="card-h" style="margin:0">Процессы'+hlp('Процессы','svetofor',null)+'</div></div>';
   var sc='16px 1.7fr 0.8fr 0.9fr 1.4fr 0.9fr 2.2fr 18px';
   html+='<div class="card" style="padding:6px 20px">';
@@ -506,6 +483,7 @@ function renderStart(){
   }).join('');
   html+='</div>';
   document.getElementById('view-start').innerHTML=html;
+  renderLeaders();
   renderStartAppeals();
   renderMyTasks();
 }

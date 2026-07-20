@@ -624,7 +624,7 @@ function renderLeaderTasks(){
     return '<div class="listrow" style="display:flex;gap:12px;align-items:center;padding:10px 2px;border-bottom:1px solid var(--border)">'+
       '<div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--navy);font-size:13.5px;line-height:1.3">'+esc(t.subject)+'</div>'+
       '<div class="subtle" style="font-size:12px">'+esc(t.stage)+(t.process?' · '+esc(t.process):'')+' · <span style="color:'+col+'">'+esc(t.dueLabel)+'</span></div></div>'+
-      '<button class="'+(on?'btn':'btn-ghost')+'" onclick=\'togglePinObj('+JSON.stringify(t).replace(/\x27/g,"&#39;")+')\'>'+(on?'📌 на контроле':'📌 закрепить')+'</button></div>';
+      '<button class="'+(on?'btn':'btn-ghost')+'" onclick="togglePinObjById('+t.id+')">'+(on?'📌 на контроле':'📌 закрепить')+'</button></div>';
   }).join('');
 }
 function renderMyControlModal(){
@@ -838,6 +838,11 @@ function snapKey(){return 'armgov.mycontrol.snap';}
 function loadSnap(){try{return JSON.parse(localStorage.getItem(snapKey()))||{};}catch(e){return {};}}
 function saveSnap(m){try{localStorage.setItem(snapKey(),JSON.stringify(m));}catch(e){}}
 // пин из drill-модалки: храним снимок (поручение может быть не в моём инбоксе)
+function togglePinObjById(id){
+  if(!LTDATA||!LTDATA.items)return;
+  var t=LTDATA.items.filter(function(x){return x.id===id;})[0];
+  if(t)togglePinObj(t);
+}
 function togglePinObj(t){
   var p=loadPins(); var snap=loadSnap(); var i=p.indexOf(t.id);
   if(i>=0){p.splice(i,1);delete snap[t.id];}

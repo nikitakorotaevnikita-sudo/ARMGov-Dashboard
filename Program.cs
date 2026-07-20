@@ -183,6 +183,7 @@ class Program
             case "/api/processes": JCached(ctx, ck, () => BuildProcesses()); return;
             case "/api/overview": JCached(ctx, ck, () => BuildOverview(q["period"])); return;
             case "/api/my/tasks": JCached(ctx, ck, () => BuildMyTasks()); return;
+            case "/api/leaders": JCached(ctx, ck, () => BuildLeaders(q["by"])); return;
             case "/api/process": JCached(ctx, ck, () => BuildProcess(q["key"], q["period"])); return;
             case "/api/process/stuck": JCached(ctx, ck, () => BuildStuck(q["key"], q["period"])); return;
             case "/api/process/workload": JCached(ctx, ck, () => BuildWorkload(q["key"], q["period"])); return;
@@ -844,6 +845,57 @@ class Program
             });
         }
         return new { count = items.Count, items };
+    }
+
+    // ---------- /api/leaders (сквозные агрегаты по исполнителю/подразделению для лид-блока) ----------
+    static object BuildLeaders(string by)
+    {
+        bool dept = by == "dept";
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        // группа -> агрегаты; processes[key] -> (inwork, overdue)
+        var groups = new Dictionary<long, (string name, int inwork, int overdue, int exp7,
+            Dictionary<string, (int inwork, int overdue)> procs)>();
+        foreach (var p0 in Procs)
+        {
+            string groupId = dept ? "coalesce(e.department_company_sungero,0)" : "a.performer";
+            string groupNm = dept ? "coalesce(d.name::text,'(без подразделения)')" : "coalesce(r.name,'(не назначен)')";
+            string joins = "join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer";
+            if (dept) joins += " left join sungero_core_recipient e on e.id=a.performer left join sungero_core_recipient d on d.id=e.department_company_sungero";
+            string sql =
+                $"select {groupId} gid, {groupNm} gname, " +
+                "count(*) filter (where a.status::text='InProcess') inwork, " +
+                "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline<now()) overdue, " +
+                "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline>=now() and a.deadline<now()+interval '7 days') exp7 " +
+                $"from sungero_wf_assignment a {joins} " +
+                $"where {p0.Where}{NoticeNotIn} and a.performer is not null group by {groupId}, {groupNm}";
+            using var cmd = new NpgsqlCommand(sql, c);
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                long gid = r.GetInt64(0); string gname = r.GetString(1);
+                int iw = (int)r.GetInt64(2), ov = (int)r.GetInt64(3), e7 = (int)r.GetInt64(4);
+                if (!groups.TryGetValue(gid, out var g))
+                    g = (gname, 0, 0, 0, new Dictionary<string, (int, int)>());
+                g.inwork += iw; g.overdue += ov; g.exp7 += e7;
+                g.procs[p0.Key] = (iw, ov);
+                groups[gid] = g;
+            }
+        }
+        var items = groups.Select(kv => new
+        {
+            id = kv.Key, name = kv.Value.name, kind = dept ? "dept" : "performer",
+            inwork = kv.Value.inwork, overdue = kv.Value.overdue, exp7 = kv.Value.exp7,
+            risk = kv.Value.overdue > 0,
+            processes = Procs.Select(p => new {
+                key = p.Key, name = p.Name,
+                inwork = kv.Value.procs.TryGetValue(p.Key, out var x) ? x.inwork : 0,
+                overdue = kv.Value.procs.TryGetValue(p.Key, out var y) ? y.overdue : 0
+            }).ToList()
+        })
+        .Where(x => x.inwork > 0 || x.overdue > 0)   // не показываем пустые группы
+        .OrderByDescending(x => x.overdue).ThenByDescending(x => x.inwork)
+        .ToList();
+        return new { by = dept ? "dept" : "performer", items };
     }
 
     // ---------- /api/process/workload (C. Загрузка исполнителей) ----------

@@ -1489,7 +1489,7 @@ function load(){
   fetch('/api/overview?period='+PERIOD,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     OVR=d;PROCS=d.processes||[];document.getElementById('meta').textContent='данные БД · '+d.generatedAt;
     if(!ACTIVE_PROFILE&&d.ui)ACTIVE_PROFILE=d.ui.activeProfile;
-    renderHeaderControls();renderNav();if(CUR===null)renderStart();else if(CUR==='__bo')renderBackoffice();
+    renderHeaderControls();renderNav();if(CUR===null)renderStart();else if(CUR==='__bo')renderBackoffice();else if(CUR==='__analytics')renderAnalytics();else if(CUR==='__appeals')renderAppeals();
   }).catch(function(e){document.getElementById('meta').textContent='ошибка связи: '+e;});
 }
 function renderHeaderControls(){
@@ -1509,15 +1509,15 @@ function refreshData(){
   if(b){b.disabled=true;b.textContent='↻ Обновляю…';}
   fetch('/api/refresh',{method:'POST',cache:'no-store'}).then(function(r){return r.json();}).then(function(){
     load();
-    if(CUR&&CUR!=='__bo')goProcess(CUR);
+    if(CUR==='__analytics')renderAnalytics();else if(CUR==='__appeals')renderAppeals();else if(CUR&&CUR!=='__bo')goProcess(CUR);
   }).catch(function(e){
     document.getElementById('meta').textContent='не удалось обновить: '+e;
   }).then(function(){
     if(b){b.disabled=false;b.textContent='↻ Обновить данные';}
   });
 }
-function setPeriod(v){PERIOD=v;AISUM=null;load();if(CUR&&CUR!=='__bo'&&CUR!==null)goProcess(CUR);}
-function setProfile(v){ACTIVE_PROFILE=v;if(CUR===null)renderStart();else if(CUR&&CUR!=='__bo')renderProcess(CURDATA);}
+function setPeriod(v){PERIOD=v;AISUM=null;load();if(CUR==='__analytics')renderAnalytics();else if(CUR==='__appeals')renderAppeals();else if(CUR&&CUR!=='__bo'&&CUR!==null)goProcess(CUR);}
+function setProfile(v){ACTIVE_PROFILE=v;if(CUR===null)renderStart();else if(CUR==='__analytics')renderAnalytics();else if(CUR==='__appeals')renderAppeals();else if(CUR&&CUR!=='__bo')renderProcess(CURDATA);}
 load();setInterval(load,60000);
 </script>
 </body></html>

@@ -458,16 +458,16 @@ function deltaArrow(d,suffix){if(d==null)return '';var a=d>0?'▲':(d<0?'▼':'�
 function renderStart(){
   if(!OVR){document.getElementById('view-start').innerHTML='<div class="sub">загрузка…</div>';return;}
   var perLbl=PERIOD!=='all'?' · '+PERIOD_LABEL[PERIOD].toLowerCase():'';
-  var html='<div class="h2">Обзор для руководителя</div><div class="sub">Общая картина по процессам: где всё идёт штатно, а где копятся проблемы и срываются сроки'+perLbl+'. Нажмите на процесс — откроется подробная сводка.</div>';
+  var html='<div class="row" style="justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:4px;flex-wrap:nowrap">'+
+    '<div style="flex:1;min-width:0"><div class="h2" style="margin:0">Обзор для руководителя</div>'+
+    '<div class="sub">Общая картина по процессам: где всё идёт штатно, а где копятся проблемы и срываются сроки'+perLbl+'. Нажмите на процесс — откроется подробная сводка.</div></div>'+
+    '<button class="btn-ghost" onclick="openAi()" style="white-space:nowrap;flex:none">🧠 ИИ-аналитика и прогноз</button></div>';
 
   // ----- Лид-блок «Исполнение по подчинённым/подразделениям» -----
   html+='<div class="card" id="start-leaders" style="margin-bottom:20px"></div>';
 
   // ----- Мои задания (демо-руководитель): заполняется отдельным запросом -----
   html+='<div class="card" id="start-mytasks" style="margin-bottom:20px"></div>';
-
-  // ----- ИИ-аналитика: вызов по кнопке (модалка), без авто-LLM на загрузке -----
-  html+='<div style="margin-bottom:20px"><button class="btn" onclick="openAi()" style="font-size:14px;padding:10px 16px">🧠 ИИ-аналитика и прогноз</button></div>';
 
   // ----- Краткая аналитика тематик обращений (заполняется отдельно) -----
   html+='<div class="card" id="start-appeals" style="margin-bottom:20px"></div>';
@@ -1141,10 +1141,10 @@ function appealBars(items){
   }).join('')+'</div>';
 }
 function tmHeat(t){var a=[212,225,238],b=[31,58,95];var c=function(i){return Math.round(a[i]+(b[i]-a[i])*t);};return 'rgb('+c(0)+','+c(1)+','+c(2)+')';}
-function renderTreemap(tm){
+function renderTreemap(tm,height){
   if(!tm||!tm.length)return '<div class="sub">нет данных</div>';
   var maxTp=0;tm.forEach(function(s){(s.topics||[]).forEach(function(t){if(t.pct>maxTp)maxTp=t.pct;});});
-  var H=440,contentH=H-52;  // высота под плитки в колонке (за вычетом заголовка раздела)
+  var H=height||440,contentH=H-52;  // высота под плитки в колонке (за вычетом заголовка раздела)
   return '<div class="tm-wrap" style="height:'+H+'px">'+tm.map(function(s){
     var secN=s.n||1;
     var tiles=(s.topics||[]).map(function(t){
@@ -1211,10 +1211,9 @@ function renderSystemic(){
 function renderStartAppeals(){
   var el=document.getElementById('start-appeals');if(!el)return;
   function fill(){var d=APP;if(!d||d.error){el.innerHTML='';return;}
-    var q=(d.topQuestions||[]).slice(0,5);
-    el.innerHTML='<div class="cardhead" style="margin-bottom:6px"><div class="card-h" style="margin:0">Топ вопросов · обращения граждан</div><span class="subtle" style="font-size:12px">всего '+d.kpi.requests+' обращений</span></div>'+
-      q.map(function(x){return '<div class="row" style="justify-content:space-between;font-size:13px;padding:5px 0;border-top:1px solid var(--border)"><span style="max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.name)+'">'+esc(x.name)+'</span><span class="muted">'+x.pct+'%</span></div>';}).join('')+
-      '<div class="listrow" style="text-align:center;color:var(--accent);font-weight:600;padding:9px 0 2px" onclick="goAppeals()">Тематики обращений →</div>';
+    el.innerHTML='<div class="cardhead" style="margin-bottom:8px"><div class="card-h" style="margin:0">Обращения граждан · тематики</div><span class="subtle" style="font-size:12px">всего '+d.kpi.requests+' обращений · раздел → тема · размер и цвет = доля</span></div>'+
+      renderTreemap(d.treemap,300)+
+      '<div class="listrow" style="text-align:center;color:var(--accent);font-weight:600;padding:9px 0 2px" onclick="goAppeals()">Все тематики обращений →</div>';
   }
   if(APP){fill();return;}
   el.innerHTML='<div class="sub">загрузка тематик обращений…</div>';

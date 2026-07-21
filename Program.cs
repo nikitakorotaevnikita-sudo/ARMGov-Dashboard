@@ -145,6 +145,16 @@ class Program
     static string StageName(string disc, int idx) =>
         disc == null ? "—" : (StageNames.TryGetValue(disc, out var n) ? n : "Этап " + (idx + 1));
 
+    // Состояние исполнения поручения (t.executionstate_recman_sungero).
+    static readonly Dictionary<string, string> ExecStateNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["OnExecution"] = "На исполнении",
+        ["OnControl"] = "На контроле",
+        ["Executed"] = "Исполнено",
+        ["Aborted"] = "Прекращено",
+    };
+    static string ExecStateName(string s) => string.IsNullOrEmpty(s) ? "—" : (ExecStateNames.TryGetValue(s, out var n) ? n : s);
+
     static void Main()
     {
         AssemblyLoadContext.Default.Resolving += (ctx, name) =>
@@ -523,7 +533,9 @@ class Program
         var items = new List<object>();
         using (var cmd = new NpgsqlCommand(
             "select a.id, coalesce(nullif(a.subject::text,''),'(без темы)') subj, a.discriminator::text disc, a.deadline, a.task, " +
-            "t.discriminator::text tdisc, coalesce(r.name,'(не назначен)') perf " +
+            "t.discriminator::text tdisc, coalesce(r.name,'(не назначен)') perf, " +
+            "coalesce(nullif(t.actionitemtai_recman_sungero::text,''),'') summary, " +
+            "coalesce(t.executionstate_recman_sungero::text,'') execstate " +
             $"from sungero_wf_assignment a {joins} " +
             $"where {procUnion}{NoticeNotIn} and {filter} and a.status::text='InProcess' and a.performer is not null " +
             "order by case when a.deadline is not null and a.deadline<now() then 0 when a.deadline is not null then 1 else 2 end, a.deadline asc limit 50", c))
@@ -538,11 +550,12 @@ class Program
                 DateTime? dl = r.IsDBNull(3) ? (DateTime?)null : r.GetDateTime(3);
                 long taskId = r.GetInt64(4); string tdisc = r.IsDBNull(5) ? null : r.GetString(5);
                 string perf = r.GetString(6);
+                string summ = r.GetString(7); string execst = r.GetString(8);
                 bool ov = dl.HasValue && dl.Value < now;
                 string dueKind, dueLabel;
                 if (!dl.HasValue) { dueKind = "none"; dueLabel = "без срока"; }
                 else { int days = (int)Math.Round(Math.Abs((dl.Value - now).TotalDays)); dueKind = ov ? "overdue" : "soon"; dueLabel = ov ? ("просрочено на " + days + " дн") : ("срок через " + days + " дн"); }
-                items.Add(new { id = aid, subject = subj, stage = StageName(disc, 0), process = ProcNameByDisc(tdisc), deadline = dl?.ToString("yyyy-MM-dd"), overdue = ov, dueKind, dueLabel, rxLink = RxTaskLink(taskId, tdisc), performer = perf });
+                items.Add(new { id = aid, subject = subj, stage = StageName(disc, 0), process = ProcNameByDisc(tdisc), deadline = dl?.ToString("yyyy-MM-dd"), overdue = ov, dueKind, dueLabel, rxLink = RxTaskLink(taskId, tdisc), performer = perf, summary = string.IsNullOrEmpty(summ) ? subj : summ, execState = ExecStateName(execst) });
             }
         }
         return new { name, items };

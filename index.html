@@ -615,7 +615,7 @@ function leaderCard(x,by){
   if(by==='dept'){ av='<div class="ld-av">🏛️</div>'; }
   else { var pool=guessGender(x.name)==='f'?LEADER_PHOTOS_F:LEADER_PHOTOS_M; var ph=pool[Math.abs(x.id)%pool.length]; av='<div class="ld-av" style="padding:0;overflow:hidden"><img src="'+ph+'" alt="" style="width:100%;height:100%;object-fit:cover"></div>'; }
   return '<div class="ld-card '+(x.risk?'risk':'ok')+'" style="cursor:pointer" onclick="openLeaderTasks(\''+by+'\','+x.id+',\''+esc(String(x.name)).replace(/\x27/g,"&#39;")+'\')">'+
-    '<div class="ld-h">'+av+'<div class="ld-nm">'+esc(x.name)+'</div></div>'+
+    '<div class="ld-h">'+av+'<div><div class="ld-nm">'+esc(x.name)+'</div>'+(x.position?'<div class="subtle" style="font-size:12px;margin-top:2px">'+esc(x.position)+'</div>':'')+'</div></div>'+
     procRows+
     '<div class="ld-foot">'+(x.risk?'<span class="ld-pill risk">⚠ Под риском</span>':'<span class="ld-pill ok">✓ в норме</span>')+
     '<span class="ld-exp">истекает 7 дн: '+x.exp7+'</span></div></div>';

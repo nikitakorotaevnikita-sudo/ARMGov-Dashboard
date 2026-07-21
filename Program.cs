@@ -919,29 +919,31 @@ class Program
         bool dept = by == "dept";
         using var c = new NpgsqlConnection(Cs); c.Open();
         // группа -> агрегаты; processes[key] -> (inwork, overdue)
-        var groups = new Dictionary<long, (string name, int inwork, int overdue, int exp7,
+        var groups = new Dictionary<long, (string name, string pos, int inwork, int overdue, int exp7,
             Dictionary<string, (int inwork, int overdue)> procs)>();
         foreach (var p0 in Procs)
         {
             string groupId = dept ? "coalesce(e.department_company_sungero,0)" : "a.performer";
             string groupNm = dept ? "coalesce(d.name::text,'(без подразделения)')" : "coalesce(r.name,'(не назначен)')";
+            string groupPos = dept ? "''::text" : "coalesce(jt.name::text,'')";
             string joins = "join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer";
             if (dept) joins += " left join sungero_core_recipient e on e.id=a.performer left join sungero_core_recipient d on d.id=e.department_company_sungero";
+            else joins += " left join sungero_company_jobtitle jt on jt.id=r.jobtitle_company_sungero";
             string sql =
-                $"select {groupId} gid, {groupNm} gname, " +
+                $"select {groupId} gid, {groupNm} gname, {groupPos} gpos, " +
                 "count(*) filter (where a.status::text='InProcess') inwork, " +
                 "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline<now()) overdue, " +
                 "count(*) filter (where a.status::text='InProcess' and a.deadline is not null and a.deadline>=now() and a.deadline<now()+interval '7 days') exp7 " +
                 $"from sungero_wf_assignment a {joins} " +
-                $"where {p0.Where}{NoticeNotIn} and a.performer is not null group by {groupId}, {groupNm}";
+                $"where {p0.Where}{NoticeNotIn} and a.performer is not null group by {groupId}, {groupNm}, {groupPos}";
             using var cmd = new NpgsqlCommand(sql, c);
             using var r = cmd.ExecuteReader();
             while (r.Read())
             {
-                long gid = r.GetInt64(0); string gname = r.GetString(1);
-                int iw = (int)r.GetInt64(2), ov = (int)r.GetInt64(3), e7 = (int)r.GetInt64(4);
+                long gid = r.GetInt64(0); string gname = r.GetString(1); string gpos = r.GetString(2);
+                int iw = (int)r.GetInt64(3), ov = (int)r.GetInt64(4), e7 = (int)r.GetInt64(5);
                 if (!groups.TryGetValue(gid, out var g))
-                    g = (gname, 0, 0, 0, new Dictionary<string, (int, int)>());
+                    g = (gname, gpos, 0, 0, 0, new Dictionary<string, (int, int)>());
                 g.inwork += iw; g.overdue += ov; g.exp7 += e7;
                 g.procs[p0.Key] = (iw, ov);
                 groups[gid] = g;
@@ -949,7 +951,7 @@ class Program
         }
         var items = groups.Select(kv => new
         {
-            id = kv.Key, name = kv.Value.name, kind = dept ? "dept" : "performer",
+            id = kv.Key, name = kv.Value.name, position = kv.Value.pos, kind = dept ? "dept" : "performer",
             inwork = kv.Value.inwork, overdue = kv.Value.overdue, exp7 = kv.Value.exp7,
             risk = kv.Value.overdue > 0,
             processes = Procs.Select(p => new {

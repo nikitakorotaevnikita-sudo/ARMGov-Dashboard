@@ -619,7 +619,7 @@ function leaderCard(x,by){
     '<div class="ld-h">'+av+'<div><div class="ld-nm">'+esc(x.name)+'</div>'+(x.position?'<div class="subtle" style="font-size:12px;margin-top:2px">'+esc(x.position)+'</div>':'')+'</div></div>'+
     procRows+
     '<div class="ld-foot">'+(x.risk?'<span class="ld-pill risk">⚠ Под риском</span>':'<span class="ld-pill ok">✓ в норме</span>')+
-    (x.coOverdue>0?'<span class="ld-pill risk" title="Просрочено у соисполнителей по поручениям, где участвует">👥 соисп. '+x.coOverdue+'</span>':'')+
+    (x.coOverdue>0?'<span class="ld-pill risk" title="Просрочено у соисполнителей по поручениям, где сотрудник — ответственный исполнитель">👥 соисп. '+x.coOverdue+'</span>':'')+
     '<span class="ld-exp">истекает 7 дн: '+x.exp7+'</span></div></div>';
 }
 function renderLeaders(){
@@ -628,14 +628,18 @@ function renderLeaders(){
     var by=curLeadTab===0?'performer':(curLeadTab===1?'dept':'bu');
     var items=LEADERS[by]||[];
     var shown=ldSelected(by,items);
-    var totOv=0,totExp=0,risk=0,appeals=0,poru=0,totCo=0;
-    items.forEach(function(x){totOv+=x.overdue;totExp+=x.exp7;if(x.risk)risk++;totCo+=(x.coOverdue||0);
+    var totOv=0,totExp=0,risk=0,appeals=0,poru=0,coPeople=0;
+    items.forEach(function(x){totOv+=x.overdue;totExp+=x.exp7;if(x.risk)risk++;if((x.coOverdue||0)>0)coPeople++;
       x.processes.forEach(function(p){if(p.key==='appeals')appeals+=p.inwork;if(p.key==='poruchenia')poru+=p.inwork;});});
+    // Плитка «Подводят соисполнители» — только для разреза по людям (для dept/bu
+    // соисполнители не считаются) и только когда есть хотя бы один такой сотрудник,
+    // иначе на других вкладках она бы показывала бессмысленный красный ноль.
+    var coTile=(by==='performer'&&coPeople>0)?('<div class="ld-ag"><span class="l">Подводят соисполнители</span><span class="v r">'+coPeople+'</span></div>'):'';
     var strip='<div class="ld-strip">'+
       '<div class="ld-ag"><span class="l">Поручений в работе</span><span class="v">'+poru+'</span></div>'+
       '<div class="ld-ag"><span class="l">Под риском</span><span class="v a">'+risk+'</span></div>'+
       '<div class="ld-ag"><span class="l">Просрочено</span><span class="v r">'+totOv+'</span></div>'+
-      '<div class="ld-ag"><span class="l">У соисполнителей</span><span class="v r">'+totCo+'</span></div>'+
+      coTile+
       '<div class="ld-ag"><span class="l">Истекает 7 дней</span><span class="v a">'+totExp+'</span></div>'+
       '<div class="ld-ag"><span class="l">Обращений в работе</span><span class="v">'+appeals+'</span></div></div>';
     var head='<div class="cardhead" style="margin-bottom:10px"><div class="card-h" style="margin:0">Исполнение по подчинённым</div>'+

@@ -1039,20 +1039,29 @@ class Program
         var coOverdue = new Dictionary<long, int>();
         if (!dept && !bu)
         {
+            // parts — маленькая таблица (сотни строк), поднята выше my и используется как
+            // фильтр maintask in (...): без него my сканирует всю sungero_wf_assignment
+            // (Parallel Seq Scan, ~355 тыс. строк) вместо использования индекса по maintask.
+            // my ограничен активными заданиями сотрудника (status='InProcess') — иначе набор
+            // головных поручений для бейджа шире того, что показывает drill-down (там только
+            // активные задания), и числа расходятся.
             string sql2 =
-                "with my as (select distinct a.performer as me, a.maintask as head " +
-                " from sungero_wf_assignment a " +
-                $" where a.performer is not null and a.maintask is not null{NoticeNotIn}), " +
-                "parts as (select task as head, assignee as person from sungero_recman_taicoassignees " +
+                "with parts as (select task as head, assignee as person from sungero_recman_taicoassignees " +
                 " union all select task as head, coassignee as person from sungero_recman_taipartscoasgs " +
                 " union all select task as head, assignee as person from sungero_recman_taiparts), " +
+                "my as (select distinct a.performer as me, a.maintask as head " +
+                " from sungero_wf_assignment a " +
+                $" where a.performer is not null and a.maintask is not null and a.status::text='InProcess' and a.maintask in (select head from parts){NoticeNotIn}), " +
                 "co as (select m.me as me, p.head as head, p.person as person, " +
                 "  max(case when a.status::text='InProcess' and a.deadline is not null and a.deadline<now() then 1 else 0 end) as ov " +
                 " from my m " +
                 " join parts p on p.head=m.head and p.person is not null and p.person<>m.me " +
                 $" left join sungero_wf_assignment a on a.maintask=p.head and a.performer=p.person{NoticeNotIn} " +
                 " group by m.me, p.head, p.person) " +
-                "select me, sum(ov)::bigint as total from co group by me";
+                // Считаем уникальных людей с просрочкой, а не пары «поручение-человек» —
+                // иначе один и тот же просроченный соисполнитель множится на число поручений,
+                // где он участвует вместе с этим сотрудником.
+                "select me, count(distinct person)::bigint as total from co where ov=1 group by me";
             using var cmd2 = new NpgsqlCommand(sql2, c);
             cmd2.CommandTimeout = 120;
             using var r2 = cmd2.ExecuteReader();

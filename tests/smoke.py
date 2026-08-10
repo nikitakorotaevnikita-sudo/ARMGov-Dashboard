@@ -169,6 +169,17 @@ if first_perf_id is not None:
 else:
     check("leader/tasks (нет id для проверки)", False)
 
+try:
+    st, jd = _req("/api/leaders?by=dept")
+    items_dept = jd.get("items", [])
+    check("coOverdue == 0 по значению у всех групп в dept и bu",
+          all(x.get("coOverdue") == 0 for x in items_dept) and all(x.get("coOverdue") == 0 for x in items_bu))
+except Exception as e:
+    check("coOverdue==0 (dept/bu)", False, str(e))
+
+check("контракт: если coOverdue>0, то risk истинно (performer)",
+      all(x.get("risk") is True for x in items_perf if x.get("coOverdue", 0) > 0))
+
 # ---------------- ИИ (ПРОВЕРИТЬ В ПОНЕДЕЛЬНИК) ----------------
 section("ИИ-функциональность  (LLM Ario; проверять в ПОНЕДЕЛЬНИК)")
 def ai_check(name, path, method="GET", body=None):

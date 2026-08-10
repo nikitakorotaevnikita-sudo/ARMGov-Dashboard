@@ -55,9 +55,10 @@ dotnet build -c Release && bin\Release\net10.0\armgov-standalone.exe
 python tests/smoke.py http://localhost:5080
 ```
 
-45 проверок, включая ИИ-секцию. Ожидаемый результат — `PASS=45 FAIL=0`.
+53 проверки, включая ИИ-секцию. Ожидаемый результат — `PASS=53 FAIL=0`.
 
-**Smoke не покрывает** эндпоинты, добавленные позже: `/api/my/tasks`, `/api/leaders`, `/api/leader/tasks`, `/api/appeals/topics`, `/api/appeals/systemic`, `/api/process/kind-tasks`, `/api/performer`. Их проверять руками. При добавлении нового эндпоинта — дописывать в smoke.
+**Smoke не покрывает** эндпоинты: `/api/my/tasks`, `/api/appeals/topics`, `/api/appeals/systemic`, `/api/process/kind-tasks`, `/api/performer`. Их проверять руками. При добавлении нового эндпоинта — дописывать в smoke.
+`/api/leaders` и `/api/leader/tasks` покрыты частично: разрез `bu`, поле `coOverdue`, контракт «`coOverdue>0` ⇒ `risk`» и тип `co.total`. Не покрыты разрешение имён организаций и дедупликация участников в `co.items`.
 
 Ad-hoc SQL к стенду: `dotnet run --project tools/dbq -- "<SQL>"` (берёт креды из `config.json`, см. `tools/dbq/QUERIES.md`).
 

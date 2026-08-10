@@ -141,6 +141,7 @@ for what in ["overdue", "workload", "departments"]:
 # ---------------- СОИСПОЛНИТЕЛИ: просрочка у соисполнителей (лидеры) ----------------
 section("Просрочка у соисполнителей  /api/leaders, /api/leader/tasks")
 first_perf_id = None
+items_perf, items_bu = [], []   # инициализация: иначе падение эндпоинта роняет весь прогон по NameError
 try:
     st, j = _req("/api/leaders?by=bu")
     check("by=bu отвечает и by='bu'", st == 200 and j.get("by") == "bu")

@@ -583,7 +583,7 @@ function renderMyTasks(d){
 }
 
 /* ---------- Лид-блок «Исполнение по подчинённым/подразделениям» ---------- */
-var LEADERS={performer:null,dept:null}, curLeadTab=0;
+var LEADERS={performer:null,dept:null,bu:null}, curLeadTab=0;
 function ldKey(by){return 'armgov.leaders.'+by;}
 function ldLoadSel(by){try{var a=JSON.parse(localStorage.getItem(ldKey(by)));return Array.isArray(a)?a:null;}catch(e){return null;}}
 function ldSaveSel(by,a){try{localStorage.setItem(ldKey(by),JSON.stringify(a));}catch(e){}}
@@ -591,7 +591,7 @@ function ldInitials(nm){var p=String(nm||'').replace(/["]/g,'').trim().split(/\s
 function ldSelected(by,items){
   var sel=ldLoadSel(by);
   if(sel===null){ // дефолт: подразделения — все; подчинённые — топ-8 по просрочке
-    return by==='dept'?items:items.slice(0,8);
+    return (by==='dept'||by==='bu')?items:items.slice(0,8);
   }
   var s={};sel.forEach(function(id){s[id]=1;});return items.filter(function(x){return s[x.id];});
 }
@@ -613,6 +613,7 @@ function leaderCard(x,by){
   }).join('');
   var av;
   if(by==='dept'){ av='<div class="ld-av">🏛️</div>'; }
+  else if(by==='bu'){ av='<div class="ld-av">🏢</div>'; }
   else { var pool=guessGender(x.name)==='f'?LEADER_PHOTOS_F:LEADER_PHOTOS_M; var ph=pool[Math.abs(x.id)%pool.length]; av='<div class="ld-av" style="padding:0;overflow:hidden"><img src="'+ph+'" alt="" style="width:100%;height:100%;object-fit:cover"></div>'; }
   return '<div class="ld-card '+(x.risk?'risk':'ok')+'" style="cursor:pointer" onclick="openLeaderTasks(\''+by+'\','+x.id+',\''+esc(String(x.name)).replace(/\x27/g,"&#39;")+'\')">'+
     '<div class="ld-h">'+av+'<div><div class="ld-nm">'+esc(x.name)+'</div>'+(x.position?'<div class="subtle" style="font-size:12px;margin-top:2px">'+esc(x.position)+'</div>':'')+'</div></div>'+
@@ -623,7 +624,7 @@ function leaderCard(x,by){
 function renderLeaders(){
   var el=document.getElementById('start-leaders'); if(!el) return;
   function draw(){
-    var by=curLeadTab===0?'performer':'dept';
+    var by=curLeadTab===0?'performer':(curLeadTab===1?'dept':'bu');
     var items=LEADERS[by]||[];
     var shown=ldSelected(by,items);
     var totOv=0,totExp=0,risk=0,appeals=0,poru=0;
@@ -638,15 +639,17 @@ function renderLeaders(){
     var head='<div class="cardhead" style="margin-bottom:10px"><div class="card-h" style="margin:0">Исполнение по подчинённым</div>'+
       '<button class="btn-ghost" onclick="openLeadComp()">⚙ Настроить состав</button></div>';
     var tabs='<div class="ld-tabs"><div class="ld-tab '+(curLeadTab===0?'on':'')+'" onclick="ldTab(0)">Подчинённые <span class="b">'+(ldSelected("performer",LEADERS.performer||[]).length)+'</span></div>'+
-      '<div class="ld-tab '+(curLeadTab===1?'on':'')+'" onclick="ldTab(1)">Подразделения <span class="b">'+(ldSelected("dept",LEADERS.dept||[]).length)+'</span></div></div>';
+      '<div class="ld-tab '+(curLeadTab===1?'on':'')+'" onclick="ldTab(1)">Подразделения <span class="b">'+(ldSelected("dept",LEADERS.dept||[]).length)+'</span></div>'+
+      '<div class="ld-tab '+(curLeadTab===2?'on':'')+'" onclick="ldTab(2)">Организации <span class="b">'+(ldSelected("bu",LEADERS.bu||[]).length)+'</span></div></div>';
     var grid=shown.length?('<div class="ld-grid">'+shown.map(function(x){return leaderCard(x,by);}).join('')+'</div>')
       :'<div class="sub" style="padding:16px">Ничего не выбрано — нажмите «⚙ Настроить состав».</div>';
     el.innerHTML=head+strip+tabs+grid;
   }
-  if(LEADERS.performer&&LEADERS.dept){draw();return;}
+  if(LEADERS.performer&&LEADERS.dept&&LEADERS.bu){draw();return;}
   Promise.all([fetch('/api/leaders?by=performer').then(function(r){return r.json();}),
-               fetch('/api/leaders?by=dept').then(function(r){return r.json();})])
-    .then(function(res){LEADERS.performer=res[0].items||[];LEADERS.dept=res[1].items||[];draw();})
+               fetch('/api/leaders?by=dept').then(function(r){return r.json();}),
+               fetch('/api/leaders?by=bu').then(function(r){return r.json();})])
+    .then(function(res){LEADERS.performer=res[0].items||[];LEADERS.dept=res[1].items||[];LEADERS.bu=res[2].items||[];draw();})
     .catch(function(){el.innerHTML='';});
 }
 function ldTab(i){curLeadTab=i;renderLeaders();}

@@ -510,23 +510,27 @@ class Program
     static object BuildLeaderTasks(string by, string idStr)
     {
         bool dept = by == "dept";
+        bool bu = by == "bu";
         if (!long.TryParse(idStr, out long gid)) return new { name = "", items = new List<object>() };
         string procUnion = "(" + string.Join(" or ", Procs.Select(p => p.Where)) + ")";
         string joins = "join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer";
-        string filter = dept
+        string filter = bu
+            ? "coalesce(r.emplbunit_company_sungero,0)=@id"
+            : dept
             ? "coalesce(r.department_company_sungero,0)=@id"
             : "a.performer=@id";
         using var c = new NpgsqlConnection(Cs); c.Open();
         string name;
         if (gid == 0)
         {
-            name = dept ? "(без подразделения)" : "(не назначен)";
+            name = bu ? "(без организации)" : dept ? "(без подразделения)" : "(не назначен)";
         }
         else
         {
-            using (var nc = new NpgsqlCommand(dept
-                ? "select coalesce(d.name::text,'(без подразделения)') from sungero_core_recipient d where d.id=@id"
-                : "select coalesce(name,'(не назначен)') from sungero_core_recipient where id=@id", c))
+            using (var nc = new NpgsqlCommand(
+                bu   ? "select coalesce(b.name::text,'(без организации)') from sungero_core_recipient b where b.id=@id"
+              : dept ? "select coalesce(d.name::text,'(без подразделения)') from sungero_core_recipient d where d.id=@id"
+                     : "select coalesce(name,'(не назначен)') from sungero_core_recipient where id=@id", c))
             { nc.Parameters.AddWithValue("id", gid); var o = nc.ExecuteScalar(); name = o == null || o is DBNull ? "" : o.ToString(); }
         }
 
@@ -917,17 +921,23 @@ class Program
     static object BuildLeaders(string by)
     {
         bool dept = by == "dept";
+        bool bu = by == "bu";
         using var c = new NpgsqlConnection(Cs); c.Open();
         // группа -> агрегаты; processes[key] -> (inwork, overdue)
         var groups = new Dictionary<long, (string name, string pos, int inwork, int overdue, int exp7,
             Dictionary<string, (int inwork, int overdue)> procs)>();
         foreach (var p0 in Procs)
         {
-            string groupId = dept ? "coalesce(e.department_company_sungero,0)" : "a.performer";
-            string groupNm = dept ? "coalesce(d.name::text,'(без подразделения)')" : "coalesce(r.name,'(не назначен)')";
-            string groupPos = dept ? "''::text" : "coalesce(jt.name::text,'')";
+            string groupId = bu ? "coalesce(e.emplbunit_company_sungero,0)"
+                           : dept ? "coalesce(e.department_company_sungero,0)"
+                           : "a.performer";
+            string groupNm = bu ? "coalesce(b.name::text,'(без организации)')"
+                           : dept ? "coalesce(d.name::text,'(без подразделения)')"
+                           : "coalesce(r.name,'(не назначен)')";
+            string groupPos = (dept || bu) ? "''::text" : "coalesce(jt.name::text,'')";
             string joins = "join sungero_wf_task t on t.id=a.task left join sungero_core_recipient r on r.id=a.performer";
             if (dept) joins += " left join sungero_core_recipient e on e.id=a.performer left join sungero_core_recipient d on d.id=e.department_company_sungero";
+            else if (bu) joins += " left join sungero_core_recipient e on e.id=a.performer left join sungero_core_recipient b on b.id=e.emplbunit_company_sungero";
             else joins += " left join sungero_company_jobtitle jt on jt.id=r.jobtitle_company_sungero";
             string sql =
                 $"select {groupId} gid, {groupNm} gname, {groupPos} gpos, " +
@@ -951,7 +961,7 @@ class Program
         }
         var items = groups.Select(kv => new
         {
-            id = kv.Key, name = kv.Value.name, position = kv.Value.pos, kind = dept ? "dept" : "performer",
+            id = kv.Key, name = kv.Value.name, position = kv.Value.pos, kind = bu ? "bu" : dept ? "dept" : "performer",
             inwork = kv.Value.inwork, overdue = kv.Value.overdue, exp7 = kv.Value.exp7,
             risk = kv.Value.overdue > 0,
             processes = Procs.Select(p => new {
@@ -963,7 +973,7 @@ class Program
         .Where(x => x.inwork > 0 || x.overdue > 0)   // не показываем пустые группы
         .OrderByDescending(x => x.overdue).ThenByDescending(x => x.inwork)
         .ToList();
-        return new { by = dept ? "dept" : "performer", items };
+        return new { by = bu ? "bu" : dept ? "dept" : "performer", items };
     }
 
     // ---------- /api/process/workload (C. Загрузка исполнителей) ----------

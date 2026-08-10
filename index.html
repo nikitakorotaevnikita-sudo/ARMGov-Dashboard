@@ -105,7 +105,7 @@ a{color:var(--accent)}
 .ld-row{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:6px 0;border-top:1px dashed var(--border)}
 .ld-row .l{font-size:12.5px;color:var(--text)} .ld-row .c{font-weight:800;color:var(--navy);font-size:14px;min-width:40px;text-align:right}
 .ld-row .o{font-size:11.5px;font-weight:800;min-width:70px;text-align:right}
-.ld-row .o.r{color:var(--red)} .ld-row .o.g{color:var(--green)} .ld-row .o.a{color:var(--amber)}
+.ld-row .o.r{color:var(--red)} .ld-row .o.g{color:var(--green)} .ld-row .o.a{color:var(--amber)} .ld-row .o.m{color:var(--muted)}
 .ld-foot{margin-top:11px;display:flex;justify-content:space-between;align-items:center}
 .ld-pill{font-size:11.5px;font-weight:800;padding:4px 10px;border-radius:999px}
 .ld-pill.risk{background:#FBE9E9;color:var(--red)} .ld-pill.ok{background:#E6F4EA;color:var(--green)}
@@ -693,7 +693,7 @@ function renderLeaderTasks(){
     var coHtml='';
     if(t.co&&t.co.total>0){
       var rows=t.co.items.map(function(z){
-        var cls=z.state==='просрочено'?'r':(z.state==='в работе'?'a':'g');
+        var cls=z.state==='просрочено'?'r':(z.state==='в работе'?'a':(z.state==='задания нет'?'m':'g'));
         return '<div class="ld-row"><span class="l">'+esc(z.name)+' <span class="subtle">'+esc(z.role)+'</span></span>'+
                '<span class="o '+cls+'">'+esc(z.state)+(z.deadline?' · '+esc(z.deadline):'')+'</span></div>';
       }).join('');

@@ -607,13 +607,18 @@ class Program
             " max(case when a.status::text='InProcess' and a.deadline is not null and a.deadline<now() then 3 " +
             "          when a.status::text='InProcess' then 2 " +
             "          when a.id is null then 1 else 0 end) st, " +
-            " min(a.deadline) dl " +
+            " min(a.deadline) filter (where a.status::text='InProcess') as dl " +
             "from parts p " +
             "left join sungero_core_recipient rc on rc.id=p.person " +
-            "left join sungero_wf_task ct on ct.maintask=p.head " +
-            $"left join sungero_wf_assignment a on a.task=ct.id and a.performer=p.person{NoticeNotIn} " +
+            // Джойн напрямую по дереву заданий поручения (a.maintask=p.head), а не через промежуточную
+            // sungero_wf_task ct — иначе left join по каждой задаче дерева размножал строки до агрегации:
+            // на задаче без задания у человека получалась строка a.id is null (ранг «задания нет»), которая
+            // побивала max() даже когда в других задачах дерева у него было Completed-задание (ранг «закрыто»
+            // недостижим). a.maintask уже указывает на головную задачу напрямую, под него есть индекс
+            // idx_assignment_maintask_performer(maintask, performer).
+            $"left join sungero_wf_assignment a on a.maintask=p.head and a.performer=p.person{NoticeNotIn} " +
             "where p.person is not null and p.person<>@me " +
-            "group by p.head, rc.name order by p.head, 4 desc, 2";
+            "group by p.head, p.person, rc.name order by p.head, 4 desc, 2";
         using var cmd = new NpgsqlCommand(sql, c);
         cmd.Parameters.AddWithValue("me", excludePerson);
         using var r = cmd.ExecuteReader();

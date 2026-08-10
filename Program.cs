@@ -1033,18 +1033,44 @@ class Program
                 groups[gid] = g;
             }
         }
+        // Просрочка у соисполнителей по поручениям, где участвует сам сотрудник.
+        // Считается только для разреза по людям. Связь заданий с поручением — через
+        // sungero_wf_assignment.maintask (колонка заполнена всегда), без join по задачам.
+        var coOverdue = new Dictionary<long, int>();
+        if (!dept && !bu)
+        {
+            string sql2 =
+                "with my as (select distinct a.performer as me, a.maintask as head " +
+                " from sungero_wf_assignment a " +
+                $" where a.performer is not null and a.maintask is not null{NoticeNotIn}), " +
+                "parts as (select task as head, assignee as person from sungero_recman_taicoassignees " +
+                " union all select task as head, coassignee as person from sungero_recman_taipartscoasgs " +
+                " union all select task as head, assignee as person from sungero_recman_taiparts), " +
+                "co as (select m.me as me, p.head as head, p.person as person, " +
+                "  max(case when a.status::text='InProcess' and a.deadline is not null and a.deadline<now() then 1 else 0 end) as ov " +
+                " from my m " +
+                " join parts p on p.head=m.head and p.person is not null and p.person<>m.me " +
+                $" left join sungero_wf_assignment a on a.maintask=p.head and a.performer=p.person{NoticeNotIn} " +
+                " group by m.me, p.head, p.person) " +
+                "select me, sum(ov)::bigint as total from co group by me";
+            using var cmd2 = new NpgsqlCommand(sql2, c);
+            cmd2.CommandTimeout = 120;
+            using var r2 = cmd2.ExecuteReader();
+            while (r2.Read()) coOverdue[r2.GetInt64(0)] = (int)r2.GetInt64(1);
+        }
         var items = groups.Select(kv => new
         {
             id = kv.Key, name = kv.Value.name, position = kv.Value.pos, kind = bu ? "bu" : dept ? "dept" : "performer",
             inwork = kv.Value.inwork, overdue = kv.Value.overdue, exp7 = kv.Value.exp7,
-            risk = kv.Value.overdue > 0,
+            coOverdue = coOverdue.TryGetValue(kv.Key, out var cov) ? cov : 0,
+            risk = kv.Value.overdue > 0 || (coOverdue.TryGetValue(kv.Key, out var cov2) ? cov2 : 0) > 0,
             processes = Procs.Select(p => new {
                 key = p.Key, name = p.Name,
                 inwork = kv.Value.procs.TryGetValue(p.Key, out var x) ? x.inwork : 0,
                 overdue = kv.Value.procs.TryGetValue(p.Key, out var y) ? y.overdue : 0
             }).ToList()
         })
-        .Where(x => x.inwork > 0 || x.overdue > 0)   // не показываем пустые группы
+        .Where(x => x.inwork > 0 || x.overdue > 0 || x.coOverdue > 0)   // не показываем пустые группы; coOverdue тоже повод показать
         .OrderByDescending(x => x.overdue).ThenByDescending(x => x.inwork)
         .ToList();
         return new { by = bu ? "bu" : dept ? "dept" : "performer", items };

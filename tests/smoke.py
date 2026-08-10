@@ -138,6 +138,37 @@ for what in ["overdue", "workload", "departments"]:
     except Exception as e:
         check(f"export {what}", False, str(e))
 
+# ---------------- СОИСПОЛНИТЕЛИ: просрочка у соисполнителей (лидеры) ----------------
+section("Просрочка у соисполнителей  /api/leaders, /api/leader/tasks")
+first_perf_id = None
+try:
+    st, j = _req("/api/leaders?by=bu")
+    check("by=bu отвечает и by='bu'", st == 200 and j.get("by") == "bu")
+    items_bu = j.get("items", [])
+    check("items непусто", len(items_bu) > 0)
+    check("coOverdue — целое число у каждого элемента", all(isinstance(x.get("coOverdue"), int) for x in items_bu))
+except Exception as e:
+    check("leaders by=bu", False, str(e))
+
+try:
+    st, j = _req("/api/leaders?by=performer")
+    items_perf = j.get("items", [])
+    check("в разрезе performer есть сотрудник с coOverdue>0", any(x.get("coOverdue", 0) > 0 for x in items_perf))
+    if items_perf: first_perf_id = items_perf[0].get("id")
+except Exception as e:
+    check("leaders by=performer (coOverdue>0)", False, str(e))
+
+if first_perf_id is not None:
+    try:
+        st, j = _req(f"/api/leader/tasks?by=performer&id={first_perf_id}")
+        lt_items = j.get("items", [])
+        check("leader/tasks отвечает списком", st == 200 and isinstance(lt_items, list))
+        check("co.total — целое число у каждого элемента", all(isinstance(x.get("co", {}).get("total"), int) for x in lt_items))
+    except Exception as e:
+        check("leader/tasks", False, str(e))
+else:
+    check("leader/tasks (нет id для проверки)", False)
+
 # ---------------- ИИ (ПРОВЕРИТЬ В ПОНЕДЕЛЬНИК) ----------------
 section("ИИ-функциональность  (LLM Ario; проверять в ПОНЕДЕЛЬНИК)")
 def ai_check(name, path, method="GET", body=None):

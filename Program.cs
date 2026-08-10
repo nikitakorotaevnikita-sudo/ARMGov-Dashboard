@@ -534,19 +534,24 @@ class Program
             { nc.Parameters.AddWithValue("id", gid); var o = nc.ExecuteScalar(); name = o == null || o is DBNull ? "" : o.ToString(); }
         }
 
-        var items = new List<object>();
+        // Первый проход: читаем строки задания как есть и запоминаем головную задачу поручения
+        // (maintask; если пусто — сама задача). Финальные элементы (с полем co) собираем во втором
+        // проходе, когда головные id всех строк уже известны и участники получены одним запросом —
+        // так поле co добавляется сразу при создании анонимного объекта, без хрупкой пересборки.
+        var raw = new List<(long aid, string subj, string disc, DateTime? dl, long taskId, string tdisc, string perf, string summ, string execst, long head)>();
+        var heads = new List<long>();
+        var seenHeads = new HashSet<long>();
         using (var cmd = new NpgsqlCommand(
             "select a.id, coalesce(nullif(a.subject::text,''),'(без темы)') subj, a.discriminator::text disc, a.deadline, a.task, " +
             "t.discriminator::text tdisc, coalesce(r.name,'(не назначен)') perf, " +
             "coalesce(nullif(t.actionitemtai_recman_sungero::text,''),'') summary, " +
-            "coalesce(t.executionstate_recman_sungero::text,'') execstate " +
+            "coalesce(t.executionstate_recman_sungero::text,'') execstate, t.maintask " +
             $"from sungero_wf_assignment a {joins} " +
             $"where {procUnion}{NoticeNotIn} and {filter} and a.status::text='InProcess' and a.performer is not null " +
             "order by case when a.deadline is not null and a.deadline<now() then 0 when a.deadline is not null then 1 else 2 end, a.deadline asc limit 50", c))
         {
             cmd.Parameters.AddWithValue("id", gid);
             using var r = cmd.ExecuteReader();
-            var now = DateTime.Now;
             while (r.Read())
             {
                 long aid = r.GetInt64(0); string subj = r.GetString(1);
@@ -555,14 +560,78 @@ class Program
                 long taskId = r.GetInt64(4); string tdisc = r.IsDBNull(5) ? null : r.GetString(5);
                 string perf = r.GetString(6);
                 string summ = r.GetString(7); string execst = r.GetString(8);
-                bool ov = dl.HasValue && dl.Value < now;
-                string dueKind, dueLabel;
-                if (!dl.HasValue) { dueKind = "none"; dueLabel = "без срока"; }
-                else { int days = (int)Math.Round(Math.Abs((dl.Value - now).TotalDays)); dueKind = ov ? "overdue" : "soon"; dueLabel = ov ? ("просрочено на " + days + " дн") : ("срок через " + days + " дн"); }
-                items.Add(new { id = aid, subject = subj, stage = StageName(disc, 0), process = ProcNameByDisc(tdisc), deadline = dl?.ToString("yyyy-MM-dd"), overdue = ov, dueKind, dueLabel, rxLink = RxTaskLink(taskId, tdisc), performer = perf, summary = string.IsNullOrEmpty(summ) ? subj : summ, execState = ExecStateName(execst) });
+                long maintask = r.IsDBNull(9) ? 0 : r.GetInt64(9);
+                long head = maintask != 0 ? maintask : taskId;
+                raw.Add((aid, subj, disc, dl, taskId, tdisc, perf, summ, execst, head));
+                if (seenHeads.Add(head)) heads.Add(head);
             }
         }
+
+        long excludePerson = (dept || bu) ? 0L : gid;
+        var coMap = CoExecutors(c, heads, excludePerson);
+
+        var items = new List<object>();
+        var now = DateTime.Now;
+        foreach (var row in raw)
+        {
+            bool ov = row.dl.HasValue && row.dl.Value < now;
+            string dueKind, dueLabel;
+            if (!row.dl.HasValue) { dueKind = "none"; dueLabel = "без срока"; }
+            else { int days = (int)Math.Round(Math.Abs((row.dl.Value - now).TotalDays)); dueKind = ov ? "overdue" : "soon"; dueLabel = ov ? ("просрочено на " + days + " дн") : ("срок через " + days + " дн"); }
+            coMap.TryGetValue(row.head, out var coItems);
+            coItems ??= new List<object>();
+            int coOverdue = 0;
+            foreach (var ci in coItems) if (((dynamic)ci).state == "просрочено") coOverdue++;
+            items.Add(new { id = row.aid, subject = row.subj, stage = StageName(row.disc, 0), process = ProcNameByDisc(row.tdisc), deadline = row.dl?.ToString("yyyy-MM-dd"), overdue = ov, dueKind, dueLabel, rxLink = RxTaskLink(row.taskId, row.tdisc), performer = row.perf, summary = string.IsNullOrEmpty(row.summ) ? row.subj : row.summ, execState = ExecStateName(row.execst), co = new { total = coItems.Count, overdue = coOverdue, items = coItems } });
+        }
         return new { name, items };
+    }
+
+    // Участники поручения кроме самого пользователя: соисполнители поручения,
+    // соисполнители пунктов и исполнители других пунктов. Состояние — худшее из заданий.
+    static Dictionary<long, List<object>> CoExecutors(NpgsqlConnection c, List<long> headIds, long excludePerson)
+    {
+        var res = new Dictionary<long, List<object>>();
+        if (headIds.Count == 0) return res;
+        string ids = string.Join(",", headIds);
+        // Примечание: "role" — неоднозначное для парсера PostgreSQL слово в позиции неявного
+        // алиаса без AS (в этом месте грамматики оно вызывает syntax error, хотя формально
+        // не входит в список reserved keywords). Добавлен явный AS перед каждым использованием.
+        string sql =
+            "with parts as (" +
+            $" select task head, assignee person, 'соисполнитель поручения' as role from sungero_recman_taicoassignees where task in ({ids})" +
+            $" union all select task, coassignee, 'соисполнитель пункта' from sungero_recman_taipartscoasgs where task in ({ids})" +
+            $" union all select task, assignee, 'исполнитель пункта' from sungero_recman_taiparts where task in ({ids})" +
+            ") " +
+            "select p.head, coalesce(rc.name,'(не назначен)') nm, min(p.role) as role, " +
+            " max(case when a.status::text='InProcess' and a.deadline is not null and a.deadline<now() then 3 " +
+            "          when a.status::text='InProcess' then 2 " +
+            "          when a.id is null then 1 else 0 end) st, " +
+            " min(a.deadline) dl " +
+            "from parts p " +
+            "left join sungero_core_recipient rc on rc.id=p.person " +
+            "left join sungero_wf_task ct on ct.maintask=p.head " +
+            $"left join sungero_wf_assignment a on a.task=ct.id and a.performer=p.person{NoticeNotIn} " +
+            "where p.person is not null and p.person<>@me " +
+            "group by p.head, rc.name order by p.head, 4 desc, 2";
+        using var cmd = new NpgsqlCommand(sql, c);
+        cmd.Parameters.AddWithValue("me", excludePerson);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            long head = r.GetInt64(0);
+            int st = (int)r.GetInt64(3);
+            string state = st == 3 ? "просрочено" : st == 2 ? "в работе" : st == 1 ? "задания нет" : "закрыто";
+            if (!res.TryGetValue(head, out var list)) { list = new List<object>(); res[head] = list; }
+            list.Add(new
+            {
+                name = r.GetString(1),
+                role = r.GetString(2),
+                state,
+                deadline = r.IsDBNull(4) ? "" : r.GetDateTime(4).ToString("yyyy-MM-dd")
+            });
+        }
+        return res;
     }
 
     static object BuildProcess(string key, string period = null)

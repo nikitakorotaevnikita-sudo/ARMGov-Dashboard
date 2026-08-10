@@ -105,7 +105,7 @@ a{color:var(--accent)}
 .ld-row{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:6px 0;border-top:1px dashed var(--border)}
 .ld-row .l{font-size:12.5px;color:var(--text)} .ld-row .c{font-weight:800;color:var(--navy);font-size:14px;min-width:40px;text-align:right}
 .ld-row .o{font-size:11.5px;font-weight:800;min-width:70px;text-align:right}
-.ld-row .o.r{color:var(--red)} .ld-row .o.g{color:var(--green)}
+.ld-row .o.r{color:var(--red)} .ld-row .o.g{color:var(--green)} .ld-row .o.a{color:var(--amber)}
 .ld-foot{margin-top:11px;display:flex;justify-content:space-between;align-items:center}
 .ld-pill{font-size:11.5px;font-weight:800;padding:4px 10px;border-radius:999px}
 .ld-pill.risk{background:#FBE9E9;color:var(--red)} .ld-pill.ok{background:#E6F4EA;color:var(--green)}
@@ -690,6 +690,17 @@ function renderLeaderTasks(){
     var col=t.dueKind==='overdue'?'var(--red)':t.dueKind==='soon'?'var(--amber)':'var(--muted)';
     var stateLbl=t.overdue?'Просрочено':'В работе';
     var stateCol=t.overdue?'var(--red)':'var(--accent)';
+    var coHtml='';
+    if(t.co&&t.co.total>0){
+      var rows=t.co.items.map(function(z){
+        var cls=z.state==='просрочено'?'r':(z.state==='в работе'?'a':'g');
+        return '<div class="ld-row"><span class="l">'+esc(z.name)+' <span class="subtle">'+esc(z.role)+'</span></span>'+
+               '<span class="o '+cls+'">'+esc(z.state)+(z.deadline?' · '+esc(z.deadline):'')+'</span></div>';
+      }).join('');
+      coHtml='<details style="margin-top:6px"><summary class="subtle" style="cursor:pointer;font-size:12px">'+
+        'Соисполнители: '+t.co.total+(t.co.overdue>0?' · <b style="color:var(--red)">просрочено '+t.co.overdue+'</b>':' · в норме')+
+        '</summary><div style="margin-top:4px">'+rows+'</div></details>';
+    }
     return '<div class="listrow" style="display:flex;gap:12px;align-items:flex-start;padding:10px 2px;border-bottom:1px solid var(--border)">'+
       '<div style="flex:1;min-width:0">'+
         '<div style="font-weight:700;color:var(--navy);font-size:13.5px;line-height:1.3">'+esc(t.summary||t.subject)+'</div>'+
@@ -699,6 +710,7 @@ function renderLeaderTasks(){
           '<span style="color:'+col+'">'+esc(t.dueLabel)+'</span>'+
           (t.process?'<span>'+esc(t.process)+'</span>':'')+
         '</div>'+
+        coHtml+
       '</div>'+
       '<button class="'+(on?'btn':'btn-ghost')+'" style="flex:none" onclick="togglePinObjById('+t.id+')">'+(on?'📌 на контроле':'📌 закрепить')+'</button></div>';
   }).join('');

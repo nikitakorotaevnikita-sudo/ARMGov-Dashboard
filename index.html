@@ -619,7 +619,7 @@ function leaderCard(x,by){
     '<div class="ld-h">'+av+'<div><div class="ld-nm">'+esc(x.name)+'</div>'+(x.position?'<div class="subtle" style="font-size:12px;margin-top:2px">'+esc(x.position)+'</div>':'')+'</div></div>'+
     procRows+
     '<div class="ld-foot">'+(x.risk?'<span class="ld-pill risk">⚠ Под риском</span>':'<span class="ld-pill ok">✓ в норме</span>')+
-    (x.coOverdue>0?'<span class="ld-pill risk" title="Просрочено у соисполнителей по поручениям, где сотрудник — ответственный исполнитель">👥 соисп. '+x.coOverdue+'</span>':'')+
+    (x.coOverdue>0?'<span class="ld-pill risk" title="Сколько соисполнителей просрочили работу по поручениям, где у сотрудника есть активное задание">👥 соисп. '+x.coOverdue+'</span>':'')+
     '<span class="ld-exp">истекает 7 дн: '+x.exp7+'</span></div></div>';
 }
 function renderLeaders(){

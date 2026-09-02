@@ -9,6 +9,7 @@ using System.Net.Http;
 using System.Runtime.Loader;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using Npgsql;
 
 // ARMGov standalone dashboard (MVP, redesign) — read-only viewer over DRX DB.
@@ -33,7 +34,15 @@ class Program
     static string LlmUrl => Conf.Llm.Url;
     static string LlmModel => Conf.Llm.Model;
     static string LlmToken => Conf.Llm.Token;
-    static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromSeconds(150) };
+    static readonly HttpClient Http = CreateHttp();
+    static HttpClient CreateHttp()
+    {
+        var c = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        c.DefaultRequestVersion = HttpVersion.Version11;
+        c.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+        c.DefaultRequestHeaders.ExpectContinue = false;
+        return c;
+    }
 
     // ---------- конфигурация ----------
     public class AppConfig
@@ -53,8 +62,86 @@ class Program
         public string ActiveProfile { get; set; } = "Руководитель";
         public List<Profile> Profiles { get; set; } = DefaultProfiles();
     }
-    public class DbCfg { public string Host { get; set; } = "192.168.52.18"; public string Port { get; set; } = "5432"; public string Database { get; set; } = "DirRX412OGVGenAI"; public string Username { get; set; } = "admin"; public string Password { get; set; } = ""; }
-    public class LlmCfg { public string Url { get; set; } = "https://llm.ario.directum360.ru/v1/chat/completions"; public string Model { get; set; } = "Qwen/Qwen3.6-35B-A3B"; public string Token { get; set; } = ""; }
+    public class DbCfg { public string Host { get; set; } = "192.168.52.18"; public string Port { get; set; } = "5432"; public string Database { get; set; } = "Polud"; public string Username { get; set; } = "admin"; public string Password { get; set; } = ""; }
+    public const string LlmQwenId = "qwen";
+    public const string LlmGigaId = "gigachat";
+    public const string LlmQwenUrl = "https://llm.ario.directum360.ru/v1/chat/completions";
+    public const string LlmQwenModel = "Qwen/Qwen3.8-27B";
+    public const string LlmGigaUrl = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions";
+    public const string LlmGigaModel = "GigaChat-2";
+    public class LlmCfg
+    {
+        public string Active { get; set; } = LlmQwenId;
+        public string Url { get; set; } = LlmQwenUrl;
+        public string Model { get; set; } = LlmQwenModel;
+        public string Token { get; set; } = "";
+        public string Scope { get; set; } = "";
+        public List<LlmPreset> Presets { get; set; } = DefaultLlmPresets();
+    }
+    public class LlmPreset
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string Url { get; set; } = "";
+        public string Model { get; set; } = "";
+        public string Token { get; set; } = "";
+        public string Scope { get; set; } = "";
+    }
+    static List<LlmPreset> DefaultLlmPresets() => new()
+    {
+        new LlmPreset { Id = LlmQwenId, Name = "Qwen 3.8 (Ario)", Url = LlmQwenUrl, Model = LlmQwenModel },
+        new LlmPreset { Id = LlmGigaId, Name = "GigaChat-2", Url = LlmGigaUrl, Model = LlmGigaModel, Scope = "GIGACHAT_API_CORP" }
+    };
+    static LlmPreset FindPreset(string id) =>
+        Conf.Llm.Presets?.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+    static void EnsureLlmPresets()
+    {
+        Conf.Llm ??= new LlmCfg();
+        Conf.Llm.Presets ??= new List<LlmPreset>();
+        foreach (var d in DefaultLlmPresets())
+        {
+            var p = FindPreset(d.Id);
+            if (p == null) Conf.Llm.Presets.Add(new LlmPreset { Id = d.Id, Name = d.Name, Url = d.Url, Model = d.Model, Scope = d.Scope });
+            else
+            {
+                if (string.IsNullOrWhiteSpace(p.Name)) p.Name = d.Name;
+                if (string.IsNullOrWhiteSpace(p.Url)) p.Url = d.Url;
+                if (string.IsNullOrWhiteSpace(p.Model)) p.Model = d.Model;
+                if (string.IsNullOrWhiteSpace(p.Scope)) p.Scope = d.Scope;
+            }
+        }
+        var inferred = IsGigaChat() ? LlmGigaId : LlmQwenId;
+        if (IsGigaChat()) Conf.Llm.Active = LlmGigaId;
+        else if (string.IsNullOrWhiteSpace(Conf.Llm.Active)) Conf.Llm.Active = LlmQwenId;
+        var cur = FindPreset(Conf.Llm.Active) ?? FindPreset(inferred);
+        if (cur != null)
+        {
+            if (!string.IsNullOrWhiteSpace(Conf.Llm.Url)) cur.Url = Conf.Llm.Url;
+            if (!string.IsNullOrWhiteSpace(Conf.Llm.Model)) cur.Model = Conf.Llm.Model;
+            if (!string.IsNullOrWhiteSpace(Conf.Llm.Token)) cur.Token = Conf.Llm.Token;
+            if (!string.IsNullOrWhiteSpace(Conf.Llm.Scope)) cur.Scope = Conf.Llm.Scope;
+        }
+    }
+    static void ApplyLlmPreset(string id)
+    {
+        var p = FindPreset(id);
+        if (p == null) return;
+        Conf.Llm.Active = p.Id;
+        Conf.Llm.Url = p.Url ?? "";
+        Conf.Llm.Model = p.Model ?? "";
+        Conf.Llm.Token = p.Token ?? "";
+        Conf.Llm.Scope = p.Scope ?? "";
+        InvalidateGigaChatToken();
+    }
+    static void SyncLlmIntoPreset(string id)
+    {
+        var p = FindPreset(id);
+        if (p == null) return;
+        if (!string.IsNullOrWhiteSpace(Conf.Llm.Url)) p.Url = Conf.Llm.Url;
+        if (!string.IsNullOrWhiteSpace(Conf.Llm.Model)) p.Model = Conf.Llm.Model;
+        if (!string.IsNullOrWhiteSpace(Conf.Llm.Token)) p.Token = Conf.Llm.Token;
+        if (!string.IsNullOrWhiteSpace(Conf.Llm.Scope)) p.Scope = Conf.Llm.Scope;
+    }
     public class Thresholds { public int ThroughputRed { get; set; } = 50; public int ThroughputAmber { get; set; } = 75; public int LongRunnerDays { get; set; } = 3; }
     public class Profile { public string Name { get; set; } = ""; public List<string> Overview { get; set; } = new(); public List<string> Process { get; set; } = new(); }
     // Ключи блоков: overview = throughput|bottleneck|longrunners|burning|svetofor
@@ -79,6 +166,7 @@ class Program
         var pw = Environment.GetEnvironmentVariable("ARMGOV_DB_PASSWORD"); if (!string.IsNullOrEmpty(pw)) c.Db.Password = pw;
         var tk = Environment.GetEnvironmentVariable("ARMGOV_LLM_TOKEN"); if (!string.IsNullOrEmpty(tk)) c.Llm.Token = tk;
         Conf = c;
+        EnsureLlmPresets();
     }
     static void SaveConfig() => File.WriteAllText(CfgPath, JsonSerializer.Serialize(Conf, JsonCfg));
 
@@ -96,7 +184,9 @@ class Program
         activeProfile = Conf.ActiveProfile,
         profiles = Conf.Profiles,
         chatPrompts = Conf.ChatPrompts,
-        thresholds = Conf.Thresholds
+        thresholds = Conf.Thresholds,
+        llmName = FindPreset(Conf.Llm.Active)?.Name ?? Conf.Llm.Model,
+        llmModel = Conf.Llm.Model
     };
 
     // Определения процессов: ключ -> (имя, SQL-условие отбора задач t.*)
@@ -177,8 +267,11 @@ class Program
         {
             HttpListenerContext ctx = null;
             try { ctx = l.GetContext(); } catch { break; }
-            try { Handle(ctx); }
-            catch (Exception ex) { try { Write(ctx, 500, "application/json", "{\"error\":" + JsonSerializer.Serialize(ex.Message) + "}"); } catch { } }
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { Handle(ctx); }
+                catch (Exception ex) { try { Write(ctx, 500, "application/json", "{\"error\":" + JsonSerializer.Serialize(ex.Message) + "}"); } catch { } }
+            });
         }
     }
 
@@ -1487,7 +1580,23 @@ class Program
         prefix = Conf.Prefix,
         rxBase = Conf.RxBase,
         db = new { Conf.Db.Host, Conf.Db.Port, Conf.Db.Database, Conf.Db.Username, hasPassword = !string.IsNullOrEmpty(Conf.Db.Password) },
-        llm = new { Conf.Llm.Url, Conf.Llm.Model, hasToken = !string.IsNullOrEmpty(Conf.Llm.Token) },
+        llm = new
+        {
+            active = Conf.Llm.Active,
+            url = Conf.Llm.Url,
+            model = Conf.Llm.Model,
+            scope = Conf.Llm.Scope,
+            hasToken = !string.IsNullOrEmpty(Conf.Llm.Token),
+            presets = (Conf.Llm.Presets ?? new List<LlmPreset>()).Select(p => new
+            {
+                id = p.Id,
+                name = p.Name,
+                url = p.Url,
+                model = p.Model,
+                scope = p.Scope,
+                hasToken = !string.IsNullOrEmpty(p.Token)
+            }).ToList()
+        },
         thresholds = Conf.Thresholds,
         chatPrompts = Conf.ChatPrompts,
         activeProfile = Conf.ActiveProfile,
@@ -1499,18 +1608,34 @@ class Program
         {
             using var doc = JsonDocument.Parse(body); var r = doc.RootElement;
             string S(JsonElement e, string name, string cur) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : cur;
-            Conf.Prefix = S(r, "prefix", Conf.Prefix);
-            Conf.RxBase = S(r, "rxBase", Conf.RxBase);
+            string Keep(JsonElement e, string name, string cur)
+            {
+                var s = S(e, name, null);
+                return string.IsNullOrWhiteSpace(s) ? cur : s;
+            }
+            Conf.Prefix = Keep(r, "prefix", Conf.Prefix);
+            Conf.RxBase = Keep(r, "rxBase", Conf.RxBase);
             if (r.TryGetProperty("db", out var db))
             {
-                Conf.Db.Host = S(db, "host", Conf.Db.Host); Conf.Db.Port = S(db, "port", Conf.Db.Port);
-                Conf.Db.Database = S(db, "database", Conf.Db.Database); Conf.Db.Username = S(db, "username", Conf.Db.Username);
+                Conf.Db.Host = Keep(db, "host", Conf.Db.Host); Conf.Db.Port = Keep(db, "port", Conf.Db.Port);
+                Conf.Db.Database = Keep(db, "database", Conf.Db.Database); Conf.Db.Username = Keep(db, "username", Conf.Db.Username);
                 var np = S(db, "password", ""); if (!string.IsNullOrEmpty(np)) Conf.Db.Password = np;   // пусто = не менять
             }
             if (r.TryGetProperty("llm", out var llm))
             {
-                Conf.Llm.Url = S(llm, "url", Conf.Llm.Url); Conf.Llm.Model = S(llm, "model", Conf.Llm.Model);
-                var nt = S(llm, "token", ""); if (!string.IsNullOrEmpty(nt)) Conf.Llm.Token = nt;          // пусто = не менять
+                EnsureLlmPresets();
+                var prevActive = string.IsNullOrWhiteSpace(Conf.Llm.Active) ? LlmQwenId : Conf.Llm.Active;
+                Conf.Llm.Url = Keep(llm, "url", Conf.Llm.Url);
+                Conf.Llm.Model = Keep(llm, "model", Conf.Llm.Model);
+                Conf.Llm.Scope = Keep(llm, "scope", Conf.Llm.Scope);
+                var nt = S(llm, "token", ""); if (!string.IsNullOrEmpty(nt)) Conf.Llm.Token = nt;
+                SyncLlmIntoPreset(prevActive);
+                var nextActive = Keep(llm, "active", prevActive);
+                if (!string.Equals(nextActive, prevActive, StringComparison.OrdinalIgnoreCase))
+                    ApplyLlmPreset(nextActive);
+                else
+                    SyncLlmIntoPreset(Conf.Llm.Active);
+                InvalidateGigaChatToken();
             }
             if (r.TryGetProperty("activeProfile", out var ap) && ap.ValueKind == JsonValueKind.String) Conf.ActiveProfile = ap.GetString();
             if (r.TryGetProperty("thresholds", out var th) && th.ValueKind == JsonValueKind.Object) Conf.Thresholds = th.Deserialize<Thresholds>(JsonCfg) ?? Conf.Thresholds;
@@ -1527,7 +1652,7 @@ class Program
         object dbres, llmres;
         try { using var c = new NpgsqlConnection(Cs); c.Open(); using var cmd = new NpgsqlCommand("select 1", c); cmd.ExecuteScalar(); dbres = new { ok = true }; }
         catch (Exception ex) { dbres = new { ok = false, error = ex.Message.Split('\n')[0] }; }
-        try { LlmChat(new object[] { new { role = "user", content = "ping" } }, 5, 0); llmres = new { ok = true }; }
+        try { LlmChat(new object[] { new { role = "user", content = "ping" } }, 16, 0); llmres = new { ok = true }; }
         catch (Exception ex) { llmres = new { ok = false, error = ex.Message.Split('\n')[0] }; }
         return new { db = dbres, llm = llmres };
     }
@@ -1539,18 +1664,91 @@ class Program
         return sr.ReadToEnd();
     }
 
-    // Вызов LLM (OpenAI chat/completions). messages: массив {role,content}. Бросает при ошибке.
-    static string LlmChat(object[] messages, int maxTokens, double temperature)
+    static bool IsGigaChat()
     {
-        var body = new { model = LlmModel, messages, max_tokens = maxTokens, temperature };
+        var u = LlmUrl ?? "";
+        var m = LlmModel ?? "";
+        return u.IndexOf("giga.chat", StringComparison.OrdinalIgnoreCase) >= 0
+            || u.IndexOf("gigachat", StringComparison.OrdinalIgnoreCase) >= 0
+            || m.StartsWith("GigaChat", StringComparison.OrdinalIgnoreCase);
+    }
+    static readonly object _gcTokLock = new();
+    static string _gcAccess;
+    static DateTime _gcAccessUntil = DateTime.MinValue;
+    static void InvalidateGigaChatToken()
+    {
+        lock (_gcTokLock) { _gcAccess = null; _gcAccessUntil = DateTime.MinValue; }
+    }
+    static string LlmGigaAccess()
+    {
+        lock (_gcTokLock)
+        {
+            if (!string.IsNullOrEmpty(_gcAccess) && DateTime.UtcNow < _gcAccessUntil) return _gcAccess;
+            Console.WriteLine("GigaChat: requesting access token...");
+            var key = (LlmToken ?? "").Trim();
+            if (key.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)) key = key.Substring(6).Trim();
+            var scopes = new List<string>();
+            var cfg = string.IsNullOrWhiteSpace(Conf.Llm.Scope) ? "GIGACHAT_API_CORP" : Conf.Llm.Scope.Trim();
+            scopes.Add(cfg);
+            foreach (var s in new[] { "GIGACHAT_API_CORP", "GIGACHAT_API_B2B", "GIGACHAT_API_PERS" })
+                if (!scopes.Exists(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase))) scopes.Add(s);
+            Exception last = null;
+            foreach (var scope in scopes)
+            {
+                try
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Post, "https://ngw.devices.sberbank.ru:9443/api/v2/oauth");
+                    req.Headers.TryAddWithoutValidation("Authorization", "Basic " + key);
+                    req.Headers.TryAddWithoutValidation("RqUID", Guid.NewGuid().ToString());
+                    req.Headers.TryAddWithoutValidation("Accept", "application/json");
+                    req.Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["scope"] = scope });
+                    using var resp = Http.Send(req);
+                    var txt = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    Console.WriteLine("GigaChat OAuth " + scope + " -> " + (int)resp.StatusCode);
+                    if (!resp.IsSuccessStatusCode) { last = new Exception("GigaChat OAuth HTTP " + (int)resp.StatusCode + ": " + Trunc(txt, 200)); continue; }
+                    using var doc = JsonDocument.Parse(txt);
+                    var token = doc.RootElement.GetProperty("access_token").GetString();
+                    var exp = doc.RootElement.TryGetProperty("expires_at", out var expEl) && expEl.ValueKind == JsonValueKind.Number ? expEl.GetInt64() : 0;
+                    DateTime until;
+                    if (exp > 10_000_000_000L) until = DateTimeOffset.FromUnixTimeMilliseconds(exp).UtcDateTime;
+                    else if (exp > 0) until = DateTimeOffset.FromUnixTimeSeconds(exp).UtcDateTime;
+                    else until = DateTime.UtcNow.AddMinutes(25);
+                    _gcAccess = token;
+                    _gcAccessUntil = until.AddMinutes(-1);
+                    return token;
+                }
+                catch (Exception ex) { last = ex; }
+            }
+            throw last ?? new Exception("GigaChat OAuth failed");
+        }
+    }
+
+    // Вызов LLM (OpenAI chat/completions). messages: массив {role,content}. Бросает при ошибке.
+    // Для Qwen 3.x выключаем thinking. Для GigaChat ключ в config — Authorization key: сначала OAuth, потом Bearer.
+    static string LlmChat(object[] messages, int maxTokens, double temperature) => LlmChatCore(messages, maxTokens, temperature, true);
+    static string LlmChatCore(object[] messages, int maxTokens, double temperature, bool retryOn401)
+    {
+        object body = IsGigaChat()
+            ? new { model = LlmModel, messages, max_tokens = maxTokens, temperature }
+            : (object)new { model = LlmModel, messages, max_tokens = maxTokens, temperature, chat_template_kwargs = new { enable_thinking = false } };
+        var bearer = IsGigaChat() ? LlmGigaAccess() : LlmToken;
         using var req = new HttpRequestMessage(HttpMethod.Post, LlmUrl);
-        req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + LlmToken);
+        req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + bearer);
         req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         using var resp = Http.Send(req);
         var txt = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        if ((int)resp.StatusCode == 401 && retryOn401 && IsGigaChat())
+        {
+            InvalidateGigaChatToken();
+            return LlmChatCore(messages, maxTokens, temperature, false);
+        }
         if (!resp.IsSuccessStatusCode) throw new Exception("LLM HTTP " + (int)resp.StatusCode + ": " + Trunc(txt, 300));
         using var doc = JsonDocument.Parse(txt);
-        return doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+        var msg = doc.RootElement.GetProperty("choices")[0].GetProperty("message");
+        var content = msg.TryGetProperty("content", out var cEl) && cEl.ValueKind == JsonValueKind.String ? cEl.GetString() : null;
+        if (string.IsNullOrWhiteSpace(content) && msg.TryGetProperty("reasoning_content", out var rEl) && rEl.ValueKind == JsonValueKind.String)
+            content = rEl.GetString();
+        return content ?? "";
     }
     static string Trunc(string s, int n) => s != null && s.Length > n ? s.Substring(0, n) + "…" : s;
 

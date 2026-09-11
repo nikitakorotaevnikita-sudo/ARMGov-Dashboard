@@ -24,10 +24,10 @@
 .ti-heartbeat:before{content:"\ef92"}
 
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--page);color:var(--text);font-size:13px;
+body{background:#FFFFFF;color:var(--text);font-size:13px;
   font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,system-ui,"Helvetica Neue",Arial,sans-serif;
   -webkit-font-smoothing:antialiased}
-.wrap{padding:20px;max-width:1440px;margin:0 auto}
+.wrap{padding:20px;width:100%}
 
 /* кнопки */
 .tbtn{display:inline-flex;align-items:center;gap:6px;background:#EAF1FA;border:1px solid #BCD3EE;color:#1A73E8;border-radius:4px;padding:7px 12px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
@@ -76,9 +76,11 @@ body{background:var(--page);color:var(--text);font-size:13px;
 .arme-c:hover{box-shadow:0 2px 10px rgba(20,40,70,.10)}
 .arme-h{display:flex;gap:10px;align-items:center;margin-bottom:9px}
 .arme-ph{width:38px;height:38px;border-radius:8px;object-fit:cover;flex:none;background:#eef1f5}
-.arme-nm{font-size:13px;font-weight:700;color:var(--text);line-height:1.2}
+.arme-nm{font-size:13px;font-weight:600;color:var(--text);line-height:1.2}
 .arme-pos{font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.arme-r{display:flex;align-items:baseline;gap:8px;padding:3px 0;font-size:12px}
+.arme-r{display:flex;align-items:baseline;gap:8px;margin:0 -7px;padding:3px 7px;border-radius:4px;font-size:12px;cursor:pointer}
+.arme-r:hover{background:var(--soft)}
+.arme-r:hover .l{color:var(--text)}
 .arme-r .l{color:var(--muted);flex:1;min-width:0}
 .arme-r .c{font-weight:700;font-variant-numeric:tabular-nums;color:var(--text)}
 .arme-r .c.r{color:var(--red)} .arme-r .c.a{color:var(--amber)}
@@ -86,9 +88,7 @@ body{background:var(--page);color:var(--text);font-size:13px;
 .arme-tag{font-size:10.5px;border-radius:11px;padding:2px 9px}
 .arme-tag.ok{background:#e9f5ea;color:#2e7d32}
 .arme-tag.bad{background:#fdeceb;color:#c0392b}
-.arme-lnk{margin-left:auto;font-size:11.5px;color:var(--link)}
 .arme-none{padding:26px;text-align:center;color:var(--hint);font-size:13px}
-.arme-c:hover .arme-lnk{text-decoration:underline}
 
 .armt-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:-2px 0 8px}
 .armt-tab{font-size:12.5px;font-weight:600;color:var(--muted);padding:6px 10px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}

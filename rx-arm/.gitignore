@@ -1,0 +1,19 @@
+# Зависимости
+node_modules/
+
+# Артефакты сборки (metadata.json генерируется плагином в dist/ — не коммитить)
+dist/
+*.tsbuildinfo
+
+# Секреты и локальная среда
+.env
+.env.local
+.env.*.local
+
+# Логи и мусор
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db

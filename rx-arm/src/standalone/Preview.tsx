@@ -19,7 +19,9 @@ const Preview: React.FC = () => {
   const [width, setWidth] = useState('100%');
 
   return (
-    <div style={{ minHeight: '100vh', background: '#eceef1', fontFamily: '"Segoe UI", Tahoma, sans-serif' }}>
+    // Подложка белая — такая же, как область обложки в RX-веб: контрол прозрачный
+    // и цвет подложки берёт у хоста, превью должно показывать то же самое.
+    <div style={{ minHeight: '100vh', background: '#fff', fontFamily: '"Segoe UI", Tahoma, sans-serif' }}>
       <div
         style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',

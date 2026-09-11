@@ -62,9 +62,10 @@ const EmployeeCard: React.FC<{ employee: Employee }> = ({ employee: e }) => {
         <span className="l">Просрочено</span>
         <span className={risk ? 'c r' : 'c'}>{e.overdue}</span>
       </div>
+      {/* Ссылки «Поручения в RX» в подвале нет: в список поручений будем проваливаться
+          по клику на саму карточку — обработчик появится вместе с переходом. */}
       <div className="arme-f">
         <span className={risk ? 'arme-tag bad' : 'arme-tag ok'}>{risk ? 'Просрочки' : 'В норме'}</span>
-        <span className="arme-lnk">Поручения в RX</span>
       </div>
     </article>
   );

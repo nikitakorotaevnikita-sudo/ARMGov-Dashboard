@@ -26,10 +26,10 @@
 .rx-arm-root .ti-eye-check:before{content:"\ee88"}
 .rx-arm-root .ti-heartbeat:before{content:"\ef92"}
 .rx-arm-root,.rx-arm-root *{box-sizing:border-box;margin:0;padding:0}
-.rx-arm-root{background:var(--page);color:var(--text);font-size:13px;
+.rx-arm-root{background:transparent;color:var(--text);font-size:13px;
   font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,system-ui,"Helvetica Neue",Arial,sans-serif;
   -webkit-font-smoothing:antialiased}
-.rx-arm-root .wrap{padding:20px;max-width:1440px;margin:0 auto}
+.rx-arm-root .wrap{padding:20px;width:100%}
 .rx-arm-root .tbtn{display:inline-flex;align-items:center;gap:6px;background:#EAF1FA;border:1px solid #BCD3EE;color:#1A73E8;border-radius:4px;padding:7px 12px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
 .rx-arm-root .tbtn:hover{border-color:#1A73E8;background:#dde9f7}
 .rx-arm-root .tbtn i{font-size:16px;color:#1A73E8}

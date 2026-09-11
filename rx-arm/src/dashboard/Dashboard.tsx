@@ -46,7 +46,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <>
-      <div className="wrap">
+      {/* Класс cfgw обязателен: он включает вариант шапки виджета из собранного рабочего
+          стола (заголовок 15.5px / 600 / --text, паддинги 13-16) — именно он в макете.
+          Без него срабатывает базовое правило .card-head .ct (13.5px / bold / --title). */}
+      <div className="wrap cfgw">
         <div className="cfgw-grid">
           <OrgOrders data={org} />
           <Employees

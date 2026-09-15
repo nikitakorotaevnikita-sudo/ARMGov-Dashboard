@@ -2517,9 +2517,11 @@ class Program
         string S(string k, string def = null)
         {
             if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(k, out var v)) return def;
-            if (v.ValueKind != JsonValueKind.String)
-                throw new Exception("аргумент " + k + " должен быть строкой, получено: " + v.ValueKind);
-            return v.GetString();
+            if (v.ValueKind == JsonValueKind.String) return v.GetString();
+            // Число допускаем наравне со строкой: leaders отдаёт id как JSON-число,
+            // и модель естественно подставляет его как есть, а не в кавычках (находка ревью р2).
+            if (v.ValueKind == JsonValueKind.Number) return v.GetRawText();
+            throw new Exception("аргумент " + k + " должен быть строкой, получено: " + v.ValueKind);
         }
         switch (name)
         {

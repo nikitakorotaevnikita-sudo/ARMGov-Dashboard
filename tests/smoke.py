@@ -458,8 +458,8 @@ try:
     check("инструмент leaders совпадает с /api/leaders",
           [i.get("name") for i in direct.get("items", [])] == [i.get("name") for i in via_tool.get("items", [])])
 
-    st, direct = _req("/api/process?key=poruchenia")
-    st, via_tool = _req("/api/ai/tool?name=process&args=" + urllib.parse.quote('{"key":"poruchenia"}'))
+    st, direct = _req("/api/process?key=appeals")
+    st, via_tool = _req("/api/ai/tool?name=process&args=" + urllib.parse.quote('{"key":"appeals"}'))
     check("инструмент process совпадает с /api/process",
           direct.get("kpi") == via_tool.get("kpi"), str(direct.get("kpi"))[:80])
 
@@ -481,6 +481,22 @@ try:
                  urllib.parse.quote('{"key":"выдуманный_процесс"}'))
     check("process с неизвестным ключом перечисляет допустимые значения",
           "error" in d and "poruchenia" in (d.get("error") or ""), d.get("error"))
+
+    # нормальный вызов leader_tasks: id строкой и числом дают один и тот же результат
+    st, d1 = _req("/api/ai/tool?name=leaders&args=" + urllib.parse.quote('{"by":"performer"}'))
+    first = (d1.get("items") or [{}])[0].get("id")
+    if first is not None:
+        st, s1 = _req("/api/ai/tool?name=leader_tasks&args=" + urllib.parse.quote('{"by":"performer","id":"%s"}' % first))
+        st, n1 = _req("/api/ai/tool?name=leader_tasks&args=" + urllib.parse.quote('{"by":"performer","id":%s}' % first))
+        check("leader_tasks принимает id и строкой, и числом",
+              not s1.get("error") and not n1.get("error")
+              and len(s1.get("items", [])) == len(n1.get("items", [])),
+              str(s1.get("error") or n1.get("error") or "ok"))
+    else:
+        check("есть хотя бы один сотрудник для проверки leader_tasks", False, "leaders вернул пустой список")
+
+    d = _req("/api/ai/tool?name=process&args=" + urllib.parse.quote('{"key":true}'))[1]
+    check("логическое значение аргумента отвергается", bool(d.get("error")), str(d.get("error"))[:80])
 
     st, d = _req("/api/ai/tool?name=process&args=" + urllib.parse.quote("не_json"))
     check("невалидный JSON в args даёт русскую ошибку про формат",

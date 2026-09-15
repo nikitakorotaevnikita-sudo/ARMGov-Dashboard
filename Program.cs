@@ -9,6 +9,7 @@ using System.Net.Http;
 using System.Runtime.Loader;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Npgsql;
 
@@ -322,6 +323,12 @@ class Program
             case "/api/ai/summary": J(ctx, BuildAiSummary(q["force"] == "1", q["key"])); return;
             case "/api/ai/chat": J(ctx, BuildAiChat(ReadBody(ctx))); return;
             case "/api/ai/explain": J(ctx, BuildAiExplain(ReadBody(ctx))); return;
+            case "/api/ai/sql/check":
+            {
+                var (ok, reason, eff) = SqlCheck(q["q"]);
+                J(ctx, new { ok, reason, effective = eff });
+                return;
+            }
             case "/api/config":
                 if (ctx.Request.HttpMethod == "POST") { J(ctx, SaveConfigFromBody(ReadBody(ctx))); return; }
                 J(ctx, GetConfigMasked()); return;
@@ -1983,6 +1990,36 @@ class Program
             return new { reply = LlmChat(messages, 500, 0.3) };
         }
         catch (Exception ex) { return new { error = ex.Message }; }
+    }
+
+    // ---------- ИИ-харнесс: валидатор SQL ----------
+    // Первый из двух рубежей (второй — read-only транзакция в SqlRun).
+    // Проверяется и исполняется ОДИН И ТОТ ЖЕ текст: комментарии вырезаются до проверки,
+    // иначе валидатор смотрел бы на одно, а база получала другое.
+    static readonly string[] SqlDeny = {
+        "insert","update","delete","drop","alter","create","truncate","grant","revoke",
+        "copy","vacuum","call","do","set","reset","begin","commit","rollback",
+        "dblink","pg_read_file","pg_ls_dir","lo_import","lo_export","pg_sleep" };
+
+    static (bool ok, string reason, string effective) SqlCheck(string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql)) return (false, "пустой запрос", null);
+        var s = Regex.Replace(sql, @"/\*.*?\*/", " ", RegexOptions.Singleline);
+        s = Regex.Replace(s, @"--[^\n]*", " ");
+        s = s.Trim();
+        while (s.EndsWith(";")) s = s.Substring(0, s.Length - 1).Trim();
+        if (s.Contains(";")) return (false, "разрешён только один оператор", null);
+        var low = s.ToLowerInvariant();
+        // Запрещённые слова проверяем раньше требования "начинается с SELECT/WITH":
+        // иначе "drop table x" отклонялся бы с общей причиной "должен начинаться с SELECT",
+        // маскируя настоящий повод отказа — попытку изменить данные.
+        foreach (var w in SqlDeny)
+            if (Regex.IsMatch(low, @"\b" + w + @"\b"))
+                return (false, "запрещённая конструкция: " + w, null);
+        if (!(low.StartsWith("select") || low.StartsWith("with")))
+            return (false, "запрос должен начинаться с SELECT или WITH", null);
+        var eff = Regex.IsMatch(low, @"\blimit\b") ? s : "select * from (" + s + ") t limit 200";
+        return (true, null, eff);
     }
 
     // ---------- helpers ----------

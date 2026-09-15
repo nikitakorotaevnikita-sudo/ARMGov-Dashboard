@@ -204,6 +204,39 @@ ai_check("chat (вопрос-ответ)", "/api/ai/chat", "POST",
 ai_check("explain (разбор блока)", "/api/ai/explain", "POST",
          {"title": "Поток-эффективность", "key": KEY})
 
+# ---------------- ХАРНЕСС: валидатор SQL ----------------
+section("Валидатор SQL  /api/ai/sql/check")
+import urllib.parse
+def sqlcheck(q):
+    st, d = _req("/api/ai/sql/check?q=" + urllib.parse.quote(q))
+    return d
+try:
+    d = sqlcheck("select count(*) from sungero_wf_task limit 1")
+    check("корректный запрос пропущен", d.get("ok") is True, d.get("reason") or "")
+
+    d = sqlcheck("drop table sungero_wf_task")
+    check("drop table отклонён", d.get("ok") is False and "drop" in (d.get("reason") or ""))
+
+    d = sqlcheck("select 1; delete from sungero_wf_task")
+    check("два оператора отклонены", d.get("ok") is False)
+
+    d = sqlcheck("select 1 -- безобидно\n; delete from sungero_wf_task")
+    check("маскировка комментарием не проходит", d.get("ok") is False)
+
+    d = sqlcheck("select /* delete */ count(*) from sungero_wf_task")
+    check("запрет не срабатывает на слове в комментарии",
+          d.get("ok") is True, d.get("reason") or "")
+
+    d = sqlcheck("select id from sungero_wf_task")
+    check("запросу без limit добавлена обёртка",
+          d.get("ok") is True and "limit 200" in (d.get("effective") or "").lower(),
+          d.get("effective"))
+
+    d = sqlcheck("update sungero_wf_task set subject = 'x'")
+    check("update отклонён", d.get("ok") is False)
+except Exception as e:
+    check("валидатор доступен", False, str(e))
+
 # ---------------- ИТОГ ----------------
 section("ИТОГ")
 print(f"  Проверок данных/UI: PASS={PASS}  FAIL={FAIL}")

@@ -295,6 +295,30 @@ d = sqlcheck("select 'it''s ok' as x")
 check("удвоенная кавычка внутри литерала не рвёт разбор",
       d.get("ok") is True, d.get("reason") or "")
 
+# --- находки раунда 2, п. 1-2: вырезание /* */ склеивало токены; имя в "" было невидимо ---
+for bad in ["select dbl/**/ink_exec('dbname=x','select 1')",
+            "select * in/**/to zzz from sungero_wf_task",
+            "select se/**/t_config('statement_timeout','0',false)",
+            'select "pg_sleep"(60)',
+            'select "dblink_exec"(\'dbname=x\',\'select 1\')']:
+    d = sqlcheck(bad)
+    check("отклонено: " + bad[:46], d.get("ok") is False, d.get("reason") or "")
+
+d = sqlcheck("select a/**/from sungero_wf_task")
+check("комментарий заменён разделителем, а не склейкой",
+      "afrom" not in (d.get("effective") or ""), d.get("effective"))
+
+# --- находка раунда 2: легитимные запросы не должны попасть под новые правки ---
+for good in ["select created from sungero_wf_task",
+             "select setting from pg_settings",
+             "select subject from sungero_wf_task where subject like '%update%'",
+             "select string_agg(subject, '; ') from sungero_wf_task",
+             'select "стран;ный" from t',
+             "select $tag$ text with ; and -- inside $tag$",
+             "select 'it''s ok'"]:
+    d = sqlcheck(good)
+    check("пропущено: " + good[:46], d.get("ok") is True, d.get("reason") or "")
+
 # ---------------- ИТОГ ----------------
 section("ИТОГ")
 print(f"  Проверок данных/UI: PASS={PASS}  FAIL={FAIL}")

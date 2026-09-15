@@ -2047,12 +2047,23 @@ class Program
     //                  (это база для итогового "effective");
     //   codeOnlyLow  — тот же текст в нижнем регистре, но СОДЕРЖИМОЕ ЛИТЕРАЛОВ заменено
     //                  на пробел (это база для поиска ';' и запрещённых слов — то, что
-    //                  реально является SQL-кодом, а не данными внутри строки/идентификатора).
-    static bool TrySplitSqlIntoCleanAndCode(string sql, out string cleaned, out string codeOnlyLow, out string error)
+    //                  реально является SQL-кодом, а не данными внутри строки/идентификатора);
+    //   gluedDenyLow — та же цель, что у codeOnlyLow, но комментарий не оставляет на своём
+    //                  месте разделитель вообще (в отличие от cleaned/codeOnlyLow, где на
+    //                  месте /* */ и -- стоит пробел). Раунд исправлений 2 (Н1) добавил пробел
+    //                  в cleaned, чтобы исполняемый текст не склеивал "dbl/**/ink_exec" в
+    //                  рабочий "dblink_exec" — это закрывает исполнение, но само по себе
+    //                  превращает попытку в безобидный синтаксический мусор (ok=true), а не
+    //                  в отклонённый запрос. gluedDenyLow воспроизводит именно склейку и
+    //                  дополнительно сканируется деней-листом ниже — так разбиение
+    //                  запрещённого слова комментарием ловится как попытка обхода, а не
+    //                  пропускается молча.
+    static bool TrySplitSqlIntoCleanAndCode(string sql, out string cleaned, out string codeOnlyLow, out string gluedDenyLow, out string error)
     {
-        cleaned = null; codeOnlyLow = null; error = null;
+        cleaned = null; codeOnlyLow = null; gluedDenyLow = null; error = null;
         var cleanedSb = new StringBuilder(sql.Length);
         var codeSb = new StringBuilder(sql.Length);
+        var gluedSb = new StringBuilder(sql.Length);
         int i = 0, n = sql.Length;
 
         while (i < n)
@@ -2075,6 +2086,7 @@ class Program
                 i += 2;
                 while (i < n && sql[i] != '\n') i++;
                 codeSb.Append(' ');
+                // gluedSb: ничего не добавляем — см. комментарий к gluedDenyLow выше.
                 // перевод строки (если есть) оставляем в cleaned как разделитель токенов
                 if (i < n) { cleanedSb.Append('\n'); i++; }
                 continue;
@@ -2091,7 +2103,12 @@ class Program
                     else i++;
                 }
                 if (depth > 0) { error = "незакрытый комментарий /* ... */"; return false; }
+                // Раунд исправлений 2 (Н1): пробел нужен и в cleaned — иначе комментарий
+                // просто выбрасывается без разделителя, и "dbl/**/ink_exec" склеивается
+                // в исполняемый "dblink_exec", а "select a/**/from t" — в "select afrom t".
+                cleanedSb.Append(' ');
                 codeSb.Append(' ');
+                // gluedSb: ничего не добавляем — см. комментарий к gluedDenyLow выше.
                 continue;
             }
 
@@ -2105,7 +2122,7 @@ class Program
             {
                 bool isEscapeString = IsStandaloneELetterBefore(sql, i);
                 int start = i;
-                cleanedSb.Append(c); codeSb.Append(' ');
+                cleanedSb.Append(c); codeSb.Append(' '); gluedSb.Append(' ');
                 i++;
                 bool closed = false;
                 while (i < n)
@@ -2135,17 +2152,40 @@ class Program
             if (c == '"')
             {
                 int start = i;
-                cleanedSb.Append(c); codeSb.Append(' ');
+                cleanedSb.Append(c); codeSb.Append(c); gluedSb.Append(c);
                 i++;
                 bool closed = false;
                 while (i < n)
                 {
                     if (sql[i] == '"')
                     {
-                        if (i + 1 < n && sql[i + 1] == '"') { cleanedSb.Append("\"\""); i += 2; continue; }
-                        cleanedSb.Append('"'); i++; closed = true; break;
+                        if (i + 1 < n && sql[i + 1] == '"') { cleanedSb.Append("\"\""); codeSb.Append("\"\""); gluedSb.Append("\"\""); i += 2; continue; }
+                        cleanedSb.Append('"'); codeSb.Append('"'); gluedSb.Append('"'); i++; closed = true; break;
                     }
-                    cleanedSb.Append(sql[i]); i++;
+                    // Раунд исправлений 2 (Н2): содержимое идентификатора в кавычках кладём
+                    // в codeSb в нижнем регистре — иначе "pg_sleep"/"dblink_exec" в кавычках
+                    // невидимы для деней-листа. Гасим только ';' и начала комментариев
+                    // "--"/"/*" — это не разделитель операторов и не комментарий внутри
+                    // кавычек, а просто символы имени, но их нельзя пускать в поиск ';'
+                    // и вырезание комментариев дальше по конвейеру. Само имя (граница
+                    // слова даёт кавычка) остаётся видимым целиком. gluedSb здесь ведёт
+                    // себя как codeSb — внутри кавычек это не настоящий SQL-комментарий,
+                    // склейка (см. gluedDenyLow) тут не нужна.
+                    if (sql[i] == ';')
+                    {
+                        cleanedSb.Append(';'); codeSb.Append(' '); gluedSb.Append(' '); i++;
+                        continue;
+                    }
+                    if ((sql[i] == '-' && i + 1 < n && sql[i + 1] == '-')
+                        || (sql[i] == '/' && i + 1 < n && sql[i + 1] == '*'))
+                    {
+                        cleanedSb.Append(sql[i]); cleanedSb.Append(sql[i + 1]);
+                        codeSb.Append(' '); codeSb.Append(' ');
+                        gluedSb.Append(' '); gluedSb.Append(' ');
+                        i += 2;
+                        continue;
+                    }
+                    cleanedSb.Append(sql[i]); codeSb.Append(char.ToLowerInvariant(sql[i])); gluedSb.Append(char.ToLowerInvariant(sql[i])); i++;
                 }
                 if (!closed) { error = "незакрытый идентификатор в двойных кавычках, начатый в позиции " + start; return false; }
                 continue;
@@ -2159,18 +2199,20 @@ class Program
                 if (closeIdx < 0) { error = "незакрытая долларовая кавычка " + tag + " ... " + tag; return false; }
                 int literalEnd = closeIdx + tag.Length;
                 cleanedSb.Append(sql, i, literalEnd - i);
-                codeSb.Append(' ');
+                codeSb.Append(' '); gluedSb.Append(' ');
                 i = literalEnd;
                 continue;
             }
 
             cleanedSb.Append(c);
             codeSb.Append(char.ToLowerInvariant(c));
+            gluedSb.Append(char.ToLowerInvariant(c));
             i++;
         }
 
         cleaned = cleanedSb.ToString();
         codeOnlyLow = codeSb.ToString();
+        gluedDenyLow = gluedSb.ToString();
         return true;
     }
 
@@ -2213,11 +2255,12 @@ class Program
     {
         if (string.IsNullOrWhiteSpace(sql)) return (false, "пустой запрос", null);
 
-        if (!TrySplitSqlIntoCleanAndCode(sql, out var cleaned, out var codeLow, out var parseError))
+        if (!TrySplitSqlIntoCleanAndCode(sql, out var cleaned, out var codeLow, out var gluedDenyLow, out var parseError))
             return (false, parseError, null);
 
         cleaned = cleaned.Trim();
         codeLow = codeLow.Trim();
+        gluedDenyLow = gluedDenyLow.Trim();
 
         // ';' ищем только в "коде" (вне литералов) — иначе string_agg(x, '; ') отклонялся бы
         // как "два оператора", хотя ';' там — данные, а не разделитель операторов.
@@ -2235,13 +2278,20 @@ class Program
         }
 
         // Ключевые слова — по границе с обеих сторон (см. объявление SqlDenyKeywordRe).
+        // Проверяем и codeLow, и gluedDenyLow: комментарий может разрезать запрещённое
+        // слово пополам ("in/**/to", "se/**/t_config") — в codeLow на месте комментария
+        // стоит пробел (там оно уже не совпадёт), а в gluedDenyLow куски склеены вплотную,
+        // как их когда-то склеивал баг Н1 при построении исполняемого текста. Раунд
+        // исправлений 2 закрыл исполнение через пробел в cleaned, но само разбиение
+        // запрещённого слова комментарием — явная попытка обхода, и она должна отклоняться,
+        // а не молча превращаться в синтаксический мусор.
         foreach (var (re, word) in SqlDenyKeywordRe)
-            if (re.IsMatch(codeLow))
+            if (re.IsMatch(codeLow) || re.IsMatch(gluedDenyLow))
                 return (false, "запрещённая конструкция: " + word, null);
 
         // Семейства опасных функций — по границе только слева (см. SqlDenyFamilyRe).
         foreach (var (re, word) in SqlDenyFamilyRe)
-            if (re.IsMatch(codeLow))
+            if (re.IsMatch(codeLow) || re.IsMatch(gluedDenyLow))
                 return (false, "запрещённая конструкция: " + word, null);
 
         // Запрещённые слова проверяем раньше требования "начинается с SELECT/WITH":

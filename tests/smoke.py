@@ -363,11 +363,35 @@ d = sqlrun("select id from sungero_wf_task limit 5")
 check("truncated=false: источник короче лимита, усечения нет",
       d.get("truncated") is False, d.get("truncated"))
 
-# --- находка ревью task-5, раунд правок 1, п.3: обрезка работает не только для строк ---
+# --- находка ревью task-5, раунд правок 2, п.C: граница ровно на стыке 200/201 ---
+# SqlCheck оборачивает в "limit SqlMaxRows+1", SqlRun режет по maxRows=SqlMaxRows —
+# два магических числа вынесены в одну общую константу именно потому, что их
+# рассинхронизация уже один раз ломала truncated (раунд правок 1, п.2).
+d = sqlrun("select * from generate_series(1,200) as g(n)")
+check("граница снизу: ровно 200 строк источника — усечения нет",
+      d.get("truncated") is False and len(d.get("rows") or []) == 200,
+      (d.get("truncated"), len(d.get("rows") or [])))
+
+d = sqlrun("select * from generate_series(1,201) as g(n)")
+check("граница сверху: 201 строка источника — усечение есть",
+      d.get("truncated") is True and len(d.get("rows") or []) == 200,
+      (d.get("truncated"), len(d.get("rows") or [])))
+
+# --- находка ревью task-5, раунд правок 1, п.3 / раунд правок 2, п.A и п.B ---
+# Раунд 1 обрезал массив по .NET-типу через Convert.ToString, а не по представлению —
+# результатом было "System.String[]" (имя типа, а не данные). Прежняя проверка здесь
+# ("isinstance(val, str) and len(val) < 400") пропускала и это: "System.String[]" —
+# строка длиной 15, короче 400, тест был ложно-зелёным. Теперь массив обязан остаться
+# JSON-массивом, а обрезке подвергается каждый элемент по отдельности.
 d = sqlrun("select array[repeat('y', 400)] as a")
 val = (d.get("rows") or [[None]])[0][0] if d.get("rows") else None
-check("значение-массив обрезано, а не отдано целиком (400 символов)",
-      isinstance(val, str) and len(val) < 400, val if not isinstance(val, str) else len(val))
+check("массив остался массивом, а элемент обрезан",
+      isinstance(val, list) and len(val) == 1
+      and isinstance(val[0], str) and len(val[0]) <= 201, val)
+
+d = sqlrun("select array['a','b'] as arr")
+val = (d.get("rows") or [[None]])[0][0] if d.get("rows") else None
+check("короткий массив отдан как JSON-массив, а не как имя типа", val == ["a", "b"], val)
 
 d = sqlrun("select repeat('z', 400)::bytea as b")
 val = (d.get("rows") or [[None]])[0][0] if d.get("rows") else None

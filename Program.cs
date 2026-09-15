@@ -2336,8 +2336,55 @@ class Program
         // в ответ, но её наличие и есть честный признак усечения (truncated=true). Раньше
         // оба лимита совпадали (200 и 200), поэтому SqlRun физически не мог увидеть 201-ю
         // строку и truncated был всегда false, даже когда выборка реально была урезана.
-        var eff = "select * from (" + cleaned + ") t limit 201";
+        var eff = "select * from (" + cleaned + ") t limit " + (SqlMaxRows + 1);
         return (true, null, eff);
+    }
+
+    // Общая константа для SqlCheck (обёртка "limit N+1") и SqlRun (maxRows = N).
+    // Находка ревью (task-5, раунд правок 2, п.C): раньше оба числа были магическими
+    // литералами в разных функциях, и рассинхронизация между ними уже один раз ломала
+    // truncated (раунд правок 1, п.2). Один источник правды исключает повтор.
+    const int SqlMaxRows = 200;
+
+    // Приведение значения ячейки к виду, который System.Text.Json сериализует сам,
+    // с ограничением И по длине строки, И по числу элементов коллекции.
+    //
+    // Находка ревью (task-5, раунд правок 2, п.A): предыдущая версия отдавала любую
+    // коллекцию (text[], int[], результат array_agg, BitArray, hstore) веткой "default" —
+    // Convert.ToString для массива возвращает не данные, а имя типа ("System.String[]").
+    // Это была потеря данных, а не обрезка, и путь array_agg/string_to_array/
+    // regexp_split_to_array модель будет использовать постоянно.
+    //
+    // Порядок веток здесь несущий: string и byte[] тоже реализуют IEnumerable и обязаны
+    // перехватываться РАНЬШЕ ветки коллекций, иначе строка развалится на символы.
+    // IPAddress не является IEnumerable и по-прежнему уходит в Convert.ToString → "1.2.3.4".
+    static object Cell(object v, int depth)
+    {
+        switch (v)
+        {
+            case null: return null;
+            case string s: return Trunc(s, 200);
+            case byte[] b: return Trunc(Convert.ToBase64String(b), 200);
+            case bool or sbyte or byte or short or ushort or int or uint or long or ulong
+                or float or double or decimal
+                or DateTime or DateTimeOffset or TimeSpan or Guid:
+                return v;
+            // Массивы (text[], int[], результат array_agg), BitArray, hstore остаются
+            // НАСТОЯЩИМ JSON-массивом. Convert.ToString для массива даёт имя типа
+            // ("System.String[]") — это потеря данных, а не обрезка.
+            case System.Collections.IEnumerable e when depth < 2:
+            {
+                var list = new List<object>();
+                foreach (var x in e)
+                {
+                    if (list.Count >= 50) { list.Add("…"); break; }   // потолок по числу элементов
+                    list.Add(Cell(x, depth + 1));                      // потолок по длине элемента
+                }
+                return list;
+            }
+            // IPAddress, NpgsqlRange, NpgsqlPoint и прочая экзотика — строковое представление.
+            default: return Trunc(Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture), 200);
+        }
     }
 
     // ---------- ИИ-харнесс: исполнитель SQL ----------
@@ -2351,7 +2398,7 @@ class Program
     // а при исполнении исходного текста PostgreSQL увидит её как есть, с хвостом внутри
     // "комментария". Вызывающая сторона (эндпоинт /api/ai/sql/run) обязана брать eff
     // из результата SqlCheck и не иметь доступа к исходному q на этом шаге.
-    static (List<string> cols, List<object[]> rows, int ms, bool truncated) SqlRun(string effective, int maxRows = 200)
+    static (List<string> cols, List<object[]> rows, int ms, bool truncated) SqlRun(string effective, int maxRows = SqlMaxRows)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var cols = new List<string>(); var rows = new List<object[]>(); bool more = false;
@@ -2382,16 +2429,9 @@ class Program
                     // проверке эндпоинт падал в {error} именно из-за этого на "select inet
                     // '1.2.3.4'". Явный список — только те типы, которые Npgsql реально отдаёт
                     // для простых скалярных колонок и которые System.Text.Json сериализует сам.
-                    r[i] = v switch
-                    {
-                        null => null,
-                        string s => Trunc(s, 200),
-                        byte[] b => Trunc(Convert.ToBase64String(b), 200),
-                        bool or sbyte or byte or short or ushort or int or uint or long or ulong
-                            or float or double or decimal
-                            or DateTime or DateTimeOffset or TimeSpan or Guid => v,
-                        _ => Trunc(Convert.ToString(v, CultureInfo.InvariantCulture), 200)
-                    };
+                    // Приведение вынесено в Cell(): массивы/BitArray/hstore отдаются настоящим
+                    // JSON-массивом, а не именем типа (task-5, раунд правок 2, п.A).
+                    r[i] = Cell(v, 0);
                 }
                 rows.Add(r);
             }

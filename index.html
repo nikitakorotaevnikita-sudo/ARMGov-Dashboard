@@ -800,20 +800,55 @@ function explainBlock(title,key){
     CHAT.push({role:'assistant',content:d.error?('⚠ '+d.error):(d.reply||'(пусто)')});renderChat();
   }).catch(function(e){CHAT.push({role:'assistant',content:'⚠ '+e});renderChat();});
 }
+function thinkStepsWord(n){
+  var n100=n%100,n10=n%10;
+  if(n100>=11&&n100<=14)return 'шагов';
+  if(n10===1)return 'шаг';
+  if(n10>=2&&n10<=4)return 'шага';
+  return 'шагов';
+}
+function thinkCell(v){
+  if(v===null||v===undefined)return '';
+  if(Array.isArray(v))return v.map(thinkCell).join(', ');
+  if(typeof v==='object')return JSON.stringify(v);
+  return String(v);
+}
+function thinkArgs(raw){
+  try{
+    var o=JSON.parse(raw);
+    if(o&&typeof o==='object'&&!Array.isArray(o)){
+      var parts=Object.keys(o).map(function(k){return k+'='+thinkCell(o[k]);});
+      if(parts.length)return parts.join(', ');
+    }
+  }catch(e){}
+  return raw;
+}
+function thinkPreview(cols,preview){
+  if(!cols||!cols.length||!preview||!preview.length)return '';
+  var head='<tr>'+cols.map(function(c){return '<th>'+esc(thinkCell(c))+'</th>';}).join('')+'</tr>';
+  var body=preview.map(function(row){
+    return '<tr>'+(row||[]).map(function(v){return '<td>'+esc(thinkCell(v))+'</td>';}).join('')+'</tr>';
+  }).join('');
+  return '<div class="think-prevwrap"><table class="think-prev">'+head+body+'</table></div>';
+}
 function thinkBlock(m){
   if(!m.steps||!m.steps.length)return '';
   var secs=((m.elapsedMs||0)/1000).toFixed(1).replace('.',',');
   var body=m.steps.map(function(s){
+    if(!s)return '';
     var h='<div class="think-step"><div class="think-act">'+esc(s.action||'')+(s.tool?' · '+esc(s.tool):'')+(s.table?' · '+esc(s.table):'')+'</div>';
     if(s.thought)h+='<div class="think-thought">'+esc(s.thought)+'</div>';
+    if(s.args)h+='<div class="think-sql">'+esc(thinkArgs(s.args))+'</div>';
+    if(s.purpose)h+='<div class="think-thought">'+esc(s.purpose)+'</div>';
     if(s.sql)h+='<div class="think-sql">'+esc(s.sql)+'</div>';
+    if(s.cols&&s.preview)h+=thinkPreview(s.cols,s.preview);
     if(s.error)h+='<div class="think-meta" style="color:var(--red)">'+esc(s.error)+'</div>';
     var meta=[];if(typeof s.rows==='number')meta.push(s.rows+' строк');if(s.ms)meta.push(s.ms+' мс');
     if(meta.length)h+='<div class="think-meta">'+meta.join(' · ')+'</div>';
     return h+'</div>';
   }).join('');
   var warn=m.truncated?'<div class="think-meta" style="color:var(--amber)">Модель не уложилась в лимит шагов — ответ по собранным данным</div>':'';
-  return '<details class="think"><summary>Размышления · '+m.steps.length+' шагов · '+secs+' с</summary>'+body+warn+'</details>';
+  return '<details class="think"><summary>Размышления · '+m.steps.length+' '+thinkStepsWord(m.steps.length)+' · '+secs+' с</summary>'+body+warn+'</details>';
 }
 function chatBubble(m){
   var me=m.role==='user';

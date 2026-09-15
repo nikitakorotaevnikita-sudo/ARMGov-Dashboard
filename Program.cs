@@ -2600,10 +2600,26 @@ class Program
     //     прикладные поля в хвосте таблицы для модели просто исчезали. Теперь отдаём totalColumns
     //     и truncated, как SqlRun отдаёт truncated для строк — модель хотя бы увидит, что справка
     //     неполная, и сможет спросить иначе (например, через information_schema напрямую).
+    //
+    // Находка ревью (task-7, раунд правок 2): справка на sungero_wf_assignment (217 колонок,
+    // отдаётся 80) занимала 11,5с — отдельный SELECT на каждую колонку ради примеров. В задаче 8
+    // у агентского цикла бюджет 60с на весь ответ, и одна справка съедала четверть. Два изменения:
+    //   — кэш по имени таблицы без TTL: состав колонок и примеры в пределах жизни процесса не
+    //     меняются (это не Cache/JCached выше — там 60-секундный TTL для аналитики, здесь кэш
+    //     постоянный, но ограничен SchemaCacheLimit таблиц на случай, если модель начнёт
+    //     перебирать имена наугад);
+    //   — примеры значений собираем только для первых SchemaSampleLimit колонок по
+    //     ordinal_position: модель почти всегда ищет ключевые поля, а они стоят ближе к началу;
+    //     остальные до общего лимита в 80 колонок отдаём именем и типом без примеров — это вдвое
+    //     сокращает число SELECT на первом (некэшированном) вызове.
+    const int SchemaCacheLimit = 200;
+    const int SchemaSampleLimit = 40;
+    static readonly ConcurrentDictionary<string, object> SchemaCache = new();
     static object SchemaHelp(string table)
     {
         if (string.IsNullOrWhiteSpace(table) || !Regex.IsMatch(table, @"^[a-z0-9_]+$", RegexOptions.None, SqlRegexTimeout))
             return new { error = "недопустимое имя таблицы" };
+        if (SchemaCache.TryGetValue(table, out var cached)) return cached;
         var colNames = new List<(string name, string type)>();
         using var c = new NpgsqlConnection(Cs); c.Open();
         long totalColumns;
@@ -2634,29 +2650,35 @@ class Program
         using (var pre = new NpgsqlCommand("set transaction read only; set local statement_timeout = '3s'", c, tx))
             pre.ExecuteNonQuery();
         var cols = new List<object>();
-        foreach (var (name, type) in colNames)
+        for (int i = 0; i < colNames.Count; i++)
         {
+            var (name, type) = colNames[i];
             var samples = new List<string>();
-            using (var sp = new NpgsqlCommand("savepoint sp_sample", c, tx)) sp.ExecuteNonQuery();
-            try
+            if (i < SchemaSampleLimit)
             {
-                var quotedCol = "\"" + name.Replace("\"", "\"\"") + "\"";
-                using var sc = new NpgsqlCommand(
-                    $"select distinct {quotedCol}::text from {quotedTable} where {quotedCol} is not null limit 2", c, tx);
-                using var rd = sc.ExecuteReader();
-                while (rd.Read())
-                    if (!rd.IsDBNull(0)) samples.Add(Trunc(rd.GetString(0), 100));
-            }
-            catch { /* защита от долгих/проблемных колонок (п.4 находки) — просто пустые samples */ }
-            finally
-            {
-                using var rb = new NpgsqlCommand("rollback to savepoint sp_sample", c, tx);
-                try { rb.ExecuteNonQuery(); } catch { /* транзакция уже в порядке — не критично */ }
+                using (var sp = new NpgsqlCommand("savepoint sp_sample", c, tx)) sp.ExecuteNonQuery();
+                try
+                {
+                    var quotedCol = "\"" + name.Replace("\"", "\"\"") + "\"";
+                    using var sc = new NpgsqlCommand(
+                        $"select distinct {quotedCol}::text from {quotedTable} where {quotedCol} is not null limit 2", c, tx);
+                    using var rd = sc.ExecuteReader();
+                    while (rd.Read())
+                        if (!rd.IsDBNull(0)) samples.Add(Trunc(rd.GetString(0), 100));
+                }
+                catch { /* защита от долгих/проблемных колонок (п.4 находки) — просто пустые samples */ }
+                finally
+                {
+                    using var rb = new NpgsqlCommand("rollback to savepoint sp_sample", c, tx);
+                    try { rb.ExecuteNonQuery(); } catch { /* транзакция уже в порядке — не критично */ }
+                }
             }
             cols.Add(new { name, type, samples });
         }
         tx.Rollback();
-        return new { table, columns = cols, totalColumns, truncated = totalColumns > colNames.Count };
+        var result = new { table, columns = cols, totalColumns, truncated = totalColumns > colNames.Count };
+        if (SchemaCache.Count < SchemaCacheLimit) SchemaCache[table] = result;
+        return result;
     }
 
     // ---------- ИИ-харнесс: готовые инструменты ----------

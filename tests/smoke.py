@@ -8,7 +8,7 @@
 Секция ИИ (LLM Ario) проверяется отдельно: пока модель недоступна — фиксируем
 graceful-ошибку; в понедельник, когда модель поднимут, ожидаем содержательный ответ.
 """
-import sys, json, urllib.request, urllib.error
+import sys, json, time, urllib.request, urllib.error
 try: sys.stdout.reconfigure(encoding="utf-8")  # читаемый вывод кириллицы
 except Exception: pass
 
@@ -543,6 +543,21 @@ try:
     check("несуществующая таблица — понятная ошибка", bool(d.get("error")) or d.get("columns") == [])
     st, d = _req("/api/ai/schema?table=" + urllib.parse.quote("sungero; drop"))
     check("имя таблицы с недопустимыми символами отвергается", bool(d.get("error")), str(d.get("error")))
+
+    # Находка ревью (task-7, раунд правок 2): справка на широкой таблице собирала примеры
+    # отдельным SELECT на каждую колонку — 11,5с на sungero_wf_assignment. Кэш по имени таблицы
+    # без TTL должен делать повторный вызов почти мгновенным. Берём другую широкую таблицу
+    # (sungero_wf_task, 213 колонок) — sungero_wf_assignment уже прогрета проверками выше,
+    # а тут нужен честный первый (некэшированный) вызов в рамках этого прогона smoke-теста.
+    t0 = time.time()
+    _req("/api/ai/schema?table=sungero_wf_task")
+    first_s = time.time() - t0
+    t0 = time.time()
+    _req("/api/ai/schema?table=sungero_wf_task")
+    second_s = time.time() - t0
+    check("повторный вызов справки по той же таблице отвечает заметно быстрее первого (кэш)",
+          second_s < first_s / 3,
+          f"first={first_s:.3f}s second={second_s:.3f}s")
 except Exception as e:
     check("справка по схеме доступна", False, str(e))
 

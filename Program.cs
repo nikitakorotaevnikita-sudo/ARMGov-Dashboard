@@ -299,17 +299,17 @@ class Program
         {
             case "/api/refresh": Cache.Clear(); J(ctx, new { ok = true }); return;
             case "/api/processes": JCached(ctx, ck, () => BuildProcesses()); return;
-            case "/api/overview": JCached(ctx, ck, () => BuildOverview(q["period"])); return;
+            case "/api/overview": JCachedPeriod(ctx, ck, q["period"], () => BuildOverview(q["period"])); return;
             case "/api/my/tasks": JCached(ctx, ck, () => BuildMyTasks()); return;
             case "/api/leaders": JCached(ctx, ck, () => BuildLeaders(q["by"])); return;
             case "/api/leader/tasks": JCached(ctx, ck, () => BuildLeaderTasks(q["by"], q["id"])); return;
-            case "/api/process": JCached(ctx, ck, () => BuildProcess(q["key"], q["period"])); return;
-            case "/api/process/stuck": JCached(ctx, ck, () => BuildStuck(q["key"], q["period"])); return;
-            case "/api/process/workload": JCached(ctx, ck, () => BuildWorkload(q["key"], q["period"])); return;
-            case "/api/process/departments": JCached(ctx, ck, () => BuildDepartments(q["key"], q["period"])); return;
-            case "/api/process/dept-tasks": JCached(ctx, ck, () => BuildDeptTasks(q["key"], q["dept"], q["period"])); return;
-            case "/api/process/kind-tasks": JCached(ctx, ck, () => BuildKindTasks(q["key"], q["kind"], q["period"])); return;
-            case "/api/process/by-kind": JCached(ctx, ck, () => BuildByKind(q["key"], q["period"])); return;
+            case "/api/process": JCachedPeriod(ctx, ck, q["period"], () => BuildProcess(q["key"], q["period"])); return;
+            case "/api/process/stuck": JCachedPeriod(ctx, ck, q["period"], () => BuildStuck(q["key"], q["period"])); return;
+            case "/api/process/workload": JCachedPeriod(ctx, ck, q["period"], () => BuildWorkload(q["key"], q["period"])); return;
+            case "/api/process/departments": JCachedPeriod(ctx, ck, q["period"], () => BuildDepartments(q["key"], q["period"])); return;
+            case "/api/process/dept-tasks": JCachedPeriod(ctx, ck, q["period"], () => BuildDeptTasks(q["key"], q["dept"], q["period"])); return;
+            case "/api/process/kind-tasks": JCachedPeriod(ctx, ck, q["period"], () => BuildKindTasks(q["key"], q["kind"], q["period"])); return;
+            case "/api/process/by-kind": JCachedPeriod(ctx, ck, q["period"], () => BuildByKind(q["key"], q["period"])); return;
             case "/api/appeals/topics": JCached(ctx, ck, () => BuildAppealTopics()); return;
             case "/api/appeals/systemic": J(ctx, BuildAppealSystemic(q["force"] == "1")); return;
             case "/api/export":
@@ -443,6 +443,18 @@ class Program
         else { json = JsonSerializer.Serialize(build()); at = now; Cache[key] = (now, json); }
         ctx.Response.AddHeader("X-Data-At", at.ToString("yyyy-MM-dd HH:mm:ss"));
         Write(ctx, 200, "application/json; charset=utf-8", json);
+    }
+    // Для эндпоинтов, принимающих period: PeriodClause бросает исключение на нераспознанное
+    // значение (это правильно — молчаливый откат к «всё время» отравляет метрики, см. комментарий
+    // над PeriodClause), но само исключение не должно всплывать общим обработчиком в HTTP 500 —
+    // устаревшая закладка в браузере или клиент с битым query получат голый текст исключения
+    // вместо ответа. Проверяем period заранее и, если он невалиден, отдаём HTTP 200 с error —
+    // так же, как остальной прототип (см. /api/ai/tool, /api/ai/sql/run) — и не идём в билдер.
+    static void JCachedPeriod(HttpListenerContext ctx, string ck, string period, Func<object> build)
+    {
+        try { PeriodClause(period); }
+        catch (Exception ex) { J(ctx, new { error = ex.Message }); return; }
+        JCached(ctx, ck, build);
     }
     static void Write(HttpListenerContext ctx, int code, string ct, string body)
     {

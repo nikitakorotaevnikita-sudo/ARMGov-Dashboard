@@ -123,6 +123,34 @@ try:
 except Exception as e:
     check("period", False, str(e))
 
+# Нераспознанный period не должен всплывать голой пятисоткой (было — до фикса раунда 2):
+# PeriodClause сама бросает исключение на неизвестное значение (это правильно), но
+# эндпоинты обязаны перехватывать его и отдавать HTTP 200 с error, как остальной прототип.
+BAD_PERIOD = urllib.parse.quote("мусор")
+try:
+    st, j = _req(f"/api/overview?period={BAD_PERIOD}")
+    check("overview: period=мусор -> HTTP 200 (не 500), error по-русски",
+          st == 200 and isinstance(j.get("error"), str) and "period" in j.get("error", ""))
+except Exception as e:
+    check("overview: period=мусор -> HTTP 200, а не 500", False, str(e))
+
+try:
+    bad_period_eps = [
+        f"/api/process?key={KEY}",
+        f"/api/process/stuck?key={KEY}",
+        f"/api/process/workload?key={KEY}",
+        f"/api/process/departments?key={KEY}",
+        f"/api/process/by-kind?key={KEY}",
+    ]
+    ok_all = True
+    for path in bad_period_eps:
+        st, j = _req(path + f"&period={BAD_PERIOD}")
+        if not (st == 200 and isinstance(j.get("error"), str)):
+            ok_all = False
+    check("остальные эндпоинты списка: мусорный period -> 200 с error, не 500", ok_all)
+except Exception as e:
+    check("остальные эндпоинты списка: мусорный period", False, str(e))
+
 # ---------------- БЭК-ОФИС / КОНФИГ ----------------
 section("Бэк-офис  /api/config (секреты маскируются)")
 try:

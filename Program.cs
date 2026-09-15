@@ -355,6 +355,10 @@ class Program
             case "/api/ai/tools":
                 J(ctx, new { tools = ToolCatalog.Select(t => new { name = t.name, args = t.args, desc = t.desc }) });
                 return;
+            case "/api/ai/schema":
+                try { J(ctx, SchemaHelp(q["table"])); }
+                catch (Exception ex) { J(ctx, new { error = ex.Message }); }
+                return;
             case "/api/ai/tool":
             {
                 try
@@ -2494,6 +2498,82 @@ class Program
         (prefix.IndexOf("localhost", StringComparison.OrdinalIgnoreCase) >= 0 ||
          prefix.IndexOf("127.0.0.1", StringComparison.Ordinal) >= 0 ||
          prefix.IndexOf("[::1]", StringComparison.Ordinal) >= 0);
+
+    // ---------- ИИ-харнесс: схема ----------
+    // Словарь ядра: только таблицы, которые дашборд реально использует. Всё остальное
+    // агент добирает действием schema (см. SchemaHelp ниже) — так промпт остаётся коротким,
+    // а модель не слепа насчёт остальной базы.
+    //
+    // Каждая таблица и колонка сверена с живой базой стенда через сам харнесс
+    // (information_schema.tables/columns) — задача 7, п. сверки словаря. Расхождений с
+    // тем, что было написано в ТЗ, не нашлось: все 12 таблиц и все перечисленные колонки
+    // существуют под теми же именами.
+    //
+    // ПРАВИЛА РАСЧЁТА взяты дословно из логики самого дашборда (AsgJoin/BuildOverview и
+    // соседние сборщики, где считаются overdue/onTime), а не придуманы заново — иначе
+    // цифры чата разойдутся с экраном:
+    //   — overdue: a.status::text='InProcess' and a.deadline is not null and a.deadline<now()
+    //     (проверка "deadline is not null" обязательна в тексте запроса, который пишет
+    //     модель, — без неё она рискует забыть её сама и по ошибке решить, что NULL уже
+    //     "просрочен", хотя семантика SQL это и так отфильтровала бы);
+    //   — Aborted не в overdue и не в onTime: обе метрики построены только по
+    //     status IN ('InProcess','Completed'). В "total" (общее число задач/поручений)
+    //     Aborted при этом попадает — это НЕ то же самое, что "не входит в статистику
+    //     вообще", поэтому формулировка ниже сужена именно до overdue/onTime;
+    //   — уведомления исключаются предикатом NoticeNotIn (discriminator not in (...)),
+    //     подготовленным для алиаса задания "a" — модель должна писать свой join такого же
+    //     вида (sungero_wf_assignment a ...) и добавлять исключение уведомлений сама, т.к.
+    //     готовый предикат ей не передаётся;
+    //   — дедупликация поручения по maintask подтверждена реальным использованием в
+    //     BuildMyTasks/BuildLeaderTasks (head = maintask, если он заполнен, иначе сама
+    //     задача — see строки ~719-720, ~1208-1215).
+    static string SchemaCore() => string.Join("\n", new[] {
+        "sungero_wf_task — задачи (поручения, обращения, НПА). id, subject, created, maintask (корневая задача),",
+        "  assigneetai_recman_sungero (ответственный исполнитель), supervisor_recman_sungero (контролёр),",
+        "  isundercontrol_recman_sungero (на контроле), processkind.",
+        "sungero_wf_assignment — задания внутри задач. id, task, maintask, performer (исполнитель),",
+        "  status (InProcess | Completed | Aborted), deadline (срок), completed (факт), created.",
+        "sungero_core_recipient — сотрудники и подразделения. id, name,",
+        "  department_company_sungero (подразделение), emplbunit_company_sungero (НОР).",
+        "sungero_recman_taicoassignees — соисполнители поручения: task, assignee.",
+        "sungero_recman_taiparts — пункты поручения: task, assignee.",
+        "sungero_recman_taipartscoasgs — соисполнители пункта: task, coassignee.",
+        "sungero_wf_workflowhistory — история движения по маршруту.",
+        "sungero_system_entitytype — типы сущностей; из них берутся типы-уведомления.",
+        "sungero_content_edoc — документы; name содержит тему обращения.",
+        "sungero_wf_processkind — виды процессов.",
+        "sungero_company_jobtitle — должности.",
+        "sungero_parties_counterparty — контрагенты.",
+        "",
+        "ПРАВИЛА РАСЧЁТА (обязательны — иначе цифры разойдутся с дашбордом):",
+        "— просрочка: status = 'InProcess' и deadline is not null и deadline < now();",
+        "— завершено в срок: status = 'Completed' и completed <= deadline;",
+        "— статус Aborted не считается ни просроченным, ни завершённым в срок",
+        "  (в обе метрики попадают только InProcess/Completed соответственно);",
+        "— уведомления (типы *Notice/*Notification в discriminator) исключаются из статистики по заданиям;",
+        "— одно поручение = одна корневая задача maintask, дедупликация по ней.",
+    });
+
+    // Справка по конкретной таблице — то, чего нет в словаре ядра. Имя таблицы приходит
+    // напрямую из query-параметра, поэтому проверяется белым списком символов ДО похода
+    // в базу: подставлять его в SQL как есть небезопасно (иначе это был бы обход SqlCheck).
+    static object SchemaHelp(string table)
+    {
+        if (string.IsNullOrWhiteSpace(table) || !Regex.IsMatch(table, @"^[a-z0-9_]+$", RegexOptions.None, SqlRegexTimeout))
+            return new { error = "недопустимое имя таблицы" };
+        var cols = new List<object>();
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        using (var cmd = new NpgsqlCommand(
+            "select column_name, data_type from information_schema.columns " +
+            "where table_name = @t order by ordinal_position limit 80", c))
+        {
+            cmd.Parameters.AddWithValue("t", table);
+            using var rd = cmd.ExecuteReader();
+            while (rd.Read()) cols.Add(new { name = rd.GetString(0), type = rd.GetString(1) });
+        }
+        if (cols.Count == 0) return new { error = "таблица не найдена: " + table };
+        return new { table, columns = cols };
+    }
 
     // ---------- ИИ-харнесс: готовые инструменты ----------
     // Ключевые цифры агент не считает сам: он берёт их у тех же сборщиков, что рисуют

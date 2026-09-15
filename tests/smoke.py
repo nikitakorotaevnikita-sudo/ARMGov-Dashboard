@@ -514,6 +514,20 @@ try:
 except Exception as e:
     check("каталог инструментов доступен", False, str(e))
 
+section("Словарь схемы  /api/ai/schema")
+try:
+    st, d = _req("/api/ai/schema?table=sungero_wf_assignment")
+    cols = [c["name"] for c in d.get("columns", [])]
+    check("справка по таблице отдаёт колонки", len(cols) > 5, str(len(cols)))
+    check("в колонках есть deadline", "deadline" in cols)
+    check("у колонки есть тип", bool(d.get("columns", [{}])[0].get("type")))
+    st, d = _req("/api/ai/schema?table=" + urllib.parse.quote("нет_такой_таблицы"))
+    check("несуществующая таблица — понятная ошибка", bool(d.get("error")) or d.get("columns") == [])
+    st, d = _req("/api/ai/schema?table=" + urllib.parse.quote("sungero; drop"))
+    check("имя таблицы с недопустимыми символами отвергается", bool(d.get("error")), str(d.get("error")))
+except Exception as e:
+    check("справка по схеме доступна", False, str(e))
+
 # ---------------- ИТОГ ----------------
 section("ИТОГ")
 print(f"  Проверок данных/UI: PASS={PASS}  FAIL={FAIL}")

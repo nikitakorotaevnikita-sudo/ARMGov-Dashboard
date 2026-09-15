@@ -2509,29 +2509,39 @@ class Program
     // тем, что было написано в ТЗ, не нашлось: все 12 таблиц и все перечисленные колонки
     // существуют под теми же именами.
     //
-    // ПРАВИЛА РАСЧЁТА взяты дословно из логики самого дашборда (AsgJoin/BuildOverview и
-    // соседние сборщики, где считаются overdue/onTime), а не придуманы заново — иначе
-    // цифры чата разойдутся с экраном:
-    //   — overdue: a.status::text='InProcess' and a.deadline is not null and a.deadline<now()
-    //     (проверка "deadline is not null" обязательна в тексте запроса, который пишет
-    //     модель, — без неё она рискует забыть её сама и по ошибке решить, что NULL уже
-    //     "просрочен", хотя семантика SQL это и так отфильтровала бы);
-    //   — Aborted не в overdue и не в onTime: обе метрики построены только по
-    //     status IN ('InProcess','Completed'). В "total" (общее число задач/поручений)
-    //     Aborted при этом попадает — это НЕ то же самое, что "не входит в статистику
-    //     вообще", поэтому формулировка ниже сужена именно до overdue/onTime;
-    //   — уведомления исключаются предикатом NoticeNotIn (discriminator not in (...)),
-    //     подготовленным для алиаса задания "a" — модель должна писать свой join такого же
-    //     вида (sungero_wf_assignment a ...) и добавлять исключение уведомлений сама, т.к.
-    //     готовый предикат ей не передаётся;
-    //   — дедупликация поручения по maintask подтверждена реальным использованием в
-    //     BuildMyTasks/BuildLeaderTasks (head = maintask, если он заполнен, иначе сама
-    //     задача — see строки ~719-720, ~1208-1215).
+    // Находка ревью (task-7, раунд правок 1): текст ниже проверен практикой — написан SQL
+    // строго по формулировкам словаря (без домысливания) и сверен с суммой overdue из
+    // /api/overview. До правки расхождение было в разы (2608 против 810, см. отчёт по задаче) —
+    // причины ниже разложены по пунктам находок:
+    //   — п.1 (Critical): в словаре не было правил, по которым дашборд делит sungero_wf_task
+    //     на поручения/обращения/НПА (список Procs, ~строка 195) — модель без них считает по
+    //     ВСЕЙ таблице задач. Правила ниже — раздел "КЛАССИФИКАЦИЯ ПРОЦЕССОВ";
+    //   — п.2 (Critical): дедупликация по maintask раньше стояла в общем списке "обязательных"
+    //     правил, хотя дашборд применяет её только в персональных выборках (BuildMyTasks,
+    //     BuildLeaderTasks — head = maintask, если заполнен, иначе сама задача, см. ~719-720,
+    //     ~1208-1215), а не в агрегатных KPI overdue/onTime (BuildOverview, ~516/~522 — там
+    //     count(*) по заданиям без дедупликации). Ниже зона действия правила явная;
+    //   — п.3 (Important): assigneetai_recman_sungero/supervisor_recman_sungero — поля задачи,
+    //     которые дашборд нигде не читает; все разрезы по людям идут через
+    //     sungero_wf_assignment.performer. Ниже — явная оговорка, чтобы не перепутать;
+    //   — п.5 (Important): "завершено в срок" уточнено до полного вида с обеими null-проверками
+    //     (completed is not null и deadline is not null), как и в коде дашборда, а не только
+    //     deadline is not null, как было раньше — асимметрия со строкой про просрочку;
+    //   — п.7 (Minor): добавлена явная строка про join a.task=t.id / a.maintask=t.id — раньше
+    //     словарь описывал таблицы по отдельности, не говоря, как их соединять.
+    //   overdue/onTime здесь — дословно логика AsgJoin/BuildOverview, а не придуманы заново:
+    //   иначе цифры чата разойдутся с экраном. Aborted не входит ни в overdue, ни в onTime
+    //   (обе метрики — только по InProcess/Completed соответственно), но в "total" (общее
+    //   число задач/поручений) Aborted всё же учитывается — это разные метрики.
     static string SchemaCore() => string.Join("\n", new[] {
         "sungero_wf_task — задачи (поручения, обращения, НПА). id, subject, created, maintask (корневая задача),",
-        "  assigneetai_recman_sungero (ответственный исполнитель), supervisor_recman_sungero (контролёр),",
-        "  isundercontrol_recman_sungero (на контроле), processkind.",
-        "sungero_wf_assignment — задания внутри задач. id, task, maintask, performer (исполнитель),",
+        "  processkind. Поля assigneetai_recman_sungero (ответственный исполнитель) и",
+        "  supervisor_recman_sungero (контролёр) в таблице есть, но дашборд их НЕ использует нигде —",
+        "  для вопросов «кто исполнитель», «сколько у сотрудника», «по людям» используй",
+        "  sungero_wf_assignment.performer, а не эти поля задачи.",
+        "sungero_wf_assignment — задания внутри задач. id, task (= sungero_wf_task.id),",
+        "  maintask (корневая задача поручения), performer (исполнитель задания — это то поле,",
+        "  которое дашборд использует для всех разрезов по людям),",
         "  status (InProcess | Completed | Aborted), deadline (срок), completed (факт), created.",
         "sungero_core_recipient — сотрудники и подразделения. id, name,",
         "  department_company_sungero (подразделение), emplbunit_company_sungero (НОР).",
@@ -2545,34 +2555,108 @@ class Program
         "sungero_company_jobtitle — должности.",
         "sungero_parties_counterparty — контрагенты.",
         "",
+        "СВЯЗЬ ТАБЛИЦ: задание привязано к задаче через a.task = t.id (алиас a — sungero_wf_assignment,",
+        "  t — sungero_wf_task). a.maintask = t.id — то же самое, но до корневой задачи дерева поручения.",
+        "  Без этого join таблицы по отдельности не складываются в рабочий запрос.",
+        "",
+        "КЛАССИФИКАЦИЯ ПРОЦЕССОВ (обязательна для любого регионального KPI — иначе запрос считает",
+        "  по ВСЕЙ sungero_wf_task, а не по трём процессам, которые показывает дашборд):",
+        "— поручения: t.discriminator = 'c290b098-12c7-487d-bb38-73e2c98f9789';",
+        "— обращения граждан: t.discriminator = '4ef03457-8b42-4239-a3c5-d4d05e61f0b6';",
+        "— НПА (регламентирующие): НЕ дискриминатор, а тема — t.subject ilike '%НПА%' or",
+        "  t.subject ilike '%регламент%' or t.subject ilike '%правов%акт%' or t.subject ilike '%нормативн%';",
+        "— KPI дашборда (overdue, соблюдение сроков, /api/overview) считаются ТОЛЬКО по объединению",
+        "  этих трёх условий через OR, а не по всей таблице задач.",
+        "",
         "ПРАВИЛА РАСЧЁТА (обязательны — иначе цифры разойдутся с дашбордом):",
         "— просрочка: status = 'InProcess' и deadline is not null и deadline < now();",
-        "— завершено в срок: status = 'Completed' и completed <= deadline;",
+        "— завершено в срок: status = 'Completed' и completed is not null и deadline is not null",
+        "  и completed <= deadline (обе null-проверки явно в тексте запроса — так же, как и в",
+        "  правиле просрочки, а не только для одной из двух метрик);",
         "— статус Aborted не считается ни просроченным, ни завершённым в срок",
-        "  (в обе метрики попадают только InProcess/Completed соответственно);",
+        "  (в обе метрики попадают только InProcess/Completed соответственно; в «всего задач»",
+        "  Aborted при этом всё равно учитывается — это другая метрика);",
         "— уведомления (типы *Notice/*Notification в discriminator) исключаются из статистики по заданиям;",
-        "— одно поручение = одна корневая задача maintask, дедупликация по ней.",
+        "— дедупликация по maintask (одно поручение = одна корневая задача) — ТОЛЬКО для персональных",
+        "  списков заданий конкретного человека (\"мои поручения\", поручения руководителя/подразделения).",
+        "  Агрегатные KPI просрочки и соблюдения сроков дедупликацию по maintask НЕ применяют и считают",
+        "  count(*) напрямую по заданиям — если продублировать её здесь, число просроченных занизится",
+        "  почти на треть.",
     });
 
     // Справка по конкретной таблице — то, чего нет в словаре ядра. Имя таблицы приходит
     // напрямую из query-параметра, поэтому проверяется белым списком символов ДО похода
     // в базу: подставлять его в SQL как есть небезопасно (иначе это был бы обход SqlCheck).
+    //
+    // Находка ревью (task-7, раунд правок 1, п.4 и п.6):
+    //   — п.4: ТЗ (раздел Interfaces) обещает columns:[{name,type,samples}], а samples никогда
+    //     не собирались. Для типа status в information_schema это USER-DEFINED — без примеров
+    //     справка не сообщает вообще ничего полезного о допустимых значениях. Примеры — по два
+    //     различающихся непустых значения на колонку, обрезанных до 100 символов (в примерах
+    //     из обращений граждан попадаются ФИО заявителей — это не новый класс раскрытия:
+    //     существующие функции прототипа уже отправляют модели темы обращений с ФИО);
+    //   — п.6: лимит 80 колонок молча резал sungero_wf_assignment (217 колонок) и
+    //     sungero_wf_task/sungero_content_edoc (200+) по ordinal_position, а не по важности —
+    //     прикладные поля в хвосте таблицы для модели просто исчезали. Теперь отдаём totalColumns
+    //     и truncated, как SqlRun отдаёт truncated для строк — модель хотя бы увидит, что справка
+    //     неполная, и сможет спросить иначе (например, через information_schema напрямую).
     static object SchemaHelp(string table)
     {
         if (string.IsNullOrWhiteSpace(table) || !Regex.IsMatch(table, @"^[a-z0-9_]+$", RegexOptions.None, SqlRegexTimeout))
             return new { error = "недопустимое имя таблицы" };
-        var cols = new List<object>();
+        var colNames = new List<(string name, string type)>();
         using var c = new NpgsqlConnection(Cs); c.Open();
+        long totalColumns;
+        using (var cnt = new NpgsqlCommand("select count(*) from information_schema.columns where table_name = @t", c))
+        {
+            cnt.Parameters.AddWithValue("t", table);
+            totalColumns = Convert.ToInt64(cnt.ExecuteScalar());
+        }
         using (var cmd = new NpgsqlCommand(
             "select column_name, data_type from information_schema.columns " +
             "where table_name = @t order by ordinal_position limit 80", c))
         {
             cmd.Parameters.AddWithValue("t", table);
             using var rd = cmd.ExecuteReader();
-            while (rd.Read()) cols.Add(new { name = rd.GetString(0), type = rd.GetString(1) });
+            while (rd.Read()) colNames.Add((rd.GetString(0), rd.GetString(1)));
         }
-        if (cols.Count == 0) return new { error = "таблица не найдена: " + table };
-        return new { table, columns = cols };
+        if (colNames.Count == 0) return new { error = "таблица не найдена: " + table };
+
+        // Один проход по колонкам за одну read-only транзакцию с общим таймаутом (как в SqlRun),
+        // но каждая колонка — под своим SAVEPOINT: ошибка/таймаут на одной колонке не должны
+        // прервать сбор примеров по остальным (без savepoint транзакция PostgreSQL после первой
+        // же ошибки блокирует все последующие команды до конца транзакции).
+        // savepoint/rollback to savepoint осмысленны только внутри явной транзакции —
+        // в autocommit-режиме (без BeginTransaction) каждая команда была бы своей отдельной
+        // транзакцией, и savepoint пропадал бы сразу после создания.
+        var quotedTable = "\"" + table.Replace("\"", "\"\"") + "\"";
+        using var tx = c.BeginTransaction();
+        using (var pre = new NpgsqlCommand("set transaction read only; set local statement_timeout = '3s'", c, tx))
+            pre.ExecuteNonQuery();
+        var cols = new List<object>();
+        foreach (var (name, type) in colNames)
+        {
+            var samples = new List<string>();
+            using (var sp = new NpgsqlCommand("savepoint sp_sample", c, tx)) sp.ExecuteNonQuery();
+            try
+            {
+                var quotedCol = "\"" + name.Replace("\"", "\"\"") + "\"";
+                using var sc = new NpgsqlCommand(
+                    $"select distinct {quotedCol}::text from {quotedTable} where {quotedCol} is not null limit 2", c, tx);
+                using var rd = sc.ExecuteReader();
+                while (rd.Read())
+                    if (!rd.IsDBNull(0)) samples.Add(Trunc(rd.GetString(0), 100));
+            }
+            catch { /* защита от долгих/проблемных колонок (п.4 находки) — просто пустые samples */ }
+            finally
+            {
+                using var rb = new NpgsqlCommand("rollback to savepoint sp_sample", c, tx);
+                try { rb.ExecuteNonQuery(); } catch { /* транзакция уже в порядке — не критично */ }
+            }
+            cols.Add(new { name, type, samples });
+        }
+        tx.Rollback();
+        return new { table, columns = cols, totalColumns, truncated = totalColumns > colNames.Count };
     }
 
     // ---------- ИИ-харнесс: готовые инструменты ----------

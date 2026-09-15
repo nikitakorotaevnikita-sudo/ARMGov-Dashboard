@@ -521,6 +521,24 @@ try:
     check("справка по таблице отдаёт колонки", len(cols) > 5, str(len(cols)))
     check("в колонках есть deadline", "deadline" in cols)
     check("у колонки есть тип", bool(d.get("columns", [{}])[0].get("type")))
+
+    # Находка ревью (task-7, раунд правок 1, п.4): у каждой непустой колонки должны быть
+    # samples — без них справка по типу USER-DEFINED (например status) не говорит ничего.
+    deadline_col = next(c for c in d["columns"] if c["name"] == "deadline")
+    check("у колонки deadline есть samples", isinstance(deadline_col.get("samples"), list) and len(deadline_col["samples"]) > 0,
+          str(deadline_col.get("samples")))
+    status_col = next(c for c in d["columns"] if c["name"] == "status")
+    check("у колонки status есть непустые samples (тип USER-DEFINED без них бесполезен)",
+          isinstance(status_col.get("samples"), list) and len(status_col["samples"]) > 0, str(status_col.get("samples")))
+    check("каждое значение samples обрезано до 100 символов",
+          all(isinstance(s, str) and len(s) <= 101 for c in d["columns"] for s in c.get("samples", [])))
+
+    # Находка ревью (п.6): sungero_wf_assignment — 217 колонок, лимит справки 80 —
+    # признак усечения обязан быть честным, как truncated у SqlRun.
+    check("totalColumns отражает реальное число колонок (> лимита в 80)",
+          isinstance(d.get("totalColumns"), int) and d["totalColumns"] > 80, str(d.get("totalColumns")))
+    check("truncated=true для широкой таблицы sungero_wf_assignment", d.get("truncated") is True, str(d.get("truncated")))
+
     st, d = _req("/api/ai/schema?table=" + urllib.parse.quote("нет_такой_таблицы"))
     check("несуществующая таблица — понятная ошибка", bool(d.get("error")) or d.get("columns") == [])
     st, d = _req("/api/ai/schema?table=" + urllib.parse.quote("sungero; drop"))

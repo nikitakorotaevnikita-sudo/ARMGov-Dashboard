@@ -246,7 +246,7 @@ check("строчный комментарий -- вырезан из effective"
 
 d = sqlcheck("select id from sungero_wf_task")
 check("запросу без limit добавлена обёртка",
-      d.get("ok") is True and "limit 200" in (d.get("effective") or "").lower(),
+      d.get("ok") is True and "limit 201" in (d.get("effective") or "").lower(),
       d.get("effective"))
 
 d = sqlcheck("update sungero_wf_task set subject = 'x'")
@@ -274,12 +274,12 @@ for good in ["select created from sungero_wf_task",
 # --- находка раунда 1, пункт 3: обёртка limit 200 накладывается безусловно ---
 d = sqlcheck("select id from sungero_wf_task limit 100000000")
 check("обёртка накладывается даже при своём limit",
-      "limit 200" in (d.get("effective") or "").lower(), d.get("effective"))
+      "limit 201" in (d.get("effective") or "").lower(), d.get("effective"))
 
 d = sqlcheck("select * from a where a.x in (select y from sungero_wf_task limit 10)")
 check("вложенный limit не подменяет внешнюю обёртку",
       (d.get("effective") or "").lower().count("limit") >= 2 and
-      (d.get("effective") or "").lower().rstrip().endswith("limit 200"),
+      (d.get("effective") or "").lower().rstrip().endswith("limit 201"),
       d.get("effective"))
 
 # --- находка раунда 1, пункт 4: строковые литералы разбираются посимвольно ---
@@ -321,45 +321,88 @@ for good in ["select created from sungero_wf_task",
 
 # ---------------- ХАРНЕСС: исполнитель SQL ----------------
 section("Исполнитель SQL  /api/ai/sql/run")
-try:
-    st, d = _req("/api/ai/sql/run?q=" + urllib.parse.quote(
-        "select count(*) as c from sungero_wf_task"))
-    check("исполнитель вернул строки", isinstance(d.get("rows"), list) and len(d["rows"]) == 1)
-    check("исполнитель вернул колонки", d.get("cols") == ["c"])
-    check("исполнитель отдаёт время", isinstance(d.get("ms"), int))
 
-    st, d = _req("/api/ai/sql/run?q=" + urllib.parse.quote(
-        "update sungero_wf_task set subject='x'"))
-    check("запись не исполняется", bool(d.get("error")))
-except Exception as e:
-    check("исполнитель доступен", False, str(e))
+def sqlrun(q):
+    # Падение ОДНОЙ проверки не должно обрывать весь блок (находка ревью task-5,
+    # раунд правок 1, п.5 — здесь снова был один try на несколько check подряд).
+    try:
+        st, d = _req("/api/ai/sql/run?q=" + urllib.parse.quote(q))
+        return d
+    except Exception as e:
+        return {"_exc": str(e)}
+
+d = sqlrun("select count(*) as c from sungero_wf_task")
+check("исполнитель вернул строки", isinstance(d.get("rows"), list) and len(d.get("rows") or []) == 1, d.get("_exc") or d.get("error"))
+check("исполнитель вернул колонки", d.get("cols") == ["c"])
+check("исполнитель отдаёт время", isinstance(d.get("ms"), int))
+
+d = sqlrun("update sungero_wf_task set subject='x'")
+check("запись не исполняется", bool(d.get("error")))
 
 # --- второй рубеж: исполняется effective, а не исходный текст ---
 # Комментарий вырезается валидатором ДО проверки, поэтому текст, замаскированный
 # комментарием, обязан быть отклонён целиком, а не исполнен "как есть".
 d = sqlcheck("select 1 -- /*\n drop table sungero_wf_task */")
 check("маскировка комментарием отклонена валидатором", d.get("ok") is False)
-try:
-    st, d = _req("/api/ai/sql/run?q=" + urllib.parse.quote(
-        "select 1 -- /*\n drop table sungero_wf_task */"))
-    check("исполнитель тоже отклоняет замаскированный drop", bool(d.get("error")))
-except Exception as e:
-    check("исполнитель тоже отклоняет замаскированный drop", False, str(e))
+d = sqlrun("select 1 -- /*\n drop table sungero_wf_task */")
+check("исполнитель тоже отклоняет замаскированный drop", bool(d.get("error")), d.get("_exc"))
 
-# --- лимит строк: запрос с заведомо большим числом строк усечён до 200 ---
-# Обёртка SqlCheck сама заканчивается на "limit 200" (см. eff), поэтому PostgreSQL
-# никогда не отдаёт исполнителю 201-ю строку — через публичный эндпоинт флаг
-# truncated всегда false, это защита в два слоя (SQL-уровень + прикладной maxRows
-# в SqlRun), а не наблюдаемое здесь поведение. Что прикладная truncation-логика
-# в SqlRun сама по себе исправна, проверено вручную отдельным вызовом SqlRun
-# на сыром запросе без обёртки — см. task-5-report.md.
-try:
-    st, d = _req("/api/ai/sql/run?q=" + urllib.parse.quote(
-        "select * from generate_series(1,1000) as g(n)"))
-    check("лимит строк соблюдён (ровно 200)", len(d.get("rows") or []) == 200, len(d.get("rows") or []))
-    check("truncated=false: SQL-обёртка уже ограничила выборку до 200", d.get("truncated") is False)
-except Exception as e:
-    check("лимит строк соблюдён (ровно 200)", False, str(e))
+# --- лимит строк и честный truncated (находка ревью task-5, раунд правок 1, п.2) ---
+# Раньше обёртка SqlCheck сама заканчивалась на "limit 200" — тем же числом, что и
+# maxRows в SqlRun, поэтому 201-я строка физически никогда не попадала в SqlRun и
+# truncated был всегда false, даже когда выборка была реально урезана (модель получила
+# бы 200 строк из 81095 и решила бы, что это все данные). Теперь SqlCheck оборачивает
+# в "limit 201", а maxRows в SqlRun остаётся 200 — лишняя 201-я строка используется
+# только как признак усечения и в ответ не попадает.
+d = sqlrun("select * from generate_series(1,1000) as g(n)")
+check("лимит строк соблюдён (ровно 200)", len(d.get("rows") or []) == 200, len(d.get("rows") or []))
+check("truncated=true: выдача реально урезана (1000 строк источника, отдано 200)",
+      d.get("truncated") is True, d.get("truncated"))
+
+d = sqlrun("select id from sungero_wf_task limit 5")
+check("truncated=false: источник короче лимита, усечения нет",
+      d.get("truncated") is False, d.get("truncated"))
+
+# --- находка ревью task-5, раунд правок 1, п.3: обрезка работает не только для строк ---
+d = sqlrun("select array[repeat('y', 400)] as a")
+val = (d.get("rows") or [[None]])[0][0] if d.get("rows") else None
+check("значение-массив обрезано, а не отдано целиком (400 символов)",
+      isinstance(val, str) and len(val) < 400, val if not isinstance(val, str) else len(val))
+
+d = sqlrun("select repeat('z', 400)::bytea as b")
+val = (d.get("rows") or [[None]])[0][0] if d.get("rows") else None
+check("значение-bytea (base64) обрезано, а не отдано целиком",
+      isinstance(val, str) and len(val) <= 201, val if not isinstance(val, str) else len(val))
+
+d = sqlrun("select inet '1.2.3.4' as ip")
+check("inet не роняет эндпоинт в {error}", bool(d.get("rows")) and not d.get("error"), d.get("error"))
+
+# --- находка ревью task-5, раунд правок 1, п.4: второй рубеж (read-only транзакция) ---
+# Оба прежних "пишущих" теста (update/drop выше) отсекались ещё валидатором — то есть
+# были бы зелёными при ЛЮБОЙ реализации SqlRun, включая вариант вообще без read-only
+# транзакции. nextval() не входит ни в один деней-лист (это не запись данных с точки
+# зрения SqlCheck), поэтому проходит валидатор и разбивается именно о PostgreSQL.
+# Имя последовательности берём из самой БД: захардкоженное имя могло бы не существовать
+# на другом стенде. nextval() физически НЕ увеличивает счётчик — read-only транзакция
+# откатывает попытку целиком, это и есть предмет проверки.
+seqd = sqlrun("select sequence_name from information_schema.sequences limit 1")
+seqrows = seqd.get("rows") or []
+if seqrows:
+    seq = seqrows[0][0]
+    d = sqlrun("select nextval('\"" + seq + "\"')")
+    err = (d.get("error") or "").lower()
+    check("read-only транзакция блокирует запись мимо валидатора (nextval на " + seq + ")",
+          "nextval" in err and ("только" in err or "read-only" in err), d.get("error"))
+else:
+    check("read-only транзакция блокирует запись мимо валидатора", False, "в БД нет ни одной последовательности")
+
+# --- statement_timeout: тяжёлый запрос обязан быть прерван, а не повесить стенд ---
+# cross join двух generate_series по 20000 даёт count(*) по 400 млн строк — агрегату
+# нужно пройти всё до конца, прежде чем вернуть хотя бы одну строку, поэтому внешний
+# "limit 201" не спасает: без statement_timeout запрос считал бы десятки секунд/минуты.
+d = sqlrun("select count(*) from generate_series(1,20000) a cross join generate_series(1,20000) b")
+err = (d.get("error") or "").lower()
+check("statement_timeout прерывает тяжёлый запрос", "57014" in err or "тайм-аут" in err or "timeout" in err, d.get("error"))
 
 # ---------------- ИТОГ ----------------
 section("ИТОГ")

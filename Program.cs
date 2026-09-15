@@ -264,6 +264,15 @@ class Program
         l.Prefixes.Add(Prefix);
         l.Start();
         Console.WriteLine("ARMGov dashboard -> " + Prefix);
+        // Fail-fast диагностика при старте (находка ревью task-5, раунд 1, п.1): если
+        // Prefix сконфигурирован не на петлевой интерфейс, харнесс всё равно защищён
+        // проверкой Host на каждый запрос (см. IsLocalCall) — но админа стоит предупредить
+        // сразу, а не заставлять его читать код, чтобы понять, что происходит.
+        if (!IsLoopbackPrefix(Prefix))
+            Console.WriteLine("ВНИМАНИЕ: Prefix не похож на локальный (" + Prefix + "). " +
+                "ИИ-харнесс (/api/ai/sql/*) по-прежнему исполняет запросы только для локальных " +
+                "вызовов (проверка адреса и заголовка Host на каждый запрос), но сам факт " +
+                "нестандартного Prefix стоит перепроверить.");
         while (true)
         {
             HttpListenerContext ctx = null;
@@ -325,14 +334,14 @@ class Program
             case "/api/ai/explain": J(ctx, BuildAiExplain(ReadBody(ctx))); return;
             case "/api/ai/sql/check":
             {
-                if (!IsLoopbackPrefix(Prefix)) { J(ctx, new { error = "харнесс доступен только при локальном префиксе" }); return; }
+                if (!IsLocalCall(ctx)) { J(ctx, new { error = "харнесс доступен только при локальном вызове" }); return; }
                 var (ok, reason, eff) = SqlCheck(q["q"]);
                 J(ctx, new { ok, reason, effective = eff });
                 return;
             }
             case "/api/ai/sql/run":
             {
-                if (!IsLoopbackPrefix(Prefix)) { J(ctx, new { error = "харнесс доступен только при локальном префиксе" }); return; }
+                if (!IsLocalCall(ctx)) { J(ctx, new { error = "харнесс доступен только при локальном вызове" }); return; }
                 var (ok, reason, eff) = SqlCheck(q["q"]);
                 if (!ok) { J(ctx, new { error = reason }); return; }
                 try
@@ -2319,9 +2328,15 @@ class Program
         // Обёртка накладывается БЕЗУСЛОВНО, вне зависимости от того, есть ли в запросе
         // собственный LIMIT: собственный LIMIT может относиться к вложенному подзапросу
         // и не ограничивать внешний результат, а может быть намеренно завышен моделью/
-        // пользователем. select * from (...) t limit 200 корректен и для ORDER BY,
+        // пользователем. select * from (...) t limit 201 корректен и для ORDER BY,
         // и для UNION, и для WITH — все они являются валидным подзапросом в скобках.
-        var eff = "select * from (" + cleaned + ") t limit 200";
+        //
+        // Находка ревью (task-5, раунд правок 1, п.2): здесь стоит "limit 201", а не 200.
+        // maxRows в SqlRun остаётся 200 — 201-я строка, если она есть, никогда не попадает
+        // в ответ, но её наличие и есть честный признак усечения (truncated=true). Раньше
+        // оба лимита совпадали (200 и 200), поэтому SqlRun физически не мог увидеть 201-ю
+        // строку и truncated был всегда false, даже когда выборка реально была урезана.
+        var eff = "select * from (" + cleaned + ") t limit 201";
         return (true, null, eff);
     }
 
@@ -2356,7 +2371,27 @@ class Program
                 for (int i = 0; i < n; i++)
                 {
                     var v = rd.IsDBNull(i) ? null : rd.GetValue(i);
-                    r[i] = v is string s ? Trunc(s, 200) : v;
+                    // Находка ревью (task-5, раунд правок 1, п.3): обрезать по ПРЕДСТАВЛЕНИЮ
+                    // значения, а не по .NET-типу. "v is string" пропускал мимо всё, что
+                    // Npgsql возвращает не строкой: массив (array_agg внутри 200 строк — это
+                    // десятки мегабайт в память процесса), bytea, inet и т.п.
+                    //
+                    // Список "как есть" — явный allow-list, а не "v is IFormattable": в .NET 10
+                    // System.Net.IPAddress тоже реализует IFormattable (для TryFormat), но
+                    // System.Text.Json не умеет сериализовать IPAddress "из коробки" — при
+                    // проверке эндпоинт падал в {error} именно из-за этого на "select inet
+                    // '1.2.3.4'". Явный список — только те типы, которые Npgsql реально отдаёт
+                    // для простых скалярных колонок и которые System.Text.Json сериализует сам.
+                    r[i] = v switch
+                    {
+                        null => null,
+                        string s => Trunc(s, 200),
+                        byte[] b => Trunc(Convert.ToBase64String(b), 200),
+                        bool or sbyte or byte or short or ushort or int or uint or long or ulong
+                            or float or double or decimal
+                            or DateTime or DateTimeOffset or TimeSpan or Guid => v,
+                        _ => Trunc(Convert.ToString(v, CultureInfo.InvariantCulture), 200)
+                    };
                 }
                 rows.Add(r);
             }
@@ -2366,9 +2401,35 @@ class Program
     }
 
     // Харнесс отдаёт исполнение произвольного SQL без какой-либо аутентификации —
-    // это допустимо только пока сервер слушает исключительно петлевой адрес.
-    // Если Prefix переопределён (config.json / ARMGOV_PREFIX) на внешний интерфейс,
-    // харнесс должен закрыться сам, а не полагаться на внешний firewall.
+    // это допустимо только пока запрос физически пришёл с петлевого адреса.
+    //
+    // Находка ревью (task-5, раунд правок 1, п.1, Critical): раньше здесь стояла
+    // IsLoopbackPrefix(Prefix) — проверка СТРОКИ КОНФИГУРАЦИИ, а не того, кто пришёл.
+    // Префикс вида "http://armgov.localhost.corp.ru:5080/" содержит подстроку "localhost"
+    // и проходил проверку, хотя HttpListener с именованным хостом слушает на ВСЕХ
+    // интерфейсах и фильтрует только по заголовку Host — то есть запрос с любой машины
+    // сети исполнял бы произвольный SELECT по боевой базе RX без аутентификации.
+    // Теперь проверяется сам запрос: адрес, с которого он физически пришёл (петля), и
+    // заголовок Host (защита от DNS-rebinding — домен атакующего может резолвиться в
+    // 127.0.0.1, тогда запрос придёт с петли, но предназначен он не для локального клиента;
+    // одной проверки адреса недостаточно).
+    static bool IsLocalCall(HttpListenerContext ctx)
+    {
+        if (!ctx.Request.IsLocal && !IPAddress.IsLoopback(ctx.Request.RemoteEndPoint.Address))
+            return false;
+        var h = ctx.Request.UserHostName ?? "";
+        return h.StartsWith("localhost:", StringComparison.OrdinalIgnoreCase)
+            || h.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || h.StartsWith("127.0.0.1:", StringComparison.Ordinal)
+            || h.Equals("127.0.0.1", StringComparison.Ordinal)
+            || h.StartsWith("[::1]:", StringComparison.Ordinal)
+            || h.Equals("[::1]", StringComparison.Ordinal);
+    }
+
+    // Проверка ПРЕФИКСА КОНФИГУРАЦИИ — сама по себе не защищает харнесс (см. IsLocalCall
+    // выше и находку ревью п.1), но остаётся как быстрая диагностика при старте процесса:
+    // если админ случайно вывел Prefix на внешний интерфейс, стоит увидеть предупреждение
+    // сразу в консоли, а не полагаться на то, что кто-то прочитает код.
     static bool IsLoopbackPrefix(string prefix) =>
         !string.IsNullOrEmpty(prefix) &&
         (prefix.IndexOf("localhost", StringComparison.OrdinalIgnoreCase) >= 0 ||

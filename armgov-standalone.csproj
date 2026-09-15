@@ -26,6 +26,7 @@
   <ItemGroup>
     <None Include="index.html" CopyToOutputDirectory="PreserveNewest" />
     <None Include="tokens.css" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="style.css" CopyToOutputDirectory="PreserveNewest" />
     <None Include="logo-directum.svg" CopyToOutputDirectory="PreserveNewest" />
     <!-- config.json с секретами в .gitignore; копируется в вывод, если присутствует (на этой машине) -->
     <None Include="config.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('config.json')" />

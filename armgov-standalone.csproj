@@ -28,6 +28,12 @@
     <None Include="tokens.css" CopyToOutputDirectory="PreserveNewest" />
     <None Include="style.css" CopyToOutputDirectory="PreserveNewest" />
     <None Include="logo-directum.svg" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="inter-latin-400.woff2" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="inter-latin-600.woff2" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="inter-latin-700.woff2" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="inter-cyrillic-400.woff2" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="inter-cyrillic-600.woff2" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="inter-cyrillic-700.woff2" CopyToOutputDirectory="PreserveNewest" />
     <!-- config.json с секретами в .gitignore; копируется в вывод, если присутствует (на этой машине) -->
     <None Include="config.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('config.json')" />
   </ItemGroup>

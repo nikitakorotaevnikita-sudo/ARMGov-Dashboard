@@ -341,7 +341,21 @@ class Program
             var fp = Path.Combine(AppContext.BaseDirectory, fname.Replace('/', Path.DirectorySeparatorChar));
             if (File.Exists(fp))
             {
-                var ct = fname.EndsWith(".css") ? "text/css" : fname.EndsWith(".svg") ? "image/svg+xml" : fname.EndsWith(".js") ? "application/javascript" : "application/octet-stream";
+                if (fname.EndsWith(".woff2"))
+                {
+                    var bytes = File.ReadAllBytes(fp);
+                    ctx.Response.StatusCode = 200; ctx.Response.ContentType = "font/woff2";
+                    ctx.Response.AddHeader("Cache-Control", "public, max-age=604800");
+                    ctx.Response.ContentLength64 = bytes.Length;
+                    ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
+                    ctx.Response.OutputStream.Close();
+                    return;
+                }
+                var ct = fname.EndsWith(".css") ? "text/css"
+                       : fname.EndsWith(".svg") ? "image/svg+xml"
+                       : fname.EndsWith(".js") ? "application/javascript"
+                       : fname.EndsWith(".woff2") ? "font/woff2"
+                       : "application/octet-stream";
                 Write(ctx, 200, ct + "; charset=utf-8", File.ReadAllText(fp, Encoding.UTF8)); return;
             }
         }

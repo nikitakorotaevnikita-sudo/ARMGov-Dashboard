@@ -147,6 +147,9 @@
 <div id="chatPanel" style="position:fixed;right:0;top:0;bottom:0;width:min(460px,96vw);background:var(--surface);box-shadow:var(--shadow-hover);z-index:75;display:none;flex-direction:column">
   <div class="row" style="justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border)"><div style="font-weight:700">🧠 ИИ-ассистент по процессам</div><button class="btn-ghost" onclick="toggleChat()">✕</button></div>
   <div id="chat-msgs" style="flex:1;overflow:auto;padding:16px 18px;background:var(--bg)"></div>
+  <div style="padding:8px 14px 0;background:var(--surface)">
+    <label class="agent-toggle"><input type="checkbox" id="agent-mode" onchange="saveAgentMode()"> Глубокий анализ (SQL)</label>
+  </div>
   <div id="chat-quick" style="padding:8px 14px 0;display:flex;flex-wrap:wrap;gap:6px;background:var(--surface)"></div>
   <div style="border-top:1px solid var(--border);padding:12px 14px;background:var(--surface)"><div class="row" style="gap:8px;align-items:flex-end"><textarea id="chat-input" rows="2" placeholder="Спросите про процессы… (Enter — отправить)" style="flex:1;resize:none;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}"></textarea><button class="btn" id="chat-send" onclick="sendChat()" style="padding:10px 16px">▶</button></div></div>
 </div>
@@ -770,8 +773,10 @@ function renderForecast(){
 function toggleChat(){
   var p=document.getElementById('chatPanel');var open=(p.style.display==='none'||!p.style.display);
   p.style.display=open?'flex':'none';
-  if(open){ renderChatQuick(); if(!CHAT.length){ renderChat([{role:'assistant',content:'Здравствуйте! У меня в контексте вся аналитика по поручениям, обращениям граждан и НПА. Выберите быстрый вопрос ниже или спросите своими словами.'}]); } document.getElementById('chat-input').focus(); }
+  if(open){ renderChatQuick(); loadAgentMode(); if(!CHAT.length){ renderChat([{role:'assistant',content:'Здравствуйте! У меня в контексте вся аналитика по поручениям, обращениям граждан и НПА. Выберите быстрый вопрос ниже или спросите своими словами.'}]); } document.getElementById('chat-input').focus(); }
 }
+function saveAgentMode(){try{localStorage.setItem('armgov-agent',document.getElementById('agent-mode').checked?'1':'0');}catch(e){}}
+function loadAgentMode(){try{var v=localStorage.getItem('armgov-agent');if(v==='1')document.getElementById('agent-mode').checked=true;}catch(e){}}
 function renderChatQuick(){
   var el=document.getElementById('chat-quick');if(!el)return;
   var ui=(OVR&&OVR.ui)||{},ps=ui.chatPrompts||[];
@@ -795,23 +800,40 @@ function explainBlock(title,key){
     CHAT.push({role:'assistant',content:d.error?('⚠ '+d.error):(d.reply||'(пусто)')});renderChat();
   }).catch(function(e){CHAT.push({role:'assistant',content:'⚠ '+e});renderChat();});
 }
-function chatBubble(role,content){
-  var me=role==='user';
-  return '<div style="display:flex;justify-content:'+(me?'flex-end':'flex-start')+';margin-bottom:10px"><div style="max-width:86%;padding:9px 12px;border-radius:12px;font-size:13px;line-height:1.45;background:'+(me?'var(--accent)':'var(--surface-2)')+';color:'+(me?'#fff':'var(--text)')+'">'+(me?esc(content):mdLite(content))+'</div></div>';
+function thinkBlock(m){
+  if(!m.steps||!m.steps.length)return '';
+  var secs=((m.elapsedMs||0)/1000).toFixed(1).replace('.',',');
+  var body=m.steps.map(function(s){
+    var h='<div class="think-step"><div class="think-act">'+esc(s.action||'')+(s.tool?' · '+esc(s.tool):'')+(s.table?' · '+esc(s.table):'')+'</div>';
+    if(s.thought)h+='<div class="think-thought">'+esc(s.thought)+'</div>';
+    if(s.sql)h+='<div class="think-sql">'+esc(s.sql)+'</div>';
+    if(s.error)h+='<div class="think-meta" style="color:var(--red)">'+esc(s.error)+'</div>';
+    var meta=[];if(typeof s.rows==='number')meta.push(s.rows+' строк');if(s.ms)meta.push(s.ms+' мс');
+    if(meta.length)h+='<div class="think-meta">'+meta.join(' · ')+'</div>';
+    return h+'</div>';
+  }).join('');
+  var warn=m.truncated?'<div class="think-meta" style="color:var(--amber)">Модель не уложилась в лимит шагов — ответ по собранным данным</div>':'';
+  return '<details class="think"><summary>Размышления · '+m.steps.length+' шагов · '+secs+' с</summary>'+body+warn+'</details>';
+}
+function chatBubble(m){
+  var me=m.role==='user';
+  return '<div style="display:flex;justify-content:'+(me?'flex-end':'flex-start')+';margin-bottom:10px"><div style="max-width:86%;padding:9px 12px;border-radius:12px;font-size:13px;line-height:1.45;background:'+(me?'var(--accent)':'var(--surface-2)')+';color:'+(me?'#fff':'var(--text)')+'">'+(me?esc(m.content):mdLite(m.content))+(me?'':thinkBlock(m))+'</div></div>';
 }
 function renderChat(extra){
   var el=document.getElementById('chat-msgs');if(!el)return;
-  var h=CHAT.map(function(m){return chatBubble(m.role,m.content);}).join('');
-  if(extra)h+=extra.map(function(m){return chatBubble(m.role,m.content);}).join('');
+  var h=CHAT.map(chatBubble).join('');
+  if(extra)h+=extra.map(chatBubble).join('');
   el.innerHTML=h;el.scrollTop=el.scrollHeight;
 }
 function sendChat(){
   var inp=document.getElementById('chat-input');var t=(inp.value||'').trim();if(!t)return;
+  var agent=document.getElementById('agent-mode')&&document.getElementById('agent-mode').checked;
   CHAT.push({role:'user',content:t});inp.value='';
-  renderChat([{role:'assistant',content:'… думаю'}]);
+  renderChat([{role:'assistant',content:agent?'… смотрю данные':'… думаю'}]);
   var btn=document.getElementById('chat-send');btn.disabled=true;
-  fetch('/api/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:CHAT})}).then(function(r){return r.json();}).then(function(d){
-    CHAT.push({role:'assistant',content:d.error?('⚠ ИИ недоступен: '+d.error):(d.reply||'(пустой ответ)')});
+  fetch(agent?'/api/ai/sql':'/api/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({messages:CHAT})}).then(function(r){return r.json();}).then(function(d){
+    CHAT.push({role:'assistant',content:d.error?('⚠ ИИ недоступен: '+d.error):(d.reply||'(пустой ответ)'),steps:d.steps,elapsedMs:d.elapsedMs,truncated:d.truncated});
     renderChat();btn.disabled=false;
   }).catch(function(e){CHAT.push({role:'assistant',content:'⚠ ошибка связи: '+e});renderChat();btn.disabled=false;});
 }

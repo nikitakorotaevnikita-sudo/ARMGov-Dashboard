@@ -143,3 +143,14 @@ a{color:var(--accent)}
 .ld-pill.risk{background:var(--red-soft);color:var(--red)} .ld-pill.ok{background:var(--green-soft);color:var(--green)}
 .ld-exp{font-size:12px;color:var(--amber);font-weight:700}
 @media (max-width:1150px){.ld-grid{grid-template-columns:repeat(2,1fr)}}
+.agent-toggle{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);cursor:pointer}
+.agent-toggle input{accent-color:var(--accent)}
+.think{margin-top:8px;border-top:1px solid var(--border);padding-top:6px}
+.think>summary{cursor:pointer;font-size:12px;color:var(--muted);list-style:none}
+.think>summary:hover{color:var(--accent)}
+.think-step{margin:8px 0;padding-left:10px;border-left:2px solid var(--border)}
+.think-act{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--accent)}
+.think-thought{font-size:12.5px;color:var(--text);margin:2px 0}
+.think-sql{font-family:var(--font-mono);font-size:11.5px;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:8px 10px;overflow-x:auto;white-space:pre-wrap;margin-top:4px}
+.think-meta{font-size:11px;color:var(--subtle);margin-top:3px}

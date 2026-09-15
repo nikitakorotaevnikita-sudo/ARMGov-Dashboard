@@ -451,6 +451,50 @@ try:
 
     st, d = _req("/api/ai/tool?name=" + urllib.parse.quote("нет_такого") + "&args=%7B%7D")
     check("неизвестный инструмент даёт понятную ошибку", "неизвестный" in (d.get("error") or ""))
+
+    # сходимость ещё двух инструментов с прямыми эндпоинтами (находка р1, п.4)
+    st, direct = _req("/api/leaders?by=dept")
+    st, via_tool = _req("/api/ai/tool?name=leaders&args=" + urllib.parse.quote('{"by":"dept"}'))
+    check("инструмент leaders совпадает с /api/leaders",
+          [i.get("name") for i in direct.get("items", [])] == [i.get("name") for i in via_tool.get("items", [])])
+
+    st, direct = _req("/api/process?key=poruchenia")
+    st, via_tool = _req("/api/ai/tool?name=process&args=" + urllib.parse.quote('{"key":"poruchenia"}'))
+    check("инструмент process совпадает с /api/process",
+          direct.get("kpi") == via_tool.get("kpi"), str(direct.get("kpi"))[:80])
+
+    # некорректные вызовы обязаны давать понятную ошибку модели, а не правдоподобные данные (п.1-3)
+    st, d = _req("/api/ai/tool?name=leader_tasks&args=%7B%7D")
+    check("leader_tasks без id даёт ошибку с подсказкой про id",
+          "error" in d and "id" in (d.get("error") or ""), d.get("error"))
+
+    st, d = _req("/api/ai/tool?name=leader_tasks&args=" +
+                 urllib.parse.quote('{"by":"performer","id":"НЕ_ЧИСЛО"}'))
+    check("leader_tasks с нечисловым id даёт ту же ошибку",
+          "error" in d and "id" in (d.get("error") or ""), d.get("error"))
+
+    st, d = _req("/api/ai/tool?name=process&args=" + urllib.parse.quote('{"key":123}'))
+    check("process с key не строкой даёт ошибку про тип аргумента",
+          "error" in d and "key" in (d.get("error") or ""), d.get("error"))
+
+    st, d = _req("/api/ai/tool?name=process&args=" +
+                 urllib.parse.quote('{"key":"выдуманный_процесс"}'))
+    check("process с неизвестным ключом перечисляет допустимые значения",
+          "error" in d and "poruchenia" in (d.get("error") or ""), d.get("error"))
+
+    st, d = _req("/api/ai/tool?name=process&args=" + urllib.parse.quote("не_json"))
+    check("невалидный JSON в args даёт русскую ошибку про формат",
+          "error" in d and "JSON" in (d.get("error") or "") and "LineNumber" not in (d.get("error") or ""),
+          d.get("error"))
+
+    # обычный путь не должен был пострадать от новых проверок
+    st, d = _req("/api/ai/tool?name=process&args=" + urllib.parse.quote('{"key":"appeals"}'))
+    check("process(key=appeals) через инструмент отвечает нормальными данными",
+          "error" not in d and "kpi" in d, str(list(d)[:4]))
+
+    st, d = _req("/api/ai/tool?name=my_tasks&args=%7B%7D")
+    check("my_tasks через инструмент отвечает нормальными данными",
+          "error" not in d, str(list(d)[:4]))
 except Exception as e:
     check("каталог инструментов доступен", False, str(e))
 

@@ -362,6 +362,12 @@ class Program
                     using var argDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(q["args"]) ? "{}" : q["args"]);
                     J(ctx, ToolCall(q["name"], argDoc.RootElement));
                 }
+                // Невалидный JSON в args не должен всплывать техническим англоязычным сообщением
+                // парсера — модель ждёт ошибку в том же стиле, что и остальной харнесс.
+                catch (JsonException)
+                {
+                    J(ctx, new { error = "аргументы должны быть JSON-объектом, например {\"key\":\"appeals\"}" });
+                }
                 catch (Exception ex) { J(ctx, new { error = ex.Message }); }
                 return;
             }
@@ -2506,15 +2512,34 @@ class Program
 
     static object ToolCall(string name, JsonElement args)
     {
-        string S(string k, string def = null) =>
-            args.ValueKind == JsonValueKind.Object && args.TryGetProperty(k, out var v)
-            && v.ValueKind == JsonValueKind.String ? v.GetString() : def;
+        // Ошибочный вызов обязан давать понятную ошибку, адресованную модели, а не молча
+        // подменять аргумент дефолтом или возвращать правдоподобную пустоту (находка ревью р1).
+        string S(string k, string def = null)
+        {
+            if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(k, out var v)) return def;
+            if (v.ValueKind != JsonValueKind.String)
+                throw new Exception("аргумент " + k + " должен быть строкой, получено: " + v.ValueKind);
+            return v.GetString();
+        }
         switch (name)
         {
             case "overview": return BuildOverview(S("period"));
-            case "process": return BuildProcess(S("key", "poruchenia"), S("period"));
+            case "process":
+            {
+                var key = S("key", "poruchenia");
+                if (P(key) == null)
+                    throw new Exception("неизвестный процесс: " + key + " — допустимые значения key: " +
+                                         string.Join(", ", Procs.Select(p => p.Key)));
+                return BuildProcess(key, S("period"));
+            }
             case "leaders": return BuildLeaders(S("by", "performer"));
-            case "leader_tasks": return BuildLeaderTasks(S("by", "performer"), S("id"));
+            case "leader_tasks":
+            {
+                var id = S("id");
+                if (string.IsNullOrWhiteSpace(id) || !long.TryParse(id, out _))
+                    throw new Exception("инструменту leader_tasks нужен числовой аргумент id — возьми его из результата инструмента leaders");
+                return BuildLeaderTasks(S("by", "performer"), id);
+            }
             case "stuck": return BuildStuck(S("key", "poruchenia"), S("period"));
             case "by_kind": return BuildByKind(S("key", "poruchenia"), S("period"));
             case "departments": return BuildDepartments(S("key", "poruchenia"), S("period"));

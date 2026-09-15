@@ -12,3 +12,5 @@ server.log
 # сторонние материалы, не наш код — не затягивать в репозиторий
 sungero-remote-component-example-react-main/
 2026-07-22-mvp-screen-final.html
+# рабочее пространство subagent-driven-development (реестр, брифы, отчёты)
+.superpowers/

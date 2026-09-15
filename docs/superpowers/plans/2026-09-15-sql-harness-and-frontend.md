@@ -105,16 +105,24 @@ git commit -m "refactor(css): вынести стили прототипа из 
 Токен `--font` в `tokens.css` уже ссылается на Inter, но сам шрифт не подключён — прототип рисуется в Segoe UI, а presale в Inter.
 
 **Files:**
-- Create: `inter-400.woff2`, `inter-600.woff2`, `inter-700.woff2`
+- Create: `inter-latin-400.woff2`, `inter-latin-600.woff2`, `inter-latin-700.woff2`, `inter-cyrillic-400.woff2`, `inter-cyrillic-600.woff2`, `inter-cyrillic-700.woff2`
 - Modify: `style.css`, `armgov-standalone.csproj`, `Program.cs:340-347` (типы контента статики)
 
 **Interfaces:**
 - Consumes: `style.css` из Task 1
 - Produces: `@font-face` для Inter 400/600/700; `--font` начинает резолвиться
 
-- [ ] **Step 1: Положить файлы шрифта в корень проекта**
+- [ ] **Step 1: Скопировать файлы шрифта из соседнего проекта**
 
-Взять три файла подмножества latin+cyrillic с [rsms.me/inter](https://rsms.me/inter/) (лицензия SIL OFL) и назвать `inter-400.woff2`, `inter-600.woff2`, `inter-700.woff2`. Кириллица обязательна — интерфейс русский.
+Интернета на машине нет (проверено 15.09.2026: `rsms.me` и `fonts.googleapis.com` недоступны), поэтому шрифт берётся из уже имеющегося набора — тот же Inter, лицензия SIL OFL, разбитый на подмножества latin и cyrillic:
+
+```bash
+SRC="C:/Users/Korotaev_NO/Desktop/Проекты/MCP-Directum-RX/src/static/fonts"
+for w in 400 600 700; do cp "$SRC/inter-latin-$w.woff2" "$SRC/inter-cyrillic-$w.woff2" .; done
+ls -l inter-*.woff2
+```
+
+Шесть файлов, около 105 КБ суммарно. Кириллица обязательна — интерфейс русский.
 
 - [ ] **Step 2: Научить сервер отдавать woff2**
 
@@ -147,10 +155,27 @@ if (fname.EndsWith(".woff2"))
 
 Сразу после шапки файла, до всех правил:
 
+Шесть блоков — по два на начертание, с `unicode-range`, чтобы браузер грузил кириллицу только когда она нужна. Диапазоны дословно из `MCP-Directum-RX/src/static/fonts.css`:
+
 ```css
-@font-face{font-family:'Inter';font-style:normal;font-weight:400;font-display:swap;src:url('/inter-400.woff2') format('woff2')}
-@font-face{font-family:'Inter';font-style:normal;font-weight:600;font-display:swap;src:url('/inter-600.woff2') format('woff2')}
-@font-face{font-family:'Inter';font-style:normal;font-weight:700;font-display:swap;src:url('/inter-700.woff2') format('woff2')}
+@font-face{font-family:'Inter';font-style:normal;font-weight:400;font-display:swap;
+  src:url('/inter-latin-400.woff2') format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Inter';font-style:normal;font-weight:400;font-display:swap;
+  src:url('/inter-cyrillic-400.woff2') format('woff2');
+  unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:'Inter';font-style:normal;font-weight:600;font-display:swap;
+  src:url('/inter-latin-600.woff2') format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Inter';font-style:normal;font-weight:600;font-display:swap;
+  src:url('/inter-cyrillic-600.woff2') format('woff2');
+  unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:'Inter';font-style:normal;font-weight:700;font-display:swap;
+  src:url('/inter-latin-700.woff2') format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Inter';font-style:normal;font-weight:700;font-display:swap;
+  src:url('/inter-cyrillic-700.woff2') format('woff2');
+  unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
 ```
 
 - [ ] **Step 4: Добавить шрифты в сборку**
@@ -158,9 +183,12 @@ if (fname.EndsWith(".woff2"))
 В `armgov-standalone.csproj`:
 
 ```xml
-<None Include="inter-400.woff2" CopyToOutputDirectory="PreserveNewest" />
-<None Include="inter-600.woff2" CopyToOutputDirectory="PreserveNewest" />
-<None Include="inter-700.woff2" CopyToOutputDirectory="PreserveNewest" />
+<None Include="inter-latin-400.woff2" CopyToOutputDirectory="PreserveNewest" />
+<None Include="inter-latin-600.woff2" CopyToOutputDirectory="PreserveNewest" />
+<None Include="inter-latin-700.woff2" CopyToOutputDirectory="PreserveNewest" />
+<None Include="inter-cyrillic-400.woff2" CopyToOutputDirectory="PreserveNewest" />
+<None Include="inter-cyrillic-600.woff2" CopyToOutputDirectory="PreserveNewest" />
+<None Include="inter-cyrillic-700.woff2" CopyToOutputDirectory="PreserveNewest" />
 ```
 
 - [ ] **Step 5: Проверить, что шрифт реально приехал**
@@ -171,7 +199,7 @@ if (fname.EndsWith(".woff2"))
 document.fonts.check('600 14px Inter')
 ```
 
-Ожидается `true`. Плюс `curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://localhost:5080/inter-400.woff2` → `200 font/woff2`.
+Ожидается `true`. Плюс `curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://localhost:5080/inter-cyrillic-400.woff2` → `200 font/woff2`.
 
 - [ ] **Step 6: Прогнать smoke и закоммитить**
 
@@ -543,7 +571,7 @@ try:
     st, d = _req("/api/ai/tool?name=leaders&args=" + urllib.parse.quote('{"by":"dept"}'))
     check("leaders(by=dept) отвечает", isinstance(d.get("items"), list))
 
-    st, d = _req("/api/ai/tool?name=нет_такого&args=%7B%7D")
+    st, d = _req("/api/ai/tool?name=" + urllib.parse.quote("нет_такого") + "&args=%7B%7D")
     check("неизвестный инструмент даёт понятную ошибку", "неизвестный" in (d.get("error") or ""))
 except Exception as e:
     check("каталог инструментов доступен", False, str(e))
@@ -654,7 +682,7 @@ try:
     check("справка по таблице отдаёт колонки", len(cols) > 5, str(len(cols)))
     check("в колонках есть deadline", "deadline" in cols)
     check("у колонки есть тип", bool(d.get("columns", [{}])[0].get("type")))
-    st, d = _req("/api/ai/schema?table=нет_такой_таблицы")
+    st, d = _req("/api/ai/schema?table=" + urllib.parse.quote("нет_такой_таблицы"))
     check("несуществующая таблица — понятная ошибка", bool(d.get("error")) or d.get("columns") == [])
 except Exception as e:
     check("справка по схеме доступна", False, str(e))

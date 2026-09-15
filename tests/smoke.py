@@ -569,6 +569,31 @@ try:
 except Exception as e:
     check("справка по схеме доступна", False, str(e))
 
+# ---------------- ИИ: цикл агента ----------------
+section("Цикл агента  /api/ai/sql")
+try:
+    st, d = _req("/api/ai/sql", method="POST", body={"messages": [
+        {"role": "user", "content": "Сколько заданий просрочено?"}]}, timeout=180)
+    check("ответ непустой", bool(d.get("reply")), (d.get("error") or "")[:120])
+    check("протокол шагов есть", isinstance(d.get("steps"), list))
+    check("предзагрузка отработала", d.get("preloaded") == ["overview", "processes"])
+    check("вопрос из готовых метрик не потребовал SQL",
+          all(s.get("action") != "sql" for s in d.get("steps", [])),
+          str([s.get("action") for s in d.get("steps", [])]))
+    check("уложились в бюджет", isinstance(d.get("elapsedMs"), int) and d["elapsedMs"] < 70000)
+
+    st, d = _req("/api/ai/sql", method="POST", body={"messages": [
+        {"role": "user", "content":
+         "Сколько заданий создано в 2023 году? Это не считает дашборд, нужен запрос."}]},
+        timeout=180)
+    check("нестандартный вопрос дошёл до SQL",
+          any(s.get("action") == "sql" for s in d.get("steps", [])),
+          str([s.get("action") for s in d.get("steps", [])]))
+    check("у шага SQL виден текст запроса",
+          any(s.get("sql") for s in d.get("steps", []) if s.get("action") == "sql"))
+except Exception as e:
+    check("агент доступен", False, str(e))
+
 # ---------------- ИТОГ ----------------
 section("ИТОГ")
 print(f"  Проверок данных/UI: PASS={PASS}  FAIL={FAIL}")

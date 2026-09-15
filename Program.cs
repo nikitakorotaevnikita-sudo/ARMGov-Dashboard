@@ -332,6 +332,13 @@ class Program
             case "/api/ai/summary": J(ctx, BuildAiSummary(q["force"] == "1", q["key"])); return;
             case "/api/ai/chat": J(ctx, BuildAiChat(ReadBody(ctx))); return;
             case "/api/ai/explain": J(ctx, BuildAiExplain(ReadBody(ctx))); return;
+            case "/api/ai/sql":
+                // Тот же периметр, что у остального ИИ-харнесса (см. IsLocalCall и предупреждение
+                // в Serve()): цикл агента сам исполняет SQL через SqlCheck/SqlRun, поэтому доступ
+                // к нему не может быть шире, чем к /api/ai/sql/check и /api/ai/sql/run.
+                if (!IsLocalCall(ctx)) { J(ctx, new { error = "харнесс доступен только при локальном вызове" }); return; }
+                J(ctx, SqlAgentAsk(ReadBody(ctx)));
+                return;
             case "/api/ai/sql/check":
             {
                 if (!IsLocalCall(ctx)) { J(ctx, new { error = "харнесс доступен только при локальном вызове" }); return; }
@@ -2687,7 +2694,7 @@ class Program
     static readonly (string name, string args, string desc)[] ToolCatalog = {
         ("overview", "period?", "KPI по всем процессам: в работе, срок сегодня, просрочено, соблюдение сроков, что горит"),
         ("process", "key, period?", "Воронка и здоровье процесса. key: poruchenia | appeals | npa"),
-        ("leaders", "by", "Исполнение по людям и структуре. by: performer | dept | bu. Содержит coOverdue — просрочку у соисполнителей"),
+        ("leaders", "by", "Исполнение по людям и структуре. by: performer | dept | bu. Содержит coOverdue — просрочку у соисполнителей; считается ТОЛЬКО при by=performer, при by=dept и by=bu coOverdue всегда 0 (это не значит, что проблем нет — пересчитай по людям)"),
         ("leader_tasks", "by, id", "Задачи конкретного сотрудника или подразделения из leaders"),
         ("stuck", "key, period?", "Где застревает работа: долгострои и узкие места процесса"),
         ("by_kind", "key, period?", "Разрез процесса по видам поручений"),
@@ -2735,6 +2742,188 @@ class Program
             case "appeal_topics": return BuildAppealTopics();
             default: throw new Exception("неизвестный инструмент: " + name);
         }
+    }
+
+    // ---------- ИИ-харнесс: цикл агента ----------
+    // Многошаговый агент: на каждом шаге модель возвращает РОВНО ОДИН JSON-объект с
+    // действием, код его исполняет и результат кладёт следующим сообщением в диалог —
+    // пока модель не ответит action=answer или не кончится бюджет шагов/времени.
+    //
+    // Бюджет 5 шагов / 60с и короткая мысль в промпте — не перестраховка, а следствие
+    // замера в этой сессии: размер промпта почти ничего не стоит (+8,6 тыс. токенов
+    // на входе — доли секунды), а вот генерация модели идёт около 30 токенов/с, и шаг
+    // с мыслью и SQL занимает 5-8 секунд. Экономить нужно на выходе модели, не на входе.
+    const int AgentMaxSteps = 5;
+    const int AgentBudgetMs = 60000;
+
+    static string AgentSystemPrompt()
+    {
+        var tools = string.Join("\n", ToolCatalog.Select(t =>
+            "— " + t.name + "(" + t.args + "): " + t.desc));
+        return
+"Ты — аналитик процессов региона. Отвечаешь руководителю по-русски, кратко, цифрами.\n" +
+"Данные добываешь сам, по одному действию за раз. Каждый ответ — РОВНО ОДИН JSON-объект, без текста вокруг:\n" +
+"{\"thought\":\"одно-два предложения\",\"action\":\"tool\",\"tool\":\"имя\",\"args\":{…}}\n" +
+"{\"thought\":\"…\",\"action\":\"schema\",\"table\":\"имя_таблицы\"}\n" +
+"{\"thought\":\"…\",\"action\":\"sql\",\"query\":\"SELECT …\",\"purpose\":\"что считаем\"}\n" +
+"{\"thought\":\"…\",\"action\":\"answer\",\"text\":\"итоговый ответ\"}\n\n" +
+"ИНСТРУМЕНТЫ (готовые метрики дашборда — те же числа, что видит руководитель на экране):\n" + tools + "\n\n" +
+"ПРАВИЛО ВЫБОРА: если вопрос закрывается инструментом — обязан вызвать инструмент.\n" +
+"action=sql разрешён ТОЛЬКО для среза, которого не даёт ни один инструмент.\n" +
+"Если число уже есть в предзагруженных данных ниже — не вызывай ничего, сразу answer. " +
+"Пример: «сколько заданий просрочено» — число уже есть в предзагруженном overview, ответ сразу, без единого действия.\n\n" +
+"SQL: только SELECT, один оператор, PostgreSQL. Имена таблиц и колонок пиши БЕЗ двойных кавычек — " +
+"валидатор отклоняет кавыченные идентификаторы, совпадающие с запрещёнными словами, и лишний шаг уйдёт " +
+"на то, чтобы понять, почему обычное имя колонки отклонено. Схема ядра:\n" + SchemaCore() + "\n\n" +
+"Не выдумывай числа: в ответе только то, что вернули инструменты или запрос. " +
+"Максимум " + AgentMaxSteps + " действий — расходуй их экономно.";
+    }
+
+    // Модель нередко оборачивает JSON в ```-блок или добавляет текст вокруг — берём
+    // первый сбалансированный объект, а не пытаемся строго парсить весь текст целиком.
+    static JsonElement? AgentParse(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        int start = text.IndexOf('{');
+        while (start >= 0)
+        {
+            int depth = 0; bool inStr = false, esc = false;
+            for (int i = start; i < text.Length; i++)
+            {
+                char ch = text[i];
+                if (esc) { esc = false; continue; }
+                if (ch == '\\' && inStr) { esc = true; continue; }
+                if (ch == '"') { inStr = !inStr; continue; }
+                if (inStr) continue;
+                if (ch == '{') depth++;
+                else if (ch == '}' && --depth == 0)
+                {
+                    var frag = text.Substring(start, i - start + 1);
+                    try { return JsonDocument.Parse(frag).RootElement.Clone(); }
+                    catch { break; }
+                }
+            }
+            start = text.IndexOf('{', start + 1);
+        }
+        return null;
+    }
+
+    static object SqlAgentAsk(string body)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var steps = new List<object>();
+        var msgs = new List<object> { new { role = "system", content = AgentSystemPrompt() } };
+
+        // Предзагрузка: размер промпта почти ничего не стоит (замер в спеке),
+        // зато частые вопросы закрываются без единого шага и цифрой с экрана.
+        var pre = new { overview = BuildOverview(null), processes = BuildProcesses() };
+        msgs.Add(new { role = "user", content = "Предзагруженные данные дашборда (JSON):\n" +
+                                                 JsonSerializer.Serialize(pre) });
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("messages", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                foreach (var m in arr.EnumerateArray())
+                {
+                    var role = m.TryGetProperty("role", out var rr) ? rr.GetString() : null;
+                    var content = m.TryGetProperty("content", out var cc) ? cc.GetString() : null;
+                    if ((role == "user" || role == "assistant") && !string.IsNullOrEmpty(content))
+                        msgs.Add(new { role, content });
+                }
+        }
+        catch (Exception ex) { return new { error = "bad request: " + ex.Message }; }
+
+        string reply = null; bool truncated = false;
+        for (int n = 1; n <= AgentMaxSteps; n++)
+        {
+            if (sw.ElapsedMilliseconds > AgentBudgetMs) { truncated = true; break; }
+            var stepSw = System.Diagnostics.Stopwatch.StartNew();
+            string raw;
+            try { raw = LlmChat(msgs.ToArray(), 700, 0.2); }
+            catch (Exception ex) { return new { error = "ИИ недоступен: " + ex.Message }; }
+            var parsed = AgentParse(raw);
+            if (parsed == null)
+            {
+                msgs.Add(new { role = "assistant", content = raw });
+                msgs.Add(new { role = "user", content = "Ответ не разобран. Верни РОВНО один JSON-объект без текста вокруг." });
+                steps.Add(new { n, action = "error", thought = "", error = "ответ не разобран", ms = (int)stepSw.ElapsedMilliseconds });
+                continue;
+            }
+            var el = parsed.Value;
+            string Str(string k) => el.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : "";
+            string action = Str("action"), thought = Str("thought");
+            msgs.Add(new { role = "assistant", content = raw });
+
+            if (action == "answer") { reply = Str("text"); steps.Add(new { n, action, thought, ms = (int)stepSw.ElapsedMilliseconds }); break; }
+
+            if (action == "tool")
+            {
+                var name = Str("tool");
+                var args = el.TryGetProperty("args", out var a) ? a : default;
+                try
+                {
+                    var res = ToolCall(name, args);
+                    var json = Trunc(JsonSerializer.Serialize(res), 12000);
+                    msgs.Add(new { role = "user", content = "Результат " + name + ":\n" + json });
+                    steps.Add(new { n, action, thought, tool = name, ms = (int)stepSw.ElapsedMilliseconds });
+                }
+                catch (Exception ex)
+                {
+                    msgs.Add(new { role = "user", content = "Инструмент упал: " + ex.Message });
+                    steps.Add(new { n, action, thought, tool = name, error = ex.Message, ms = (int)stepSw.ElapsedMilliseconds });
+                }
+                continue;
+            }
+
+            if (action == "schema")
+            {
+                var t = Str("table");
+                var res = SchemaHelp(t);
+                msgs.Add(new { role = "user", content = "Схема " + t + ":\n" + Trunc(JsonSerializer.Serialize(res), 6000) });
+                steps.Add(new { n, action, thought, table = t, ms = (int)stepSw.ElapsedMilliseconds });
+                continue;
+            }
+
+            if (action == "sql")
+            {
+                var query = Str("query");
+                var (ok, reason, eff) = SqlCheck(query);
+                if (!ok)
+                {
+                    msgs.Add(new { role = "user", content = "Запрос отклонён: " + reason + ". Исправь." });
+                    steps.Add(new { n, action, thought, sql = query, error = reason, ms = (int)stepSw.ElapsedMilliseconds });
+                    continue;
+                }
+                try
+                {
+                    var (cols, rows, ms, more) = SqlRun(eff, 50);
+                    msgs.Add(new { role = "user", content = "Результат запроса:\n" +
+                        JsonSerializer.Serialize(new { cols, rows, truncated = more }) });
+                    steps.Add(new { n, action, thought, sql = query, purpose = Str("purpose"),
+                                    cols, rows = rows.Count, preview = rows.Take(5),
+                                    ms = (int)stepSw.ElapsedMilliseconds });
+                }
+                catch (Exception ex)
+                {
+                    msgs.Add(new { role = "user", content = "Запрос упал с ошибкой:\n" + ex.Message + "\nИсправь и повтори." });
+                    steps.Add(new { n, action, thought, sql = query, error = ex.Message, ms = (int)stepSw.ElapsedMilliseconds });
+                }
+                continue;
+            }
+
+            msgs.Add(new { role = "user", content = "Неизвестное действие: " + action });
+            steps.Add(new { n, action, thought, error = "неизвестное действие", ms = (int)stepSw.ElapsedMilliseconds });
+        }
+
+        if (reply == null)
+        {
+            truncated = true;
+            msgs.Add(new { role = "user", content = "Шаги закончились. Ответь по уже собранным данным одним текстом, без JSON." });
+            try { reply = LlmChat(msgs.ToArray(), 600, 0.3); }
+            catch (Exception ex) { return new { error = "ИИ недоступен: " + ex.Message }; }
+        }
+        return new { reply, preloaded = new[] { "overview", "processes" },
+                     steps, elapsedMs = (int)sw.ElapsedMilliseconds, truncated };
     }
 
     // ---------- helpers ----------

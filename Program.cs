@@ -352,6 +352,19 @@ class Program
                 catch (Exception ex) { J(ctx, new { error = ex.Message }); }
                 return;
             }
+            case "/api/ai/tools":
+                J(ctx, new { tools = ToolCatalog.Select(t => new { name = t.name, args = t.args, desc = t.desc }) });
+                return;
+            case "/api/ai/tool":
+            {
+                try
+                {
+                    using var argDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(q["args"]) ? "{}" : q["args"]);
+                    J(ctx, ToolCall(q["name"], argDoc.RootElement));
+                }
+                catch (Exception ex) { J(ctx, new { error = ex.Message }); }
+                return;
+            }
             case "/api/config":
                 if (ctx.Request.HttpMethod == "POST") { J(ctx, SaveConfigFromBody(ReadBody(ctx))); return; }
                 J(ctx, GetConfigMasked()); return;
@@ -2475,6 +2488,41 @@ class Program
         (prefix.IndexOf("localhost", StringComparison.OrdinalIgnoreCase) >= 0 ||
          prefix.IndexOf("127.0.0.1", StringComparison.Ordinal) >= 0 ||
          prefix.IndexOf("[::1]", StringComparison.Ordinal) >= 0);
+
+    // ---------- ИИ-харнесс: готовые инструменты ----------
+    // Ключевые цифры агент не считает сам: он берёт их у тех же сборщиков, что рисуют
+    // экран. Иначе чат и дашборд разойдутся, а это нарушает правило о сходимости метрик.
+    static readonly (string name, string args, string desc)[] ToolCatalog = {
+        ("overview", "period?", "KPI по всем процессам: в работе, срок сегодня, просрочено, соблюдение сроков, что горит"),
+        ("process", "key, period?", "Воронка и здоровье процесса. key: poruchenia | appeals | npa"),
+        ("leaders", "by", "Исполнение по людям и структуре. by: performer | dept | bu. Содержит coOverdue — просрочку у соисполнителей"),
+        ("leader_tasks", "by, id", "Задачи конкретного сотрудника или подразделения из leaders"),
+        ("stuck", "key, period?", "Где застревает работа: долгострои и узкие места процесса"),
+        ("by_kind", "key, period?", "Разрез процесса по видам поручений"),
+        ("departments", "key, period?", "Разрез процесса по подразделениям"),
+        ("my_tasks", "", "Личный контроль руководителя: его поручения и задания"),
+        ("appeal_topics", "", "Тематики обращений граждан: разделы, темы, топ вопросов"),
+    };
+
+    static object ToolCall(string name, JsonElement args)
+    {
+        string S(string k, string def = null) =>
+            args.ValueKind == JsonValueKind.Object && args.TryGetProperty(k, out var v)
+            && v.ValueKind == JsonValueKind.String ? v.GetString() : def;
+        switch (name)
+        {
+            case "overview": return BuildOverview(S("period"));
+            case "process": return BuildProcess(S("key", "poruchenia"), S("period"));
+            case "leaders": return BuildLeaders(S("by", "performer"));
+            case "leader_tasks": return BuildLeaderTasks(S("by", "performer"), S("id"));
+            case "stuck": return BuildStuck(S("key", "poruchenia"), S("period"));
+            case "by_kind": return BuildByKind(S("key", "poruchenia"), S("period"));
+            case "departments": return BuildDepartments(S("key", "poruchenia"), S("period"));
+            case "my_tasks": return BuildMyTasks();
+            case "appeal_topics": return BuildAppealTopics();
+            default: throw new Exception("неизвестный инструмент: " + name);
+        }
+    }
 
     // ---------- helpers ----------
     static long ScalarL(NpgsqlConnection c, string sql) { using var cmd = new NpgsqlCommand(sql, c); var o = cmd.ExecuteScalar(); return (o == null || o is DBNull) ? 0 : Convert.ToInt64(o); }

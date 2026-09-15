@@ -428,6 +428,32 @@ d = sqlrun("select count(*) from generate_series(1,20000) a cross join generate_
 err = (d.get("error") or "").lower()
 check("statement_timeout прерывает тяжёлый запрос", "57014" in err or "тайм-аут" in err or "timeout" in err, d.get("error"))
 
+# ---------------- ХАРНЕСС: инструменты ----------------
+section("Инструменты агента  /api/ai/tools")
+try:
+    st, cat = _req("/api/ai/tools")
+    names = [t["name"] for t in cat.get("tools", [])]
+    check("в каталоге девять инструментов", len(names) == 9, str(len(names)))
+    for n in ["overview","process","leaders","leader_tasks","stuck",
+              "by_kind","departments","my_tasks","appeal_topics"]:
+        check(f"инструмент {n} в каталоге", n in names)
+
+    st, d = _req("/api/ai/tool?name=overview&args=%7B%7D")
+    check("overview через инструмент отвечает", "region" in d, str(list(d)[:4]))
+
+    # согласованность: инструмент и эндпоинт экрана дают одно и то же
+    st, direct = _req("/api/overview")
+    check("инструмент overview совпадает с /api/overview",
+          d.get("region", {}).get("throughput") == direct.get("region", {}).get("throughput"))
+
+    st, d = _req("/api/ai/tool?name=leaders&args=" + urllib.parse.quote('{"by":"dept"}'))
+    check("leaders(by=dept) отвечает", isinstance(d.get("items"), list))
+
+    st, d = _req("/api/ai/tool?name=" + urllib.parse.quote("нет_такого") + "&args=%7B%7D")
+    check("неизвестный инструмент даёт понятную ошибку", "неизвестный" in (d.get("error") or ""))
+except Exception as e:
+    check("каталог инструментов доступен", False, str(e))
+
 # ---------------- ИТОГ ----------------
 section("ИТОГ")
 print(f"  Проверок данных/UI: PASS={PASS}  FAIL={FAIL}")

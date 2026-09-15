@@ -356,6 +356,14 @@ for good in ["select created from sungero_wf_task",
     d = sqlcheck(good)
     check("пропущено: " + good[:46], d.get("ok") is True, d.get("reason") or "")
 
+# --- находка финальной проверки ветки: таблицы с учётными данными ролей БД должны быть
+# отклонены валидатором независимо от /api/ai/schema, а безобидные системные представления
+# (pg_settings, information_schema) — по-прежнему проходить ---
+d = sqlcheck("select rolpassword from pg_authid")
+check("запрос к таблице с хешами паролей отклонён", d.get("ok") is False, d.get("reason") or "")
+d = sqlcheck("select name from pg_settings limit 5")
+check("запрос к pg_settings по-прежнему проходит", d.get("ok") is True, d.get("reason") or "")
+
 # ---------------- ХАРНЕСС: исполнитель SQL ----------------
 section("Исполнитель SQL  /api/ai/sql/run")
 
@@ -580,6 +588,14 @@ try:
     check("несуществующая таблица — понятная ошибка", bool(d.get("error")) or d.get("columns") == [])
     st, d = _req("/api/ai/schema?table=" + urllib.parse.quote("sungero; drop"))
     check("имя таблицы с недопустимыми символами отвергается", bool(d.get("error")), str(d.get("error")))
+
+    # Находка финальной проверки ветки: справка собирала примеры значений из ЛЮБОЙ таблицы,
+    # проходящей регулярку имени, включая системные каталоги PostgreSQL (pg_authid — хеши
+    # паролей ролей БД). Теперь справка доступна только по таблицам RX (sungero_*, gd_govsol_*).
+    st, d = _req("/api/ai/schema?table=pg_authid")
+    check("справка по системной таблице отклонена", bool(d.get("error")), str(d.get("error"))[:80])
+    st, d = _req("/api/ai/schema?table=sungero_wf_assignment")
+    check("справка по таблице RX по-прежнему работает", len(d.get("columns", [])) > 5)
 
     # Находка ревью (task-7, раунд правок 2): справка на широкой таблице собирала примеры
     # отдельным SELECT на каждую колонку — 11,5с на sungero_wf_assignment. Кэш по имени таблицы

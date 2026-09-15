@@ -368,6 +368,11 @@ class Program
                 J(ctx, new { tools = ToolCatalog.Select(t => new { name = t.name, args = t.args, desc = t.desc }) });
                 return;
             case "/api/ai/schema":
+                // Находка финальной проверки ветки: справка отдаёт примеры значений из ЛЮБОЙ
+                // таблицы, чьё имя проходит регулярку в SchemaHelp — включая системные каталоги
+                // PostgreSQL (pg_authid и т.п.), а сама эта проверка регуляркой в SchemaHelp не
+                // защищает от чтения чужих данных. Тот же периметр, что у /api/ai/sql/run.
+                if (!IsLocalCall(ctx)) { J(ctx, new { error = "харнесс доступен только при локальном вызове" }); return; }
                 try { J(ctx, SchemaHelp(q["table"])); }
                 catch (Exception ex) { J(ctx, new { error = ex.Message }); }
                 return;
@@ -2112,6 +2117,18 @@ class Program
         "pg_advisory","pg_import","lo_","set_config","query_to_xml","table_to_xml","xmlparse"
     };
 
+    // Таблицы/представления с учётными данными ролей БД (md5-хеши паролей и т.п.).
+    // Находка финальной проверки ветки: SchemaHelp закрыт по имени таблицы отдельно (см. там же),
+    // но SqlCheck — общий вход для любого SELECT, который агент решит выполнить сам, в т.ч. в
+    // режиме глубокого анализа. Это второй, независимый рубеж на точно те же имена: даже если
+    // модель сама придумает "select rolpassword from pg_authid", валидатор должен остановить это
+    // здесь, а не полагаться только на закрытый эндпоинт справки. Проверка по границе с обеих
+    // сторон (как SqlDenyKeywordRe) — это точные имена системных каталогов, а не префиксы семейств,
+    // и pg_settings/information_schema под неё не подпадают.
+    static readonly string[] SqlDenyCredentialTables = {
+        "pg_authid","pg_shadow","pg_user","pg_roles"
+    };
+
     static readonly TimeSpan SqlRegexTimeout = TimeSpan.FromMilliseconds(200);
 
     // Компилируются один раз при старте процесса, а не на каждый запрос.
@@ -2120,6 +2137,9 @@ class Program
             RegexOptions.Compiled, SqlRegexTimeout), w)).ToArray();
     static readonly (Regex re, string word)[] SqlDenyFamilyRe =
         SqlDenyFamilies.Select(w => (new Regex(@"\b" + Regex.Escape(w),
+            RegexOptions.Compiled, SqlRegexTimeout), w)).ToArray();
+    static readonly (Regex re, string word)[] SqlDenyCredentialTableRe =
+        SqlDenyCredentialTables.Select(w => (new Regex(@"\b" + Regex.Escape(w) + @"\b",
             RegexOptions.Compiled, SqlRegexTimeout), w)).ToArray();
 
     // Посимвольный разбор SQL-текста: одновременно вырезает комментарии и отслеживает
@@ -2373,6 +2393,12 @@ class Program
 
         // Семейства опасных функций — по границе только слева (см. SqlDenyFamilyRe).
         foreach (var (re, word) in SqlDenyFamilyRe)
+            if (re.IsMatch(codeLow) || re.IsMatch(gluedDenyLow))
+                return (false, "запрещённая конструкция: " + word, null);
+
+        // Таблицы/представления с учётными данными ролей БД (см. SqlDenyCredentialTables) —
+        // второй, независимый от SchemaHelp рубеж на md5-хеши паролей и т.п.
+        foreach (var (re, word) in SqlDenyCredentialTableRe)
             if (re.IsMatch(codeLow) || re.IsMatch(gluedDenyLow))
                 return (false, "запрещённая конструкция: " + word, null);
 
@@ -2655,6 +2681,13 @@ class Program
     {
         if (string.IsNullOrWhiteSpace(table) || !Regex.IsMatch(table, @"^[a-z0-9_]+$", RegexOptions.None, SqlRegexTimeout))
             return new { error = "недопустимое имя таблицы" };
+        // Находка финальной проверки ветки: регулярка выше отсеивает только "мусорные" имена
+        // (пробелы, спецсимволы), но не защищает от системных каталогов PostgreSQL — pg_authid,
+        // pg_shadow и им подобных, откуда SchemaHelp собирал бы примеры значений (в т.ч. хеши
+        // паролей ролей БД). Справка модели нужна только по предметной области RX, поэтому
+        // до похода в базу отклоняем всё, что не начинается с sungero_ или gd_govsol_.
+        if (!(table.StartsWith("sungero_", StringComparison.Ordinal) || table.StartsWith("gd_govsol_", StringComparison.Ordinal)))
+            return new { error = "справка доступна только по таблицам RX (sungero_*, gd_govsol_*)" };
         if (SchemaCache.TryGetValue(table, out var cached)) return cached;
         var colNames = new List<(string name, string type)>();
         using var c = new NpgsqlConnection(Cs); c.Open();

@@ -319,6 +319,48 @@ for good in ["select created from sungero_wf_task",
     d = sqlcheck(good)
     check("пропущено: " + good[:46], d.get("ok") is True, d.get("reason") or "")
 
+# ---------------- ХАРНЕСС: исполнитель SQL ----------------
+section("Исполнитель SQL  /api/ai/sql/run")
+try:
+    st, d = _req("/api/ai/sql/run?q=" + urllib.parse.quote(
+        "select count(*) as c from sungero_wf_task"))
+    check("исполнитель вернул строки", isinstance(d.get("rows"), list) and len(d["rows"]) == 1)
+    check("исполнитель вернул колонки", d.get("cols") == ["c"])
+    check("исполнитель отдаёт время", isinstance(d.get("ms"), int))
+
+    st, d = _req("/api/ai/sql/run?q=" + urllib.parse.quote(
+        "update sungero_wf_task set subject='x'"))
+    check("запись не исполняется", bool(d.get("error")))
+except Exception as e:
+    check("исполнитель доступен", False, str(e))
+
+# --- второй рубеж: исполняется effective, а не исходный текст ---
+# Комментарий вырезается валидатором ДО проверки, поэтому текст, замаскированный
+# комментарием, обязан быть отклонён целиком, а не исполнен "как есть".
+d = sqlcheck("select 1 -- /*\n drop table sungero_wf_task */")
+check("маскировка комментарием отклонена валидатором", d.get("ok") is False)
+try:
+    st, d = _req("/api/ai/sql/run?q=" + urllib.parse.quote(
+        "select 1 -- /*\n drop table sungero_wf_task */"))
+    check("исполнитель тоже отклоняет замаскированный drop", bool(d.get("error")))
+except Exception as e:
+    check("исполнитель тоже отклоняет замаскированный drop", False, str(e))
+
+# --- лимит строк: запрос с заведомо большим числом строк усечён до 200 ---
+# Обёртка SqlCheck сама заканчивается на "limit 200" (см. eff), поэтому PostgreSQL
+# никогда не отдаёт исполнителю 201-ю строку — через публичный эндпоинт флаг
+# truncated всегда false, это защита в два слоя (SQL-уровень + прикладной maxRows
+# в SqlRun), а не наблюдаемое здесь поведение. Что прикладная truncation-логика
+# в SqlRun сама по себе исправна, проверено вручную отдельным вызовом SqlRun
+# на сыром запросе без обёртки — см. task-5-report.md.
+try:
+    st, d = _req("/api/ai/sql/run?q=" + urllib.parse.quote(
+        "select * from generate_series(1,1000) as g(n)"))
+    check("лимит строк соблюдён (ровно 200)", len(d.get("rows") or []) == 200, len(d.get("rows") or []))
+    check("truncated=false: SQL-обёртка уже ограничила выборку до 200", d.get("truncated") is False)
+except Exception as e:
+    check("лимит строк соблюдён (ровно 200)", False, str(e))
+
 # ---------------- ИТОГ ----------------
 section("ИТОГ")
 print(f"  Проверок данных/UI: PASS={PASS}  FAIL={FAIL}")

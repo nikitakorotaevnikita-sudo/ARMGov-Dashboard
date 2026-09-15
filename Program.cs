@@ -325,8 +325,22 @@ class Program
             case "/api/ai/explain": J(ctx, BuildAiExplain(ReadBody(ctx))); return;
             case "/api/ai/sql/check":
             {
+                if (!IsLoopbackPrefix(Prefix)) { J(ctx, new { error = "харнесс доступен только при локальном префиксе" }); return; }
                 var (ok, reason, eff) = SqlCheck(q["q"]);
                 J(ctx, new { ok, reason, effective = eff });
+                return;
+            }
+            case "/api/ai/sql/run":
+            {
+                if (!IsLoopbackPrefix(Prefix)) { J(ctx, new { error = "харнесс доступен только при локальном префиксе" }); return; }
+                var (ok, reason, eff) = SqlCheck(q["q"]);
+                if (!ok) { J(ctx, new { error = reason }); return; }
+                try
+                {
+                    var (cols, rows, ms, truncated) = SqlRun(eff);
+                    J(ctx, new { cols, rows, ms, truncated, effective = eff });
+                }
+                catch (Exception ex) { J(ctx, new { error = ex.Message }); }
                 return;
             }
             case "/api/config":
@@ -2310,6 +2324,56 @@ class Program
         var eff = "select * from (" + cleaned + ") t limit 200";
         return (true, null, eff);
     }
+
+    // ---------- ИИ-харнесс: исполнитель SQL ----------
+    // Второй рубеж: даже пропущенная валидатором запись будет отклонена самим PostgreSQL.
+    // statement_timeout не даёт повесить стенд тяжёлым джойном.
+    //
+    // ВАЖНО: сюда всегда передаётся "effective" — очищенный и обёрнутый текст, который
+    // вернул SqlCheck, а не исходная строка из параметра запроса. Если исполнять исходный
+    // текст, весь смысл валидатора теряется: он проверяет запрос уже без комментариев,
+    // и конструкция вида "select 1 -- /*\n drop table t */" пройдёт проверку как безобидная,
+    // а при исполнении исходного текста PostgreSQL увидит её как есть, с хвостом внутри
+    // "комментария". Вызывающая сторона (эндпоинт /api/ai/sql/run) обязана брать eff
+    // из результата SqlCheck и не иметь доступа к исходному q на этом шаге.
+    static (List<string> cols, List<object[]> rows, int ms, bool truncated) SqlRun(string effective, int maxRows = 200)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var cols = new List<string>(); var rows = new List<object[]>(); bool more = false;
+        using var c = new NpgsqlConnection(Cs); c.Open();
+        using var tx = c.BeginTransaction();
+        using (var pre = new NpgsqlCommand("set transaction read only; set local statement_timeout = '10s'", c, tx))
+            pre.ExecuteNonQuery();
+        using (var cmd = new NpgsqlCommand(effective, c, tx))
+        using (var rd = cmd.ExecuteReader())
+        {
+            int n = Math.Min(rd.FieldCount, 60);
+            for (int i = 0; i < n; i++) cols.Add(rd.GetName(i));
+            while (rd.Read())
+            {
+                if (rows.Count >= maxRows) { more = true; break; }
+                var r = new object[n];
+                for (int i = 0; i < n; i++)
+                {
+                    var v = rd.IsDBNull(i) ? null : rd.GetValue(i);
+                    r[i] = v is string s ? Trunc(s, 200) : v;
+                }
+                rows.Add(r);
+            }
+        }
+        tx.Rollback();
+        return (cols, rows, (int)sw.ElapsedMilliseconds, more);
+    }
+
+    // Харнесс отдаёт исполнение произвольного SQL без какой-либо аутентификации —
+    // это допустимо только пока сервер слушает исключительно петлевой адрес.
+    // Если Prefix переопределён (config.json / ARMGOV_PREFIX) на внешний интерфейс,
+    // харнесс должен закрыться сам, а не полагаться на внешний firewall.
+    static bool IsLoopbackPrefix(string prefix) =>
+        !string.IsNullOrEmpty(prefix) &&
+        (prefix.IndexOf("localhost", StringComparison.OrdinalIgnoreCase) >= 0 ||
+         prefix.IndexOf("127.0.0.1", StringComparison.Ordinal) >= 0 ||
+         prefix.IndexOf("[::1]", StringComparison.Ordinal) >= 0);
 
     // ---------- helpers ----------
     static long ScalarL(NpgsqlConnection c, string sql) { using var cmd = new NpgsqlCommand(sql, c); var o = cmd.ExecuteScalar(); return (o == null || o is DBNull) ? 0 : Convert.ToInt64(o); }

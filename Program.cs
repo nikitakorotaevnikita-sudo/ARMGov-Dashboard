@@ -171,13 +171,18 @@ class Program
     }
     static void SaveConfig() => File.WriteAllText(CfgPath, JsonSerializer.Serialize(Conf, JsonCfg));
 
-    // Период фильтрует процессы по дате создания задачи (t.created). Пусто/all = весь период.
+    // Период фильтрует процессы по дате создания задачи (t.created). null/""/"all" = весь период.
+    // Нераспознанное значение — ошибка, а не молчаливый откат к "весь период": иначе агент
+    // (или битый query-параметр) получает данные за всё время и выдаёт их как срез,
+    // а число расходится с экраном (находка ревью р1, п.C2).
     static string PeriodClause(string period) => period switch
     {
+        null or "" or "all" => "",
         "month" => " and t.created >= now() - interval '1 month'",
         "quarter" => " and t.created >= now() - interval '3 months'",
         "year" => " and t.created >= now() - interval '12 months'",
-        _ => ""
+        _ => throw new Exception("неизвестное значение period: " + period +
+                                  " — допустимые значения: month, quarter, year (без аргумента — данные за всё время)")
     };
     // Настройки UI для дашборда (профили/промпты/пороги) — отдаются в составе /api/overview.
     static object UiConfig() => new
@@ -1799,8 +1804,14 @@ class Program
 
     // Вызов LLM (OpenAI chat/completions). messages: массив {role,content}. Бросает при ошибке.
     // Для Qwen 3.x выключаем thinking. Для GigaChat ключ в config — Authorization key: сначала OAuth, потом Bearer.
-    static string LlmChat(object[] messages, int maxTokens, double temperature) => LlmChatCore(messages, maxTokens, temperature, true);
-    static string LlmChatCore(object[] messages, int maxTokens, double temperature, bool retryOn401)
+    //
+    // timeoutMs ограничивает ОДИН вызов (по умолчанию — как раньше, весь HttpClient.Timeout
+    // в 10 минут). Агентному циклу нужен таймаут короче: без него шаг может повиснуть на
+    // все 10 минут уже ПОСЛЕ того, как истёк бюджет цикла (60с) — пользователь смотрит на
+    // зависший запрос двадцать минут вместо одного (находка ревью р1, п.I5).
+    static string LlmChat(object[] messages, int maxTokens, double temperature, int timeoutMs = 600000) =>
+        LlmChatCore(messages, maxTokens, temperature, true, timeoutMs);
+    static string LlmChatCore(object[] messages, int maxTokens, double temperature, bool retryOn401, int timeoutMs = 600000)
     {
         object body = IsGigaChat()
             ? new { model = LlmModel, messages, max_tokens = maxTokens, temperature }
@@ -1809,20 +1820,26 @@ class Program
         using var req = new HttpRequestMessage(HttpMethod.Post, LlmUrl);
         req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + bearer);
         req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-        using var resp = Http.Send(req);
-        var txt = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-        if ((int)resp.StatusCode == 401 && retryOn401 && IsGigaChat())
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(Math.Max(1000, timeoutMs)));
+        HttpResponseMessage resp;
+        try { resp = Http.Send(req, cts.Token); }
+        catch (OperationCanceledException) { throw new Exception("модель не ответила за " + timeoutMs + " мс (шаг агента упёрся в бюджет времени)"); }
+        using (resp)
         {
-            InvalidateGigaChatToken();
-            return LlmChatCore(messages, maxTokens, temperature, false);
+            var txt = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            if ((int)resp.StatusCode == 401 && retryOn401 && IsGigaChat())
+            {
+                InvalidateGigaChatToken();
+                return LlmChatCore(messages, maxTokens, temperature, false, timeoutMs);
+            }
+            if (!resp.IsSuccessStatusCode) throw new Exception("LLM HTTP " + (int)resp.StatusCode + ": " + Trunc(txt, 300));
+            using var doc = JsonDocument.Parse(txt);
+            var msg = doc.RootElement.GetProperty("choices")[0].GetProperty("message");
+            var content = msg.TryGetProperty("content", out var cEl) && cEl.ValueKind == JsonValueKind.String ? cEl.GetString() : null;
+            if (string.IsNullOrWhiteSpace(content) && msg.TryGetProperty("reasoning_content", out var rEl) && rEl.ValueKind == JsonValueKind.String)
+                content = rEl.GetString();
+            return content ?? "";
         }
-        if (!resp.IsSuccessStatusCode) throw new Exception("LLM HTTP " + (int)resp.StatusCode + ": " + Trunc(txt, 300));
-        using var doc = JsonDocument.Parse(txt);
-        var msg = doc.RootElement.GetProperty("choices")[0].GetProperty("message");
-        var content = msg.TryGetProperty("content", out var cEl) && cEl.ValueKind == JsonValueKind.String ? cEl.GetString() : null;
-        if (string.IsNullOrWhiteSpace(content) && msg.TryGetProperty("reasoning_content", out var rEl) && rEl.ValueKind == JsonValueKind.String)
-            content = rEl.GetString();
-        return content ?? "";
     }
     static string Trunc(string s, int n) => s != null && s.Length > n ? s.Substring(0, n) + "…" : s;
 
@@ -2691,14 +2708,21 @@ class Program
     // ---------- ИИ-харнесс: готовые инструменты ----------
     // Ключевые цифры агент не считает сам: он берёт их у тех же сборщиков, что рисуют
     // экран. Иначе чат и дашборд разойдутся, а это нарушает правило о сходимости метрик.
+    //
+    // Допустимые значения period нужно перечислить явно прямо в каталоге: без этого модель
+    // не может сопоставить «за последний квартал» с аргументом инструмента, решает, что
+    // инструмента нет, и честно уходит в собственный SQL — а там уже свои, не совпадающие
+    // с дашбордом границы дат (находка ревью р1, п.C2).
+    const string PeriodArgDoc = "period? — month|quarter|year, фильтр по дате создания задачи; без аргумента — данные за всё время";
+
     static readonly (string name, string args, string desc)[] ToolCatalog = {
-        ("overview", "period?", "KPI по всем процессам: в работе, срок сегодня, просрочено, соблюдение сроков, что горит"),
-        ("process", "key, period?", "Воронка и здоровье процесса. key: poruchenia | appeals | npa"),
+        ("overview", PeriodArgDoc, "KPI по всем процессам: в работе, срок сегодня, просрочено, соблюдение сроков, что горит"),
+        ("process", "key, " + PeriodArgDoc, "Воронка и здоровье процесса. key: poruchenia | appeals | npa"),
         ("leaders", "by", "Исполнение по людям и структуре. by: performer | dept | bu. Содержит coOverdue — просрочку у соисполнителей; считается ТОЛЬКО при by=performer, при by=dept и by=bu coOverdue всегда 0 (это не значит, что проблем нет — пересчитай по людям)"),
         ("leader_tasks", "by, id", "Задачи конкретного сотрудника или подразделения из leaders"),
-        ("stuck", "key, period?", "Где застревает работа: долгострои и узкие места процесса"),
-        ("by_kind", "key, period?", "Разрез процесса по видам поручений"),
-        ("departments", "key, period?", "Разрез процесса по подразделениям"),
+        ("stuck", "key, " + PeriodArgDoc, "Где застревает работа: долгострои и узкие места процесса"),
+        ("by_kind", "key, " + PeriodArgDoc, "Разрез процесса по видам поручений"),
+        ("departments", "key, " + PeriodArgDoc, "Разрез процесса по подразделениям"),
         ("my_tasks", "", "Личный контроль руководителя: его поручения и задания"),
         ("appeal_topics", "", "Тематики обращений граждан: разделы, темы, топ вопросов"),
     };
@@ -2770,6 +2794,9 @@ class Program
 "ИНСТРУМЕНТЫ (готовые метрики дашборда — те же числа, что видит руководитель на экране):\n" + tools + "\n\n" +
 "ПРАВИЛО ВЫБОРА: если вопрос закрывается инструментом — обязан вызвать инструмент.\n" +
 "action=sql разрешён ТОЛЬКО для среза, которого не даёт ни один инструмент.\n" +
+"Вопрос со словами «за месяц/за квартал/за год/за период» ВСЕГДА закрывается инструментом " +
+"с аргументом period (см. допустимые значения выше) — никогда не пиши свой SQL с датами " +
+"для такого среза: свои границы дат разойдутся с тем, что показывает дашборд.\n" +
 "Если число уже есть в предзагруженных данных ниже — не вызывай ничего, сразу answer. " +
 "Пример: «сколько заданий просрочено» — число уже есть в предзагруженном overview, ответ сразу, без единого действия.\n\n" +
 "SQL: только SELECT, один оператор, PostgreSQL. Имена таблиц и колонок пиши БЕЗ двойных кавычек — " +
@@ -2780,10 +2807,20 @@ class Program
     }
 
     // Модель нередко оборачивает JSON в ```-блок или добавляет текст вокруг — берём
-    // первый сбалансированный объект, а не пытаемся строго парсить весь текст целиком.
+    // сбалансированные объекты, а не пытаемся строго парсить весь текст целиком.
+    //
+    // Раньше брали ПЕРВЫЙ такой объект. Баг: если модель перед решением дословно
+    // процитирует шаблон формата из системного промпта (а три из четырёх шаблонов —
+    // валидный JSON сами по себе, включая "action":"answer","text":"итоговый ответ"),
+    // первым сбалансированным объектом окажется цитата, а не настоящее решение модели,
+    // которое идёт следом (находка ревью р1, п.I3). Настоящее решение — последнее, что
+    // модель написала, поэтому берём ПОСЛЕДНИЙ объект, у которого action входит в
+    // известное множество действий, а не первый попавшийся.
+    static readonly string[] KnownActions = { "tool", "schema", "sql", "answer" };
     static JsonElement? AgentParse(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
+        JsonElement? found = null;
         int start = text.IndexOf('{');
         while (start >= 0)
         {
@@ -2799,26 +2836,30 @@ class Program
                 else if (ch == '}' && --depth == 0)
                 {
                     var frag = text.Substring(start, i - start + 1);
-                    try { return JsonDocument.Parse(frag).RootElement.Clone(); }
-                    catch { break; }
+                    try
+                    {
+                        var el = JsonDocument.Parse(frag).RootElement.Clone();
+                        if (el.ValueKind == JsonValueKind.Object &&
+                            el.TryGetProperty("action", out var av) && av.ValueKind == JsonValueKind.String &&
+                            Array.IndexOf(KnownActions, av.GetString()) >= 0)
+                            found = el;   // не return — ищем ещё дальше, вдруг это тоже цитата
+                    }
+                    catch { /* невалидный фрагмент — пробуем следующую открывающую скобку */ }
+                    break;
                 }
             }
             start = text.IndexOf('{', start + 1);
         }
-        return null;
+        return found;
     }
 
     static object SqlAgentAsk(string body)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var steps = new List<object>();
-        var msgs = new List<object> { new { role = "system", content = AgentSystemPrompt() } };
 
-        // Предзагрузка: размер промпта почти ничего не стоит (замер в спеке),
-        // зато частые вопросы закрываются без единого шага и цифрой с экрана.
-        var pre = new { overview = BuildOverview(null), processes = BuildProcesses() };
-        msgs.Add(new { role = "user", content = "Предзагруженные данные дашборда (JSON):\n" +
-                                                 JsonSerializer.Serialize(pre) });
+        // Тело разбираем ПЕРВЫМ, до предзагрузки: битое тело не должно тратить обращение
+        // к БД, а пустой messages — тратить ещё и полный вызов модели (находка ревью р1, п.I8).
+        var incoming = new List<(string role, string content)>();
         try
         {
             using var doc = JsonDocument.Parse(body);
@@ -2828,19 +2869,51 @@ class Program
                     var role = m.TryGetProperty("role", out var rr) ? rr.GetString() : null;
                     var content = m.TryGetProperty("content", out var cc) ? cc.GetString() : null;
                     if ((role == "user" || role == "assistant") && !string.IsNullOrEmpty(content))
-                        msgs.Add(new { role, content });
+                        incoming.Add((role, content));
                 }
         }
         catch (Exception ex) { return new { error = "bad request: " + ex.Message }; }
+
+        if (incoming.Count == 0)
+            return new { reply = "Готов. Спросите, что посмотреть.", preloaded = Array.Empty<string>(),
+                         steps = new object[0], elapsedMs = (int)sw.ElapsedMilliseconds, truncated = false };
+
+        var steps = new List<object>();
+        var msgs = new List<object> { new { role = "system", content = AgentSystemPrompt() } };
+
+        // Предзагрузка: размер промпта почти ничего не стоит (замер в спеке),
+        // зато частые вопросы закрываются без единого шага и цифрой с экрана.
+        // В try — недоступная БД должна вернуть понятный {error}, а не сырой Npgsql
+        // текст в HTTP 500 общего обработчика (находка ревью р1, п.I7).
+        object pre;
+        try { pre = new { overview = BuildOverview(null), processes = BuildProcesses() }; }
+        catch (Exception ex) { return new { error = "предзагрузка данных дашборда не удалась: " + ex.Message }; }
+        msgs.Add(new { role = "user", content = "Предзагруженные данные дашборда (JSON):\n" +
+                                                 JsonSerializer.Serialize(pre) });
+        foreach (var (role, content) in incoming) msgs.Add(new { role, content });
 
         string reply = null; bool truncated = false;
         for (int n = 1; n <= AgentMaxSteps; n++)
         {
             if (sw.ElapsedMilliseconds > AgentBudgetMs) { truncated = true; break; }
             var stepSw = System.Diagnostics.Stopwatch.StartNew();
+            // Таймаут шага — от остатка бюджета цикла, а не от HttpClient.Timeout (10 минут):
+            // иначе шаг, начавшийся под конец бюджета, может повиснуть на все 10 минут уже
+            // ПОСЛЕ его истечения (находка ревью р1, п.I5).
+            int stepTimeoutMs = (int)Math.Max(3000, AgentBudgetMs - sw.ElapsedMilliseconds);
             string raw;
-            try { raw = LlmChat(msgs.ToArray(), 700, 0.2); }
-            catch (Exception ex) { return new { error = "ИИ недоступен: " + ex.Message }; }
+            try { raw = LlmChat(msgs.ToArray(), 700, 0.2, stepTimeoutMs); }
+            catch (Exception ex)
+            {
+                // Падение модели на середине цикла не должно стирать уже собранный протокол —
+                // отдаём тот же контракт {reply, preloaded, steps, elapsedMs, truncated}, где
+                // reply — текст о недоступности модели, а steps содержит всё, что успели
+                // (находка ревью р1, п.I1).
+                reply = "ИИ недоступен: " + ex.Message;
+                truncated = true;
+                steps.Add(new { n, action = "error", thought = "", error = reply, ms = (int)stepSw.ElapsedMilliseconds });
+                break;
+            }
             var parsed = AgentParse(raw);
             if (parsed == null)
             {
@@ -2854,23 +2927,42 @@ class Program
             string action = Str("action"), thought = Str("thought");
             msgs.Add(new { role = "assistant", content = raw });
 
-            if (action == "answer") { reply = Str("text"); steps.Add(new { n, action, thought, ms = (int)stepSw.ElapsedMilliseconds }); break; }
+            if (action == "answer")
+            {
+                // Пустой/пробельный text не считаем завершённым ответом: пользователь иначе
+                // видит пустой пузырь чата и протокол, уверяющий, что всё прошло штатно
+                // (находка ревью р1, п.C1 — Str() отдаёт "" и на пустое поле, и на его
+                // отсутствие, а "" != null, поэтому старый фолбэк не срабатывал).
+                var text = Str("text");
+                steps.Add(new { n, action, thought, ms = (int)stepSw.ElapsedMilliseconds });
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    msgs.Add(new { role = "user", content = "Поле text пустое. Дай содержательный итоговый ответ текстом." });
+                    continue;
+                }
+                reply = text;
+                break;
+            }
 
             if (action == "tool")
             {
                 var name = Str("tool");
                 var args = el.TryGetProperty("args", out var a) ? a : default;
+                // Аргументы вызова — в протокол: иначе для "process" не отличить вызов с
+                // period от вызова без него, и именно этой асимметрией маскировался C2
+                // (находка ревью р1, п.I2).
+                var argsJson = Trunc(args.ValueKind == JsonValueKind.Undefined ? "{}" : JsonSerializer.Serialize(args), 500);
                 try
                 {
                     var res = ToolCall(name, args);
                     var json = Trunc(JsonSerializer.Serialize(res), 12000);
                     msgs.Add(new { role = "user", content = "Результат " + name + ":\n" + json });
-                    steps.Add(new { n, action, thought, tool = name, ms = (int)stepSw.ElapsedMilliseconds });
+                    steps.Add(new { n, action, thought, tool = name, args = argsJson, ms = (int)stepSw.ElapsedMilliseconds });
                 }
                 catch (Exception ex)
                 {
                     msgs.Add(new { role = "user", content = "Инструмент упал: " + ex.Message });
-                    steps.Add(new { n, action, thought, tool = name, error = ex.Message, ms = (int)stepSw.ElapsedMilliseconds });
+                    steps.Add(new { n, action, thought, tool = name, args = argsJson, error = ex.Message, ms = (int)stepSw.ElapsedMilliseconds });
                 }
                 continue;
             }
@@ -2878,9 +2970,19 @@ class Program
             if (action == "schema")
             {
                 var t = Str("table");
-                var res = SchemaHelp(t);
-                msgs.Add(new { role = "user", content = "Схема " + t + ":\n" + Trunc(JsonSerializer.Serialize(res), 6000) });
-                steps.Add(new { n, action, thought, table = t, ms = (int)stepSw.ElapsedMilliseconds });
+                // В try — падение справки по схеме не должно ронять весь запрос и стирать
+                // накопленный протокол (находка ревью р1, п.I7).
+                try
+                {
+                    var res = SchemaHelp(t);
+                    msgs.Add(new { role = "user", content = "Схема " + t + ":\n" + Trunc(JsonSerializer.Serialize(res), 6000) });
+                    steps.Add(new { n, action, thought, table = t, ms = (int)stepSw.ElapsedMilliseconds });
+                }
+                catch (Exception ex)
+                {
+                    msgs.Add(new { role = "user", content = "Справка по схеме упала: " + ex.Message });
+                    steps.Add(new { n, action, thought, table = t, error = ex.Message, ms = (int)stepSw.ElapsedMilliseconds });
+                }
                 continue;
             }
 
@@ -2915,12 +3017,44 @@ class Program
             steps.Add(new { n, action, thought, error = "неизвестное действие", ms = (int)stepSw.ElapsedMilliseconds });
         }
 
-        if (reply == null)
+        // Пустой/пробельный reply тоже не считаем готовым ответом — тот же случай C1,
+        // что и на action=answer внутри цикла: строка "" не равна null и раньше проходила
+        // мимо фолбэка (находка ревью р1, п.C1).
+        if (string.IsNullOrWhiteSpace(reply))
         {
             truncated = true;
-            msgs.Add(new { role = "user", content = "Шаги закончились. Ответь по уже собранным данным одним текстом, без JSON." });
-            try { reply = LlmChat(msgs.ToArray(), 600, 0.3); }
-            catch (Exception ex) { return new { error = "ИИ недоступен: " + ex.Message }; }
+            // Бюджет проверяем и перед финальным фолбэком: без этого он мог уйти в ещё
+            // один вызов модели уже сверх всякого бюджета (находка ревью р1, п.I5).
+            var remainMs = AgentBudgetMs - (int)sw.ElapsedMilliseconds;
+            if (remainMs < 3000)
+            {
+                reply = "Бюджет времени исчерпан — не успел сформулировать ответ по собранным данным.";
+            }
+            else
+            {
+                msgs.Add(new { role = "user", content = "Шаги закончились. Ответь по уже собранным данным одним текстом, без JSON." });
+                var fbSw = System.Diagnostics.Stopwatch.StartNew();
+                string raw;
+                try { raw = LlmChat(msgs.ToArray(), 600, 0.3, remainMs); }
+                catch (Exception ex) { raw = null; reply = "ИИ недоступен: " + ex.Message; }
+                if (raw != null)
+                {
+                    // Промпт для фолбэка просит "текстом, без JSON", но системный промпт
+                    // требует РОВНО ОДИН JSON — если модель послушается системного промпта,
+                    // пользователь увидит сырой {"action":"answer","text":"…"} в чате.
+                    // Пропускаем через AgentParse: разобрался и есть text — берём его,
+                    // иначе берём текст как есть (находка ревью р1, п.I6).
+                    var parsedFb = AgentParse(raw);
+                    string fbText = (parsedFb != null && parsedFb.Value.TryGetProperty("text", out var tv) &&
+                                      tv.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(tv.GetString()))
+                        ? tv.GetString() : raw;
+                    reply = fbText;
+                }
+                // Этот вызов — тоже шаг протокола: иначе при truncated:true отчёт показывает
+                // N шагов, а ответ пришёл из неучтённого N+1 (та же находка, п.I6).
+                steps.Add(new { n = steps.Count + 1, action = "answer", thought = "", fallback = true,
+                                 ms = (int)fbSw.ElapsedMilliseconds });
+            }
         }
         return new { reply, preloaded = new[] { "overview", "processes" },
                      steps, elapsedMs = (int)sw.ElapsedMilliseconds, truncated };

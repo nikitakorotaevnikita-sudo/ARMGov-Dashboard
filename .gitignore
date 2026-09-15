@@ -14,3 +14,8 @@ sungero-remote-component-example-react-main/
 2026-07-22-mvp-screen-final.html
 # рабочее пространство subagent-driven-development (реестр, брифы, отчёты)
 .superpowers/
+# посторонние каталоги от другой ветки, случайно оказавшиеся в рабочем дереве — не наш код
+rx-arm/
+rx-cover/
+rx-arm.7z
+tests/__pycache__/

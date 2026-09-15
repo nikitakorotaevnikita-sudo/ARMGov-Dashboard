@@ -1993,32 +1993,271 @@ class Program
     }
 
     // ---------- ИИ-харнесс: валидатор SQL ----------
-    // Первый из двух рубежей (второй — read-only транзакция в SqlRun).
+    // Первый из двух рубежей (второй — read-only транзакция в SqlRun, задача 5).
     // Проверяется и исполняется ОДИН И ТОТ ЖЕ текст: комментарии вырезаются до проверки,
     // иначе валидатор смотрел бы на одно, а база получала другое.
-    static readonly string[] SqlDeny = {
+    //
+    // Раунд исправлений 1 (ревью нашло рабочие обходы, включая запись в боевую базу):
+    //   1) деней-лист был словом-в-слово ("\bdblink_exec\b" не matчил себя из-за "\b" перед
+    //      подчёркиванием) — теперь два списка: ключевые слова (граница с обеих сторон)
+    //      и семейства опасных функций (граница только слева, справа — любой суффикс);
+    //   2) "select ... into t" создавала таблицу — "into"/"merge" добавлены в ключевые слова;
+    //   3) обёртка "limit 200" накладывается теперь БЕЗУСЛОВНО, проверка на своё "limit" убрана;
+    //   4) вырезание комментариев/поиск ';' и запрещённых слов делается ТОЛЬКО вне строковых
+    //      и идентификаторных литералов — вместо регулярки теперь посимвольный разбор;
+    //   5) U&"..."/U&'...' (юникод-экранирование) отклоняется как отдельный класс конструкций,
+    //      т.к. декодированное имя функции регуляркой не ловится;
+    //   7) сравнения строк переведены на StringComparison.Ordinal, слова деней-листа
+    //      экранированы Regex.Escape и скомпилированы один раз в static readonly, у всех
+    //      регулярок выставлен matchTimeout (защита от катастрофического бэктрекинга).
+
+    // Ключевые слова — отклоняются только как самостоятельное слово (граница \b с обеих сторон).
+    // "into"/"merge" — сюда же: единственный способ SELECT-ом создать/изменить данные.
+    static readonly string[] SqlDenyKeywords = {
         "insert","update","delete","drop","alter","create","truncate","grant","revoke",
         "copy","vacuum","call","do","set","reset","begin","commit","rollback",
-        "dblink","pg_read_file","pg_ls_dir","lo_import","lo_export","pg_sleep" };
+        "into","merge"
+    };
+
+    // Семейства опасных функций — отклоняются по совпадению с началом имени (граница \b
+    // только слева), т.к. в PostgreSQL это именно СЕМЕЙСТВА: dblink/dblink_exec/dblink_connect,
+    // pg_read_file/pg_read_binary_file, pg_ls_dir/pg_ls_logdir, lo_import/lo_export/lo_get и т.д.
+    // Через них шёл обход второго рубежа (read-only транзакции): dblink_exec открывает СВОЁ
+    // соединение, pg_terminate_backend/pg_advisory_lock/set_config действуют на уровне сервера
+    // или сессии и не являются просто чтением данных.
+    static readonly string[] SqlDenyFamilies = {
+        "dblink","pg_read","pg_ls","pg_stat_file","pg_sleep","pg_terminate","pg_cancel",
+        "pg_advisory","pg_import","lo_","set_config","query_to_xml","table_to_xml","xmlparse"
+    };
+
+    static readonly TimeSpan SqlRegexTimeout = TimeSpan.FromMilliseconds(200);
+
+    // Компилируются один раз при старте процесса, а не на каждый запрос.
+    static readonly (Regex re, string word)[] SqlDenyKeywordRe =
+        SqlDenyKeywords.Select(w => (new Regex(@"\b" + Regex.Escape(w) + @"\b",
+            RegexOptions.Compiled, SqlRegexTimeout), w)).ToArray();
+    static readonly (Regex re, string word)[] SqlDenyFamilyRe =
+        SqlDenyFamilies.Select(w => (new Regex(@"\b" + Regex.Escape(w),
+            RegexOptions.Compiled, SqlRegexTimeout), w)).ToArray();
+
+    // Посимвольный разбор SQL-текста: одновременно вырезает комментарии и отслеживает
+    // границы литералов, чтобы дальше искать ';' и запрещённые слова только вне них.
+    // На выходе:
+    //   cleaned      — исходный текст без комментариев, литералы сохранены дословно
+    //                  (это база для итогового "effective");
+    //   codeOnlyLow  — тот же текст в нижнем регистре, но СОДЕРЖИМОЕ ЛИТЕРАЛОВ заменено
+    //                  на пробел (это база для поиска ';' и запрещённых слов — то, что
+    //                  реально является SQL-кодом, а не данными внутри строки/идентификатора).
+    static bool TrySplitSqlIntoCleanAndCode(string sql, out string cleaned, out string codeOnlyLow, out string error)
+    {
+        cleaned = null; codeOnlyLow = null; error = null;
+        var cleanedSb = new StringBuilder(sql.Length);
+        var codeSb = new StringBuilder(sql.Length);
+        int i = 0, n = sql.Length;
+
+        while (i < n)
+        {
+            char c = sql[i];
+
+            // U&"..." / U&'...' — юникод-экранированные идентификаторы и строки. PostgreSQL
+            // декодирует \XXXX внутри них ДО того, как имя попадёт в парсер, поэтому обычный
+            // поиск подстрок ("pg_sleep" и т.п.) такую конструкцию не видит в принципе.
+            // Проще и надёжнее запретить саму конструкцию целиком, чем декодировать escape.
+            if ((c == 'U' || c == 'u') && i + 2 < n && sql[i + 1] == '&' && (sql[i + 2] == '"' || sql[i + 2] == '\''))
+            {
+                error = "юникод-экранирование идентификаторов/строк (U&\"...\" / U&'...') запрещено";
+                return false;
+            }
+
+            // Строчный комментарий -- ... до конца строки.
+            if (c == '-' && i + 1 < n && sql[i + 1] == '-')
+            {
+                i += 2;
+                while (i < n && sql[i] != '\n') i++;
+                codeSb.Append(' ');
+                // перевод строки (если есть) оставляем в cleaned как разделитель токенов
+                if (i < n) { cleanedSb.Append('\n'); i++; }
+                continue;
+            }
+
+            // Блочный комментарий /* ... */ — с поддержкой вложенности, как у самого PostgreSQL.
+            if (c == '/' && i + 1 < n && sql[i + 1] == '*')
+            {
+                int depth = 1; i += 2;
+                while (i < n && depth > 0)
+                {
+                    if (sql[i] == '/' && i + 1 < n && sql[i + 1] == '*') { depth++; i += 2; }
+                    else if (sql[i] == '*' && i + 1 < n && sql[i + 1] == '/') { depth--; i += 2; }
+                    else i++;
+                }
+                if (depth > 0) { error = "незакрытый комментарий /* ... */"; return false; }
+                codeSb.Append(' ');
+                continue;
+            }
+
+            // Одинарные кавычки — строковый литерал. '' внутри — экранированная кавычка.
+            // Литерал вида E'...' (или e'...') дополнительно понимает обратный слэш как
+            // экранирование следующего символа — иначе '\' + закрывающая кавычка внутри
+            // такого литерала выглядела бы для нас как настоящее закрытие строки раньше,
+            // чем это увидит PostgreSQL, и часть "текста после литерала" на самом деле
+            // ещё была бы данными — здесь это и есть тот самый неучтённый случай.
+            if (c == '\'')
+            {
+                bool isEscapeString = IsStandaloneELetterBefore(sql, i);
+                int start = i;
+                cleanedSb.Append(c); codeSb.Append(' ');
+                i++;
+                bool closed = false;
+                while (i < n)
+                {
+                    if (isEscapeString && sql[i] == '\\')
+                    {
+                        cleanedSb.Append(sql[i]);
+                        i++;
+                        if (i >= n) break;
+                        cleanedSb.Append(sql[i]);
+                        i++;
+                        continue;
+                    }
+                    if (sql[i] == '\'')
+                    {
+                        if (i + 1 < n && sql[i + 1] == '\'') { cleanedSb.Append("''"); i += 2; continue; }
+                        cleanedSb.Append('\''); i++; closed = true; break;
+                    }
+                    cleanedSb.Append(sql[i]); i++;
+                }
+                if (!closed) { error = "незакрытый строковый литерал, начатый в позиции " + start; return false; }
+                continue;
+            }
+
+            // Двойные кавычки — идентификатор в кавычках. "" внутри — экранированная кавычка.
+            // Обратный слэш здесь ничего не экранирует (это правило только для строк).
+            if (c == '"')
+            {
+                int start = i;
+                cleanedSb.Append(c); codeSb.Append(' ');
+                i++;
+                bool closed = false;
+                while (i < n)
+                {
+                    if (sql[i] == '"')
+                    {
+                        if (i + 1 < n && sql[i + 1] == '"') { cleanedSb.Append("\"\""); i += 2; continue; }
+                        cleanedSb.Append('"'); i++; closed = true; break;
+                    }
+                    cleanedSb.Append(sql[i]); i++;
+                }
+                if (!closed) { error = "незакрытый идентификатор в двойных кавычках, начатый в позиции " + start; return false; }
+                continue;
+            }
+
+            // Долларовая кавычка $$...$$ или $tag$...$tag$.
+            if (c == '$' && TryMatchDollarTag(sql, i, out var tag))
+            {
+                int contentStart = i + tag.Length;
+                int closeIdx = sql.IndexOf(tag, contentStart, StringComparison.Ordinal);
+                if (closeIdx < 0) { error = "незакрытая долларовая кавычка " + tag + " ... " + tag; return false; }
+                int literalEnd = closeIdx + tag.Length;
+                cleanedSb.Append(sql, i, literalEnd - i);
+                codeSb.Append(' ');
+                i = literalEnd;
+                continue;
+            }
+
+            cleanedSb.Append(c);
+            codeSb.Append(char.ToLowerInvariant(c));
+            i++;
+        }
+
+        cleaned = cleanedSb.ToString();
+        codeOnlyLow = codeSb.ToString();
+        return true;
+    }
+
+    // "Голая" буква E/e непосредственно перед открывающей кавычкой (без пробела) и без
+    // предшествующих буквенно-цифровых символов — признак escape-строки E'...'.
+    static bool IsStandaloneELetterBefore(string sql, int quoteIndex)
+    {
+        int p = quoteIndex - 1;
+        if (p < 0) return false;
+        char c = sql[p];
+        if (c != 'e' && c != 'E') return false;
+        if (p - 1 >= 0)
+        {
+            char prev = sql[p - 1];
+            if (char.IsLetterOrDigit(prev) || prev == '_') return false;
+        }
+        return true;
+    }
+
+    // Проверяет, начинается ли в позиции i долларовая кавычка ($$ или $tag$), и возвращает
+    // саму метку целиком (включая оба знака доллара). Метка не может начинаться с цифры —
+    // иначе параметры подготовленных запросов вида $1, $2 ошибочно принимались бы за кавычку.
+    static bool TryMatchDollarTag(string sql, int i, out string tag)
+    {
+        tag = null;
+        int n = sql.Length;
+        if (i >= n || sql[i] != '$') return false;
+        int j = i + 1;
+        if (j < n && sql[j] == '$') { tag = "$$"; return true; }
+        if (j < n && (char.IsLetter(sql[j]) || sql[j] == '_'))
+        {
+            int k = j + 1;
+            while (k < n && (char.IsLetterOrDigit(sql[k]) || sql[k] == '_')) k++;
+            if (k < n && sql[k] == '$') { tag = sql.Substring(i, k - i + 1); return true; }
+        }
+        return false;
+    }
 
     static (bool ok, string reason, string effective) SqlCheck(string sql)
     {
         if (string.IsNullOrWhiteSpace(sql)) return (false, "пустой запрос", null);
-        var s = Regex.Replace(sql, @"/\*.*?\*/", " ", RegexOptions.Singleline);
-        s = Regex.Replace(s, @"--[^\n]*", " ");
-        s = s.Trim();
-        while (s.EndsWith(";")) s = s.Substring(0, s.Length - 1).Trim();
-        if (s.Contains(";")) return (false, "разрешён только один оператор", null);
-        var low = s.ToLowerInvariant();
+
+        if (!TrySplitSqlIntoCleanAndCode(sql, out var cleaned, out var codeLow, out var parseError))
+            return (false, parseError, null);
+
+        cleaned = cleaned.Trim();
+        codeLow = codeLow.Trim();
+
+        // ';' ищем только в "коде" (вне литералов) — иначе string_agg(x, '; ') отклонялся бы
+        // как "два оператора", хотя ';' там — данные, а не разделитель операторов.
+        // Допускается ровно один ';' и только в самом конце (после него — не более чем
+        // пробелы/остатки комментариев); всё прочее — несколько операторов.
+        int firstSemi = codeLow.IndexOf(';');
+        if (firstSemi >= 0)
+        {
+            bool onlyOneAtEnd = codeLow.IndexOf(';', firstSemi + 1) < 0
+                                 && codeLow.Substring(firstSemi + 1).Trim().Length == 0;
+            if (!onlyOneAtEnd) return (false, "разрешён только один оператор", null);
+            // тот же завершающий ';' убираем и из исполняемого текста
+            int cutAt = cleaned.LastIndexOf(';');
+            cleaned = (cutAt >= 0 ? cleaned.Substring(0, cutAt) : cleaned).TrimEnd();
+        }
+
+        // Ключевые слова — по границе с обеих сторон (см. объявление SqlDenyKeywordRe).
+        foreach (var (re, word) in SqlDenyKeywordRe)
+            if (re.IsMatch(codeLow))
+                return (false, "запрещённая конструкция: " + word, null);
+
+        // Семейства опасных функций — по границе только слева (см. SqlDenyFamilyRe).
+        foreach (var (re, word) in SqlDenyFamilyRe)
+            if (re.IsMatch(codeLow))
+                return (false, "запрещённая конструкция: " + word, null);
+
         // Запрещённые слова проверяем раньше требования "начинается с SELECT/WITH":
         // иначе "drop table x" отклонялся бы с общей причиной "должен начинаться с SELECT",
         // маскируя настоящий повод отказа — попытку изменить данные.
-        foreach (var w in SqlDeny)
-            if (Regex.IsMatch(low, @"\b" + w + @"\b"))
-                return (false, "запрещённая конструкция: " + w, null);
-        if (!(low.StartsWith("select") || low.StartsWith("with")))
+        var codeLowTrimStart = codeLow.TrimStart();
+        if (!(codeLowTrimStart.StartsWith("select", StringComparison.Ordinal)
+              || codeLowTrimStart.StartsWith("with", StringComparison.Ordinal)))
             return (false, "запрос должен начинаться с SELECT или WITH", null);
-        var eff = Regex.IsMatch(low, @"\blimit\b") ? s : "select * from (" + s + ") t limit 200";
+
+        // Обёртка накладывается БЕЗУСЛОВНО, вне зависимости от того, есть ли в запросе
+        // собственный LIMIT: собственный LIMIT может относиться к вложенному подзапросу
+        // и не ограничивать внешний результат, а может быть намеренно завышен моделью/
+        // пользователем. select * from (...) t limit 200 корректен и для ORDER BY,
+        // и для UNION, и для WITH — все они являются валидным подзапросом в скобках.
+        var eff = "select * from (" + cleaned + ") t limit 200";
         return (true, null, eff);
     }
 

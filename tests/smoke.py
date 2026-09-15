@@ -208,34 +208,92 @@ ai_check("explain (разбор блока)", "/api/ai/explain", "POST",
 section("Валидатор SQL  /api/ai/sql/check")
 import urllib.parse
 def sqlcheck(q):
-    st, d = _req("/api/ai/sql/check?q=" + urllib.parse.quote(q))
-    return d
-try:
-    d = sqlcheck("select count(*) from sungero_wf_task limit 1")
-    check("корректный запрос пропущен", d.get("ok") is True, d.get("reason") or "")
+    # Падение ОДНОЙ проверки не должно обрывать весь блок (было: общий
+    # try/except на семь проверок сразу — см. находки раунда 1, п.6).
+    try:
+        st, d = _req("/api/ai/sql/check?q=" + urllib.parse.quote(q))
+        return d
+    except Exception as e:
+        return {"_exc": str(e)}
 
-    d = sqlcheck("drop table sungero_wf_task")
-    check("drop table отклонён", d.get("ok") is False and "drop" in (d.get("reason") or ""))
+d = sqlcheck("select count(*) from sungero_wf_task limit 1")
+check("корректный запрос пропущен", d.get("ok") is True, d.get("reason") or "")
 
-    d = sqlcheck("select 1; delete from sungero_wf_task")
-    check("два оператора отклонены", d.get("ok") is False)
+d = sqlcheck("drop table sungero_wf_task")
+check("drop table отклонён", d.get("ok") is False and "drop" in (d.get("reason") or ""))
+check("при отказе effective не отдаётся", d.get("effective") is None)
 
-    d = sqlcheck("select 1 -- безобидно\n; delete from sungero_wf_task")
-    check("маскировка комментарием не проходит", d.get("ok") is False)
+d = sqlcheck("select 1; delete from sungero_wf_task")
+check("два оператора (с запрещённым словом) отклонены", d.get("ok") is False)
 
-    d = sqlcheck("select /* delete */ count(*) from sungero_wf_task")
-    check("запрет не срабатывает на слове в комментарии",
-          d.get("ok") is True, d.get("reason") or "")
+d = sqlcheck("select 1; select 2")
+check("два безобидных оператора отклонены (правило ';' изолировано от списка слов)",
+      d.get("ok") is False)
 
-    d = sqlcheck("select id from sungero_wf_task")
-    check("запросу без limit добавлена обёртка",
-          d.get("ok") is True and "limit 200" in (d.get("effective") or "").lower(),
-          d.get("effective"))
+d = sqlcheck("select 1 -- безобидно\n; delete from sungero_wf_task")
+check("маскировка комментарием не проходит", d.get("ok") is False)
 
-    d = sqlcheck("update sungero_wf_task set subject = 'x'")
-    check("update отклонён", d.get("ok") is False)
-except Exception as e:
-    check("валидатор доступен", False, str(e))
+d = sqlcheck("select /* delete */ count(*) from sungero_wf_task")
+check("запрет не срабатывает на слове в комментарии",
+      d.get("ok") is True, d.get("reason") or "")
+check("комментарий /* */ вырезан из effective",
+      "delete" not in (d.get("effective") or "") and "/*" not in (d.get("effective") or ""),
+      d.get("effective"))
+
+d = sqlcheck("select 1 -- delete from t")
+check("строчный комментарий -- вырезан из effective",
+      "--" not in (d.get("effective") or ""), d.get("effective"))
+
+d = sqlcheck("select id from sungero_wf_task")
+check("запросу без limit добавлена обёртка",
+      d.get("ok") is True and "limit 200" in (d.get("effective") or "").lower(),
+      d.get("effective"))
+
+d = sqlcheck("update sungero_wf_task set subject = 'x'")
+check("update отклонён", d.get("ok") is False)
+
+# --- находки раунда 1, пункты 1-2-5: семейства функций, SELECT INTO, юникод-идентификаторы ---
+for bad in ["select dblink_exec('dbname=x','select 1')",
+            "select pg_read_binary_file('pg_hba.conf')",
+            "select pg_terminate_backend(1)",
+            "select set_config('statement_timeout','0',false)",
+            "select pg_advisory_lock(42)",
+            "select query_to_xml('select 1', true, false, '')",
+            "select * into zzz from sungero_wf_task",
+            'select U&"pg_sl\\0065ep"(60)']:
+    d = sqlcheck(bad)
+    check("отклонено: " + bad[:46], d.get("ok") is False, d.get("reason") or "")
+
+for good in ["select created from sungero_wf_task",
+             "select setting from pg_settings",
+             "select subject from sungero_wf_task where subject like '%update%'",
+             "select string_agg(subject, '; ') from sungero_wf_task"]:
+    d = sqlcheck(good)
+    check("пропущено: " + good[:46], d.get("ok") is True, d.get("reason") or "")
+
+# --- находка раунда 1, пункт 3: обёртка limit 200 накладывается безусловно ---
+d = sqlcheck("select id from sungero_wf_task limit 100000000")
+check("обёртка накладывается даже при своём limit",
+      "limit 200" in (d.get("effective") or "").lower(), d.get("effective"))
+
+d = sqlcheck("select * from a where a.x in (select y from sungero_wf_task limit 10)")
+check("вложенный limit не подменяет внешнюю обёртку",
+      (d.get("effective") or "").lower().count("limit") >= 2 and
+      (d.get("effective") or "").lower().rstrip().endswith("limit 200"),
+      d.get("effective"))
+
+# --- находка раунда 1, пункт 4: строковые литералы разбираются посимвольно ---
+d = sqlcheck("select '-- это данные, а не комментарий' as x")
+check("литерал, похожий на комментарий, не режется",
+      d.get("ok") is True and "это данные" in (d.get("effective") or ""),
+      d.get("effective"))
+
+d = sqlcheck("select 'unterminated")
+check("незакрытый строковый литерал отклонён", d.get("ok") is False)
+
+d = sqlcheck("select 'it''s ok' as x")
+check("удвоенная кавычка внутри литерала не рвёт разбор",
+      d.get("ok") is True, d.get("reason") or "")
 
 # ---------------- ИТОГ ----------------
 section("ИТОГ")

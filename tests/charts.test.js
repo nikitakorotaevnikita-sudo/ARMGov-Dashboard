@@ -15,8 +15,10 @@ function check(name, cond, detail) {
   if (cond) { pass++; console.log('  [ OK ] ' + name); }
   else { fail++; console.log('  [FAIL] ' + name + (detail ? ' — ' + detail : '')); }
 }
-function ds(cols, rows) {
-  return { cols: cols.map(c => ({ name: c[0], title: c[0], type: c[1] })), rows: rows, rowCount: rows.length };
+function ds(cols, rows, extra) {
+  return Object.assign(
+    { cols: cols.map(c => ({ name: c[0], title: c[0], type: c[1] })), rows: rows, rowCount: rows.length },
+    extra || {});
 }
 
 const oneRow = ds([['всего', 'number'], ['просрочено', 'number']], [[1579, 635]]);
@@ -127,6 +129,73 @@ check('датасет без строк, вид «таблица» — «нет 
 check('датасет без строк, вид «доли» — «нет данных», как и без колонок',
       renderView(noRows, 'shares').indexOf('нет данных') >= 0,
       renderView(noRows, 'shares'));
+
+// Финальное ревью ветки, п.2: renderLine рисовал только первый показатель —
+// вторая и третья серия («закрыто» рядом с «создано») пропадали молча.
+// Выбранное исправление — рисовать все серии палитрой CHART_PAL с легендой
+// снизу (по образцу renderBars/svgGroupedBars), а не молчаливую подпись:
+// так руководитель видит оба числа, а не только заголовок «есть ещё одно».
+var lineTwo = ds([['месяц', 'date'], ['создано', 'number'], ['закрыто', 'number']],
+                 [['2026-01-01', 10, 4], ['2026-02-01', 20, 15]]);
+var lineHtml = renderView(lineTwo, 'line');
+check('renderLine показывает обе серии, а не только первую',
+      lineHtml.indexOf('создано') >= 0 && lineHtml.indexOf('закрыто') >= 0,
+      lineHtml.slice(-200));
+
+// Финальное ревью, п.3а: при усечённом датасете (rowCount>rows.length) сумма
+// по показанным строкам — не действительное целое. Выбранное исправление —
+// честная оговорка рядом с долями (не убирать вид из pickViews: это тот же
+// класс информации, что и topNote у столбиков, а не повод прятать график).
+var truncShares = ds([['НОР', 'text'], ['обращений', 'number']],
+                      [['ДИТ', 100], ['ДФ', 100]], { truncated: true, rowCount: 500 });
+var truncHtml = renderView(truncShares, 'shares');
+check('доли при усечённом датасете печатают честную оговорку про rowCount',
+      truncHtml.indexOf('не полный итог') >= 0 && truncHtml.indexOf('500') >= 0,
+      truncHtml.slice(0, 240));
+var noTruncShares = ds([['НОР', 'text'], ['обращений', 'number']], [['ДИТ', 100], ['ДФ', 100]]);
+check('без усечения оговорки про rowCount нет',
+      renderView(noTruncShares, 'shares').indexOf('не полный итог') < 0);
+
+// Финальное ревью, п.3б: потолок CHART_TOP_N не был применён в renderShares —
+// при большом числе категорий рисовались все, а не топ-20 с подписью, как у
+// столбиков. Дополнительно проверяем, что проценты считаются от суммы ВСЕХ
+// категорий (грандтотал), а не только показанных топ-20 — иначе обрезание
+// само по себе исказило бы доли ровно так же, как в п.3а.
+var manyShares = [];
+for (var si = 0; si < 30; si++) manyShares.push(['НОР ' + si, 30 - si]);
+var manySharesHtml = renderView(ds([['НОР', 'text'], ['показатель', 'number']], manyShares), 'shares');
+check('доли обрезаются потолком CHART_TOP_N с той же подписью, что у столбиков',
+      manySharesHtml.indexOf('20 из 30') >= 0, manySharesHtml.slice(-200));
+check('проценты в обрезанных долях считаются от суммы всех категорий, не только показанных',
+      manySharesHtml.indexOf('6.5%') >= 0 && manySharesHtml.indexOf('7.3%') < 0,
+      manySharesHtml.slice(0, 300));
+
+// Финальное ревью, п.4: длинные подписи категорий не обрезаются в SVG и
+// накладываются друг на друга. svgBars не трогаем (пять экранов на нём) —
+// обрезаем до передачи в него. В svgGroupedBars, который можно менять,
+// обрезаем и кладём полное имя в <title> (видно при наведении).
+var longName = 'Департамент информационных технологий';
+var longOne = ds([['НОР', 'text'], ['просрочено', 'number']], [[longName, 10], ['ДФ', 20]]);
+var longOneHtml = renderView(longOne, 'bars');
+check('длинная подпись в столбиках (svgBars) обрезана многоточием',
+      longOneHtml.indexOf(longName) < 0 && longOneHtml.indexOf('…') >= 0,
+      longOneHtml.slice(-300));
+var longTwo = ds([['НОР', 'text'], ['в работе', 'number'], ['просрочено', 'number']],
+                 [[longName, 10, 5], ['ДФ', 20, 7]]);
+var longTwoHtml = renderView(longTwo, 'bars');
+check('длинная подпись в сгруппированных столбиках обрезана, полное имя — в <title>',
+      longTwoHtml.indexOf('<title>' + longName + '</title>') >= 0 &&
+      longTwoHtml.indexOf('>Департамент …<') >= 0,
+      longTwoHtml.slice(-400));
+
+// Финальное ревью, п.6: заголовки колонок — латиница на экране губернатора
+// (title=name для tool/preload-датасетов). Известное поле переводится
+// словарём в charts.js, незнакомое (например, алиас из SQL) остаётся как есть.
+var titledDs = ds([['overdue', 'number'], ['мойалиас', 'number']], [[5, 7]]);
+var titleHtml = renderView(titledDs, 'table');
+check('известное поле колонки переводится на русский, неизвестное — как есть',
+      titleHtml.indexOf('Просрочено') >= 0 && titleHtml.indexOf('мойалиас') >= 0,
+      titleHtml.slice(0, 200));
 
 console.log('\nИТОГ: PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

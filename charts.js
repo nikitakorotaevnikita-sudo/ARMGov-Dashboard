@@ -87,8 +87,51 @@ var CHART_TOP_N = 20;
 // Палитра серий — только токены из tokens.css, новых цветов не вводим.
 var CHART_PAL = ['var(--accent)','var(--green)','var(--amber)','var(--red)','var(--blue)','var(--subtle)'];
 
+// Длинные подписи категорий (реальные названия подразделений) не переносятся
+// в SVG и накладываются друг на друга — в renderShares это решено через
+// text-overflow в HTML, а в SVG-видах подписи рисуются как есть. Обрезаем до
+// показа; полное имя не теряется — где рисуем <text> сами (svgGroupedBars),
+// кладём его в <title> (видно при наведении).
+var LABEL_MAX = 13;
+function truncLabel(s){
+  s=String(s==null?'':s);
+  return s.length>LABEL_MAX ? s.slice(0,LABEL_MAX-1)+'…' : s;
+}
+// Как txt(), но для подписей категорий: показывает обрезанный текст и несёт
+// полное имя в <title> для наведения, если оно вообще было обрезано.
+function txtLabel(x,y,full,a,sz,f){
+  var short=truncLabel(full);
+  return '<text x="'+x+'" y="'+y+'" text-anchor="'+(a||'middle')+'" font-size="'+(sz||11)+'" fill="'+(f||'var(--muted)')+'" font-family="var(--font)">'+
+    esc(short)+(short!==String(full)?'<title>'+esc(full)+'</title>':'')+'</text>';
+}
+
 function viewTitle(v){
   return {kpi:'Плитки',bars:'Столбики',line:'Динамика',shares:'Доли',table:'Таблица'}[v]||v;
+}
+
+// Заголовки колонок для полей документированных в промпте инструментов и
+// массивов предзагрузки (leaders/leader_tasks/stuck/by_kind/departments,
+// overview.processes, overview.bottlenecksTop, processes.processes). Сервер
+// кладёт title=name (латиница из БД/JSON) — здесь переводим на русский то,
+// что знаем, а незнакомое (включая алиасы из SQL-датасетов) оставляем как
+// пришло: откат на исходное имя не даёт странице упасть на новом поле.
+var COL_TITLES_RU = {
+  name:'Название', dept:'Подразделение', label:'Категория', position:'Должность',
+  performer:'Исполнитель', subject:'Тема', process:'Процесс', stage:'Этап',
+  key:'Процесс', processKey:'Процесс', kind:'Разрез', total:'Всего', inwork:'В работе',
+  completed:'Завершено', overdue:'Просрочено', overdueDays:'Дней просрочки',
+  ageDays:'Возраст, дн', exp7:'Истекает за 7 дн', coOverdue:'Просрочка у соисполнителей',
+  health:'Индекс дисциплины', severity:'Критичность',
+  throughputPct:'Пропускная способность, %', throughputDelta:'Δ пропускной способности, п.п.',
+  longRunners:'Долгострои', bottleneckStage:'Узкое место',
+  bottleneckMedianDays:'Медиана дней в узком месте', medianDays:'Медиана дней',
+  queue:'В очереди', deadline:'Срок', risk:'Риск', month:'Месяц', ontime:'В срок',
+  chronic:'Хронический', n:'Количество', pct:'Доля, %',
+  deptId:'ID подразделения', kindId:'ID вида'
+};
+function colTitle(c){
+  if(!c)return '';
+  return COL_TITLES_RU[c.name] || c.title || c.name;
 }
 
 // Индексы колонок: первая текстовая — подпись, первая датовая — ось времени, числовые — меры.
@@ -127,7 +170,7 @@ function renderKpi(ds){
   var r=ds.rows[0]||[];
   return '<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">'+
     ds.cols.map(function(c,i){
-      return '<div class="kpi"><div class="kpi-label">'+esc(c.title)+'</div>'+
+      return '<div class="kpi"><div class="kpi-label">'+esc(colTitle(c))+'</div>'+
              '<div class="kpi-value">'+esc(fmtCell(r[i]))+'</div></div>';
     }).join('')+'</div>';
 }
@@ -156,12 +199,15 @@ function renderBars(ds){
 
   if(R.nums.length===1){
     var mi=R.nums[0];
+    // svgBars не трогаем (на нём пять существующих экранов) — обрезаем подпись
+    // до передачи в него. Полное имя тут негде показать: примитив рисует текст
+    // без <title>, а менять его ради нового вида рискованно для работающего.
     return svgBars(rows.map(function(r){
-      return {label:String(r[li]),value:Number(r[mi])||0};}),260)+note;
+      return {label:truncLabel(String(r[li])),value:Number(r[mi])||0};}),260)+note;
   }
   var labels=rows.map(function(r){return String(r[li]);});
   var series=R.nums.map(function(ci){
-    return {name:(ds.cols[ci].title||ds.cols[ci].name),
+    return {name:colTitle(ds.cols[ci]),
             values:rows.map(function(r){return Number(r[ci])||0;})};});
   return svgGroupedBars(labels,series,260)+note;
 }
@@ -182,7 +228,7 @@ function svgGroupedBars(labels,series,h){
       s+=rect(x+1,y,bw-2,bh,CHART_PAL[j%CHART_PAL.length],2)+
          txt(x+bw/2,y-4,v,'middle',10,'var(--text)');
     });
-    return s+txt(pl+i*gw+gw/2,h-14,lb,'middle',10,'var(--subtle)');
+    return s+txtLabel(pl+i*gw+gw/2,h-14,lb,'middle',10,'var(--subtle)');
   }).join('');
   var leg=series.map(function(se,j){
     return '<span class="muted" style="font-size:12px"><span style="display:inline-block;width:10px;'+
@@ -193,36 +239,72 @@ function svgGroupedBars(labels,series,h){
     '<div class="row" style="gap:14px;margin-top:6px">'+leg+'</div>';
 }
 
+// pickViews отдаёт вид «line» для 1-3 числовых колонок при одной дате, но раньше
+// рисовался только R.nums[0] — вторая и третья серии («закрыто» рядом с «создано»)
+// пропадали молча, без единой подписи о том, что они вообще были. Рисуем все
+// серии одной палитрой (как svgGroupedBars для столбиков) и подписываем их
+// легендой снизу — это не даёт руководителю принять частичную картину за полную.
 function renderLine(ds){
   var R=dsRoles(ds); if(R.date<0||!R.nums.length)return renderBars(ds);
-  var mi=R.nums[0];
-  var data=ds.rows.map(function(r){return {label:String(r[R.date]).slice(0,10),value:Number(r[mi])||0};})
-                  .sort(function(a,b){return a.label<b.label?-1:1;});
-  var W=Math.max(data.length*56,320),h=260,pt=18,pb=34,pl=40,pr=10,ch=h-pt-pb;
-  var mx=Math.max.apply(null,data.map(function(d){return d.value;}))||1;
-  var X=function(i){return pl+(data.length>1?i/(data.length-1):0.5)*(W-pl-pr);};
+  var rows=ds.rows.slice().sort(function(a,b){
+    var da=String(a[R.date]),db=String(b[R.date]); return da<db?-1:(da>db?1:0);});
+  var labels=rows.map(function(r){return String(r[R.date]).slice(0,10);});
+  var series=R.nums.map(function(ci){
+    return {name:colTitle(ds.cols[ci]),
+            values:rows.map(function(r){return Number(r[ci])||0;})};});
+  var single=series.length===1;
+  var W=Math.max(labels.length*56,320),h=260,pt=18,pb=34,pl=40,pr=10,ch=h-pt-pb;
+  var mx=1; series.forEach(function(se){se.values.forEach(function(v){if(v>mx)mx=v;});});
+  var X=function(i){return pl+(labels.length>1?i/(labels.length-1):0.5)*(W-pl-pr);};
   var Y=function(v){return pt+(1-v/mx)*ch;};
-  var seg=data.map(function(d,i){return (i?'L':'M')+X(i).toFixed(1)+' '+Y(d.value).toFixed(1);}).join(' ');
-  var dots=data.map(function(d,i){return '<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(d.value).toFixed(1)+'" r="3" fill="var(--accent)"/>'+
-    txt(X(i),Y(d.value)-8,d.value,'middle',11,'var(--text)')+txt(X(i),h-14,d.label,'middle',10,'var(--subtle)');}).join('');
-  return '<svg viewBox="0 0 '+W+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="xMidYMid meet" style="max-width:100%;display:block">'+
-    rect(pl,pt+ch,W-pl-pr,1,'var(--border)')+
-    '<path d="'+seg+'" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>'+dots+'</svg>';
+  var lines=series.map(function(se,j){
+    var col=single?'var(--accent)':CHART_PAL[j%CHART_PAL.length];
+    var seg=se.values.map(function(v,i){return (i?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1);}).join(' ');
+    // Числовые подписи у точек оставляем только для одной серии — при 2-3
+    // сериях они лягут друг на друга и станут нечитаемы; точные значения
+    // для этого случая остаются в таблице и в легенде переключателя видов.
+    var dots=se.values.map(function(v,i){return '<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(v).toFixed(1)+'" r="3" fill="'+col+'"/>'+
+      (single?txt(X(i),Y(v)-8,v,'middle',11,'var(--text)'):'');}).join('');
+    return '<path d="'+seg+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round"/>'+dots;
+  }).join('');
+  var xLabels=labels.map(function(lb,i){return txt(X(i),h-14,lb,'middle',10,'var(--subtle)');}).join('');
+  var svg='<svg viewBox="0 0 '+W+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="xMidYMid meet" style="max-width:100%;display:block">'+
+    rect(pl,pt+ch,W-pl-pr,1,'var(--border)')+lines+xLabels+'</svg>';
+  if(single)return svg;
+  var leg=series.map(function(se,j){
+    return '<span class="muted" style="font-size:12px"><span style="display:inline-block;width:10px;'+
+      'height:10px;border-radius:2px;background:'+CHART_PAL[j%CHART_PAL.length]+
+      ';margin-right:5px"></span>'+esc(se.name)+'</span>';}).join('');
+  return svg+'<div class="row" style="gap:14px;margin-top:6px;flex-wrap:wrap">'+leg+'</div>';
 }
 
 function renderShares(ds){
   var R=dsRoles(ds); if(!R.nums.length)return renderTable(ds);
   var li=R.label>=0?R.label:0, mi=R.nums[0];
-  var data=ds.rows.map(function(r){return {label:String(r[li]),value:Number(r[mi])||0};})
-                  .sort(function(a,b){return b.value-a.value;});
-  var total=data.reduce(function(s,d){return s+d.value;},0)||1;
+  var all=ds.rows.map(function(r){return {label:String(r[li]),value:Number(r[mi])||0};})
+                 .sort(function(a,b){return b.value-a.value;});
+  // Итог считаем по строкам, которые реально дошли до клиента (ds.rows), а не
+  // по всей выборке инструмента/SQL-шага. Если сервер отдал не всё
+  // (ds.truncated, rowCount>rows.length — реально при 200+ элементах или
+  // 50 строках SQL-шага), эта сумма — не действительное целое, и проценты
+  // ниже описывают долю среди показанного, а не долю от всех данных. Честная
+  // оговорка обязательна: без неё 0,5% выглядит как «половина процента от
+  // всех», хотя на деле это «половина процента среди 200 из 500».
+  var grandTotal=all.reduce(function(s,d){return s+d.value;},0)||1;
+  var totalCat=all.length;
+  var data=all; if(data.length>CHART_TOP_N)data=data.slice(0,CHART_TOP_N);
   var pal=CHART_PAL;
+  var warn=(ds&&ds.truncated)
+    ? '<div class="sub" style="margin:0 0 8px">доли посчитаны по показанным '+ds.rows.length+
+      ' строкам из '+(ds.rowCount||ds.rows.length)+' — это не полный итог, а доля внутри показанного</div>'
+    : '';
+  var note=topNote(data.length,totalCat);
   if(data.length<=6){
     // Кольцо: на демо «долю» привычно видеть круглой, но при большом числе
     // категорий круг перестаёт читаться — тогда ниже рисуются полосы.
     var cx=110,cy=110,r=80,sw=28,off=0,circ=2*Math.PI*r;
     var arcs=data.map(function(d,i){
-      var len=d.value/total*circ;
+      var len=d.value/grandTotal*circ;
       var s='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+pal[i%pal.length]+'" stroke-width="'+sw+
             '" stroke-dasharray="'+len.toFixed(1)+' '+(circ-len).toFixed(1)+'" stroke-dashoffset="'+(-off).toFixed(1)+
             '" transform="rotate(-90 '+cx+' '+cy+')"/>';
@@ -232,24 +314,24 @@ function renderShares(ds){
       return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px">'+
         '<span style="width:10px;height:10px;border-radius:2px;background:'+pal[i%pal.length]+'"></span>'+
         '<span style="flex:1">'+esc(d.label)+'</span><b>'+d.value+'</b>'+
-        '<span class="subtle">'+(100*d.value/total).toFixed(1)+'%</span></div>';
+        '<span class="subtle">'+(100*d.value/grandTotal).toFixed(1)+'%</span></div>';
     }).join('');
-    return '<div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">'+
-      '<svg viewBox="0 0 220 220" width="220" height="220">'+arcs+'</svg><div style="flex:1;min-width:220px">'+leg+'</div></div>';
+    return warn+'<div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">'+
+      '<svg viewBox="0 0 220 220" width="220" height="220">'+arcs+'</svg><div style="flex:1;min-width:220px">'+leg+'</div></div>'+note;
   }
-  return data.map(function(d,i){
-    var p=100*d.value/total;
+  return warn+data.map(function(d,i){
+    var p=100*d.value/grandTotal;
     return '<div style="display:flex;align-items:center;gap:10px;padding:4px 0;font-size:13px">'+
       '<span style="width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(d.label)+'</span>'+
       '<span style="flex:1;height:10px;background:var(--surface-2);border-radius:5px;overflow:hidden">'+
       '<span style="display:block;height:100%;width:'+p.toFixed(1)+'%;background:'+pal[i%pal.length]+'"></span></span>'+
       '<b style="min-width:48px;text-align:right">'+d.value+'</b>'+
       '<span class="subtle" style="min-width:48px;text-align:right">'+p.toFixed(1)+'%</span></div>';
-  }).join('');
+  }).join('')+note;
 }
 
 function renderTable(ds){
-  var head=ds.cols.map(function(c){return '<th>'+esc(c.title)+'</th>';}).join('');
+  var head=ds.cols.map(function(c){return '<th>'+esc(colTitle(c))+'</th>';}).join('');
   var body=ds.rows.map(function(r){
     return '<tr>'+r.map(function(v,i){
       var num=ds.cols[i]&&ds.cols[i].type==='number';

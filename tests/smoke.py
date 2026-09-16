@@ -381,6 +381,10 @@ check("исполнитель вернул строки", isinstance(d.get("rows
 check("исполнитель вернул колонки", d.get("cols") == ["c"])
 check("исполнитель отдаёт время", isinstance(d.get("ms"), int))
 
+d = sqlrun("select 'текст'::text as t, 42 as n, now() as d, true as b")
+check("исполнитель отдаёт типы колонок",
+      d.get("types") == ["text", "number", "date", "bool"], str(d.get("types")))
+
 d = sqlrun("update sungero_wf_task set subject='x'")
 check("запись не исполняется", bool(d.get("error")))
 

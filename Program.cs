@@ -358,8 +358,8 @@ class Program
                 if (!ok) { J(ctx, new { error = reason }); return; }
                 try
                 {
-                    var (cols, rows, ms, truncated) = SqlRun(eff);
-                    J(ctx, new { cols, rows, ms, truncated, effective = eff });
+                    var (cols, types, rows, ms, truncated) = SqlRun(eff);
+                    J(ctx, new { cols, types, rows, ms, truncated, effective = eff });
                 }
                 catch (Exception ex) { J(ctx, new { error = ex.Message }); }
                 return;
@@ -2472,6 +2472,18 @@ class Program
         }
     }
 
+    // Тип колонки для клиента: по нему выбирается допустимый вид визуализации.
+    // Источник истины — метаданные Npgsql, а не догадки по значениям.
+    static string ColType(Type t)
+    {
+        if (t == typeof(bool)) return "bool";
+        if (t == typeof(DateTime) || t == typeof(DateTimeOffset)) return "date";
+        if (t == typeof(short) || t == typeof(int) || t == typeof(long) ||
+            t == typeof(float) || t == typeof(double) || t == typeof(decimal))
+            return "number";
+        return "text";
+    }
+
     // ---------- ИИ-харнесс: исполнитель SQL ----------
     // Второй рубеж: даже пропущенная валидатором запись будет отклонена самим PostgreSQL.
     // statement_timeout не даёт повесить стенд тяжёлым джойном.
@@ -2483,10 +2495,11 @@ class Program
     // а при исполнении исходного текста PostgreSQL увидит её как есть, с хвостом внутри
     // "комментария". Вызывающая сторона (эндпоинт /api/ai/sql/run) обязана брать eff
     // из результата SqlCheck и не иметь доступа к исходному q на этом шаге.
-    static (List<string> cols, List<object[]> rows, int ms, bool truncated) SqlRun(string effective, int maxRows = SqlMaxRows)
+    static (List<string> cols, List<string> types, List<object[]> rows, int ms, bool truncated) SqlRun(string effective, int maxRows = SqlMaxRows)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var cols = new List<string>(); var rows = new List<object[]>(); bool more = false;
+        var cols = new List<string>(); var types = new List<string>();
+        var rows = new List<object[]>(); bool more = false;
         using var c = new NpgsqlConnection(Cs); c.Open();
         using var tx = c.BeginTransaction();
         using (var pre = new NpgsqlCommand("set transaction read only; set local statement_timeout = '10s'", c, tx))
@@ -2495,7 +2508,7 @@ class Program
         using (var rd = cmd.ExecuteReader())
         {
             int n = Math.Min(rd.FieldCount, 60);
-            for (int i = 0; i < n; i++) cols.Add(rd.GetName(i));
+            for (int i = 0; i < n; i++) { cols.Add(rd.GetName(i)); types.Add(ColType(rd.GetFieldType(i))); }
             while (rd.Read())
             {
                 if (rows.Count >= maxRows) { more = true; break; }
@@ -2522,7 +2535,7 @@ class Program
             }
         }
         tx.Rollback();
-        return (cols, rows, (int)sw.ElapsedMilliseconds, more);
+        return (cols, types, rows, (int)sw.ElapsedMilliseconds, more);
     }
 
     // Харнесс отдаёт исполнение произвольного SQL без какой-либо аутентификации —
@@ -3043,7 +3056,7 @@ class Program
                 }
                 try
                 {
-                    var (cols, rows, ms, more) = SqlRun(eff, 50);
+                    var (cols, _, rows, ms, more) = SqlRun(eff, 50);
                     msgs.Add(new { role = "user", content = "Результат запроса:\n" +
                         JsonSerializer.Serialize(new { cols, rows, truncated = more }) });
                     steps.Add(new { n, action, thought, sql = query, purpose = Str("purpose"),

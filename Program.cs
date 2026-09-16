@@ -422,8 +422,12 @@ class Program
             return;
         }
         // static (tokens.css / styles.css и пр.)
+        // Белый список: раньше отдавался любой файл из BaseDirectory, включая config.json
+        // с паролем БД и токенами LLM (CRITICAL, найдено ревью ветки analytics-canvas).
+        // Список сверен с armgov-standalone.csproj (что реально копируется в вывод)
+        // и с index.html (что реально запрашивается фронтендом).
         var fname = path.TrimStart('/');
-        if (fname.Length > 0 && !fname.Contains(".."))
+        if (fname.Length > 0 && !fname.Contains("..") && StaticFileAllowlist.Contains(fname))
         {
             var fp = Path.Combine(AppContext.BaseDirectory, fname.Replace('/', Path.DirectorySeparatorChar));
             if (File.Exists(fp))
@@ -454,6 +458,15 @@ class Program
     // ---------- кэш ответов аналитических эндпоинтов ----------
     // Данные не realtime: держим готовый JSON в памяти на короткий TTL. Билдеры не трогаем.
     // Сброс — кнопкой «Обновить данные» (POST /api/refresh) или по истечении TTL.
+    // Белый список статики, которую отдаёт GET (см. обработчик static выше).
+    // Держать в синхроне с armgov-standalone.csproj (CopyToOutputDirectory) и index.html.
+    static readonly HashSet<string> StaticFileAllowlist = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "index.html", "tokens.css", "style.css", "charts.js", "logo-directum.svg",
+        "inter-latin-400.woff2", "inter-latin-600.woff2", "inter-latin-700.woff2",
+        "inter-cyrillic-400.woff2", "inter-cyrillic-600.woff2", "inter-cyrillic-700.woff2",
+    };
+
     static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
     static readonly ConcurrentDictionary<string, (DateTime at, string json)> Cache = new();
     // Отдаёт из кэша по ключу или строит, кладёт и отдаёт. Время данных — в заголовке X-Data-At.
@@ -2988,13 +3001,16 @@ class Program
 "\"chart\":{\"from\":\"tool:leaders\",\"array\":\"items\",\"columns\":[\"name\",\"overdue\"],\"view\":\"bars\"}}\n" +
 "— from: tool:<имя инструмента> | sql | preload;\n" +
 "— array: где лежит массив. У инструментов leaders, leader_tasks, stuck, by_kind,\n" +
-"  departments — items; у overview — processes. В предзагрузке путь через точку:\n" +
-"  overview.processes (throughputPct, bottleneckStage, longRunners — сводка по\n" +
-"  пропускной способности), overview.bottlenecksTop (узкие места, есть medianDays и\n" +
-"  queue), processes.processes (completed, chronic — то, чего нет в overview.processes,\n" +
-"  бери отсюда, если вопрос про завершённость или хронические процессы). overview.whatsBurning\n" +
-"  для chart не годится — там только текст (process, headline), для графика бери\n" +
-"  overview.processes. Для from=sql поле не нужно;\n" +
+"  departments — items; у overview — processes. У appeal_topics — sections (name, n,\n" +
+"  pct: разбивка обращений по разделам тематик). У my_tasks массива для графика нет:\n" +
+"  это личный список заданий одного руководителя без сквозной числовой меры по\n" +
+"  строкам — chart для my_tasks не заполняй, отвечай текстом. В предзагрузке путь\n" +
+"  через точку: overview.processes (throughputPct, bottleneckStage, longRunners —\n" +
+"  сводка по пропускной способности), overview.bottlenecksTop (узкие места, есть\n" +
+"  medianDays и queue), processes.processes (completed, chronic — то, чего нет в\n" +
+"  overview.processes, бери отсюда, если вопрос про завершённость или хронические\n" +
+"  процессы). overview.whatsBurning для chart не годится — там только текст (process,\n" +
+"  headline), для графика бери overview.processes. Для from=sql поле не нужно;\n" +
 "— columns: какие поля показать, первым — подпись (текст), далее числовые. Среди columns\n" +
 "  обязано быть хотя бы одно числовое поле — без числа графику нечего рисовать;\n" +
 "— view: пожелание вида (bars | line | shares | kpi | table). Это ПОЖЕЛАНИЕ:\n" +
@@ -3170,12 +3186,18 @@ class Program
                 // п.1). Сборка после guard'а заодно не тратит работу на ответ, который
                 // цикл всё равно выбрасывает.
                 string datasetError = null;
+                // chart был указан вовсе (а не просто отсутствует) и что именно за from —
+                // нужно и после блока разбора chart, чтобы решить про запасной путь ниже.
+                bool chartSpecified = false;
+                string chartFrom = null;
                 try
                 {
                     if (el.TryGetProperty("chart", out var ch) && ch.ValueKind == JsonValueKind.Object)
                     {
+                        chartSpecified = true;
                         string From(string k) => ch.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
                         var from = From("from") ?? "";
+                        chartFrom = from;
                         var arr = From("array");
                         var view = From("view");
                         var colNames = ch.TryGetProperty("columns", out var cc) && cc.ValueKind == JsonValueKind.Array
@@ -3209,10 +3231,21 @@ class Program
                             dataset = DatasetFromSqlResult(lastSqlCols, lastSqlTypes, lastSqlRows, lastSqlTruncated, view);
                         }
                     }
-                    // Модель не указала chart, но SQL выполнялся — рисуем его результат:
-                    // данные уже добыты, выбрасывать их незачем.
-                    if (dataset == null && lastSqlRows != null)
+                    // Запасной путь — рисуем результат последнего успешного SQL-шага без
+                    // указания модели. Годится, только если chart не был указан вовсе, ИЛИ
+                    // модель сама попросила from="sql" (тогда это тот же источник, что и
+                    // выше, просто без подсказки вида). Если chart был указан с другим from
+                    // ("tool:..." / "preload...") и не разрешился — например, опечатка в
+                    // имени массива или chart.from не совпал с реально вызванным
+                    // инструментом, — подставлять сюда посторонний SQL-результат нельзя:
+                    // пользователь получит график по одному вопросу под текстом про другой,
+                    // хоть и с честной подписью "данные: sql" (находка финального ревью, п.5).
+                    // В этом случае оставляем dataset пустым и фиксируем datasetError —
+                    // экран для этого уже готов ("для этого вопроса графика нет" + текст ошибки).
+                    if (dataset == null && lastSqlRows != null && (!chartSpecified || chartFrom == "sql"))
                         dataset = DatasetFromSqlResult(lastSqlCols, lastSqlTypes, lastSqlRows, lastSqlTruncated, null);
+                    else if (dataset == null && chartSpecified && chartFrom != "sql")
+                        datasetError = "chart.from=\"" + chartFrom + "\" указан, но датасет не собрался (проверь имя массива и совпадение tool: с реально вызванным инструментом)";
                 }
                 catch (Exception ex)
                 {

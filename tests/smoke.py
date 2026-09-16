@@ -32,12 +32,45 @@ def _req_raw(path, raw_bytes, timeout=60):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, json.loads(r.read().decode("utf-8"))
 
+def _req_static(path, timeout=20):
+    # Для статики: тело не JSON (HTML/CSS/JS/бинарь), а на 404 urlopen кидает
+    # HTTPError вместо обычного возврата — ловим его, чтобы код ответа читался
+    # тем же способом, что и у успешного запроса.
+    url = BASE + path
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
 def check(name, cond, detail=""):
     global PASS, FAIL
     if cond: PASS += 1; print(f"  [ OK ] {name}" + (f" — {detail}" if detail else ""))
     else:    FAIL += 1; print(f"  [FAIL] {name}" + (f" — {detail}" if detail else ""))
 
 def section(t): print("\n=== " + t + " ===")
+
+# ---------------- СТАТИКА: белый список раздачи файлов ----------------
+# CRITICAL из финального ревью ветки, п.1: раньше GET отдавал ЛЮБОЙ файл из
+# AppContext.BaseDirectory, включая config.json с паролем БД и токенами LLM.
+# Белый список должен не только закрыть утечку, но и не задеть ни один из
+# файлов, которые реально запрашивает index.html — иначе экраны частично
+# перестанут отрисовываться.
+section("Статика — белый список раздачи (config.json больше не отдаётся)")
+try:
+    st, body = _req_static("/config.json")
+    check("GET /config.json — не 200 с содержимым (404 или иной отказ)",
+          st != 200, f"status={st} bytes={len(body)}")
+except Exception as e:
+    check("GET /config.json — не 200 с содержимым (404 или иной отказ)", False, str(e))
+
+for fname in ("/index.html", "/charts.js", "/style.css", "/tokens.css", "/logo-directum.svg"):
+    try:
+        st, body = _req_static(fname)
+        check(f"GET {fname} — по-прежнему отдаётся (200)", st == 200 and len(body) > 0,
+              f"status={st} bytes={len(body)}")
+    except Exception as e:
+        check(f"GET {fname} — по-прежнему отдаётся (200)", False, str(e))
 
 # ---------------- ДАННЫЕ: обзор ----------------
 section("Обзор региона  /api/overview")
@@ -717,6 +750,15 @@ except Exception as e:
 try:
     st, d = _req("/api/ai/sql", method="POST", body={"messages": [
         {"role": "user", "content": "Покажи просрочку по подразделениям"}]}, timeout=180)
+except Exception as e:
+    AINOTE.append(f"датасет: запрос к агенту не прошёл — {e}")
+    print(f"  [ИИ?] датасет: запрос к агенту не прошёл — {e}")
+else:
+    # Разбор ответа — ВНЕ try/except: если сервер вернёт dataset не того типа или rows не
+    # списком, разбор должен упасть громко (необработанное исключение), а не превратиться в
+    # "[ИИ?] запрос не прошёл" — под этот путь иначе маскируется самая ценная проверка всей
+    # ветки, сверка датасета с preview SQL-шага ниже (находка финального ревью, п.8). Только
+    # вызов _req (сеть/таймаут/недоступность LLM) — законный повод для мягкого [ИИ?].
     ds = d.get("dataset") or {}
     # Точка 5 ревью р2: detail должен быть данностью и в OK-прогоне тоже — раньше зелёная
     # строка всегда печатала диагноз провала ("поля dataset нет в ответе").
@@ -746,9 +788,6 @@ try:
         ok_rc = isinstance(rc, int) and rc >= len(rows_ds) and trunc == (rc > len(rows_ds))
         detail_rc = f"{src}: rowCount={rc} rows={len(rows_ds)} truncated={trunc}"
     agent_ok("rowCount согласован с truncated и числом отданных строк", d, ok_rc, detail_rc)
-except Exception as e:
-    AINOTE.append(f"датасет: запрос к агенту не прошёл — {e}")
-    print(f"  [ИИ?] датасет: запрос к агенту не прошёл — {e}")
 
 # Ответ без визуализируемых данных — штатное состояние, а не ошибка (§9 спеки).
 try:
@@ -775,6 +814,15 @@ try:
         {"role": "user", "content":
          "Сколько заданий создано в 2023 году? Это не считает дашборд, нужен запрос."}]},
         timeout=180)
+except Exception as e:
+    AINOTE.append(f"регрессия датасет=факт: запрос не прошёл — {e}")
+    print(f"  [ИИ?] регрессия датасет=факт: запрос не прошёл — {e}")
+else:
+    # Разбор — вне try/except (см. комментарий у блока «датасет для визуализации» выше):
+    # это САМАЯ ценная проверка всей ветки — сверка датасета с preview SQL-шага, единственный
+    # автоматический страж главного обещания продукта («цифра на графике обязана совпадать
+    # с цифрой в тексте ответа»). Контрактная поломка здесь не должна маскироваться под
+    # «модель недоступна» (находка финального ревью, п.8).
     if isinstance(d, dict) and d.get("error"):
         AINOTE.append(f"регрессия датасет=факт: LLM/инфраструктура недоступна — '{str(d['error'])[:60]}' (ожидаемо до пн)")
         print("  [ИИ?] регрессия датасет=факт: graceful-ошибка — в ПН ожидаем содержательный результат")
@@ -809,9 +857,6 @@ try:
                 agent_ok("значения в датасете совпадают со значениями SQL-шага (preview)", d,
                          match and n == len(preview),
                          f"preview={preview[:2]} dataset_rows={ds_rows[:2]}")
-except Exception as e:
-    AINOTE.append(f"регрессия датасет=факт: запрос не прошёл — {e}")
-    print(f"  [ИИ?] регрессия датасет=факт: запрос не прошёл — {e}")
 
 # --- детерминированные проверки харнесса, не требующие живой модели (находка ревью р1, п.I9) ---
 try:

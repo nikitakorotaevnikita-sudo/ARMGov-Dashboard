@@ -892,7 +892,13 @@ function askCanvas(){
     var answerStep=(d.steps||[]).filter(function(s){return s&&s.action==='answer';}).pop();
     CANVAS.push({q:q,reply:d.reply,dataset:d.dataset,datasetError:answerStep&&answerStep.datasetError,
                  steps:d.steps,elapsedMs:d.elapsedMs,truncated:d.truncated,views:pv.views,view:pv.def});
-    CANVAS_CUR=CANVAS.length-1;inp.value='';renderCanvasBody();
+    CANVAS_CUR=CANVAS.length-1;
+    // Не чистим захваченный до fetch `inp`: если уйти с экрана и вернуться до ответа,
+    // renderCanvas пересоздаёт textarea, и захваченный узел уже отсоединён от DOM —
+    // очистка ему не видна, и текст вопроса остаётся в поле (финальное ревью, п.13).
+    // Ищем актуальный элемент по id заново, на момент готовности ответа.
+    var freshInp=document.getElementById('canvas-input');if(freshInp)freshInp.value='';
+    renderCanvasBody();
   }).catch(function(e){
     done();
     CANVAS.push({q:q,error:String(e)});CANVAS_CUR=CANVAS.length-1;renderCanvasBody();

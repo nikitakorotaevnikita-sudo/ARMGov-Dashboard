@@ -392,6 +392,23 @@ class Program
                 catch (Exception ex) { J(ctx, new { error = ex.Message }); }
                 return;
             }
+            case "/api/ai/dataset/probe":
+            {
+                // Отладочный шов: детерминированная проверка сборки датасета без участия модели.
+                if (!IsLocalCall(ctx)) { J(ctx, new { error = "харнесс доступен только при локальном вызове" }); return; }
+                try
+                {
+                    using var argDoc = JsonDocument.Parse("{}");
+                    var res = ToolCall(q["tool"], argDoc.RootElement);
+                    using var doc = JsonDocument.Parse(JsonSerializer.Serialize(res));
+                    var cols = (q["columns"] ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    var ds = DatasetFromJson(doc.RootElement, q["array"], cols, "tool:" + q["tool"], null);
+                    if (ds == null) { J(ctx, new { error = "не удалось собрать датасет: проверь имя массива" }); return; }
+                    J(ctx, ds);
+                }
+                catch (Exception ex) { J(ctx, new { error = ex.Message }); }
+                return;
+            }
             case "/api/config":
                 if (ctx.Request.HttpMethod == "POST") { J(ctx, SaveConfigFromBody(ReadBody(ctx))); return; }
                 J(ctx, GetConfigMasked()); return;
@@ -2483,6 +2500,87 @@ class Program
             return "number";
         return "text";
     }
+
+    // ---------- Датасет для визуализации ----------
+    // Значения берутся ТОЛЬКО из фактического результата: модель может назвать массив
+    // и колонки, но не переписывает числа. Иначе график разойдётся с текстом ответа
+    // и с дашбордом, а заметить это будет нечем.
+    const int DatasetMaxCols = 12;
+
+    static object DatasetFromJson(JsonElement root, string arrayPath, string[] columns,
+                                  string source, string hint)
+    {
+        // Путь вида "items" или "region.items" — по точке вглубь объекта.
+        var el = root;
+        foreach (var part in (arrayPath ?? "").Split('.', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(part, out el))
+                return null;
+        }
+        if (el.ValueKind != JsonValueKind.Array || el.GetArrayLength() == 0) return null;
+
+        var items = el.EnumerateArray().ToList();
+        if (items[0].ValueKind != JsonValueKind.Object) return null;
+
+        // Если колонки не названы — берём все поля первого объекта.
+        var names = (columns != null && columns.Length > 0)
+            ? columns.ToList()
+            : items[0].EnumerateObject().Select(p => p.Name).ToList();
+        // Несуществующие колонки молча отбрасываем: модель могла ошибиться в имени,
+        // и это не повод остаться совсем без графика.
+        names = names.Where(n => items[0].TryGetProperty(n, out _)).Take(DatasetMaxCols).ToList();
+        if (names.Count == 0) return null;
+
+        var types = names.Select(n => JsonColType(items, n)).ToList();
+        var rows = new List<object[]>();
+        foreach (var it in items.Take(SqlMaxRows))
+        {
+            var r = new object[names.Count];
+            for (int i = 0; i < names.Count; i++)
+                r[i] = it.TryGetProperty(names[i], out var v) ? JsonValue(v) : null;
+            rows.Add(r);
+        }
+
+        return new
+        {
+            source,
+            cols = names.Select((n, i) => new { name = n, title = n, type = types[i] }),
+            rows,
+            rowCount = items.Count,
+            truncated = items.Count > rows.Count,
+            hint
+        };
+    }
+
+    // Тип колонки по первому непустому значению: у JSON метаданных нет, в отличие от БД.
+    static string JsonColType(List<JsonElement> items, string name)
+    {
+        foreach (var it in items)
+        {
+            if (!it.TryGetProperty(name, out var v)) continue;
+            switch (v.ValueKind)
+            {
+                case JsonValueKind.Number: return "number";
+                case JsonValueKind.True:
+                case JsonValueKind.False: return "bool";
+                case JsonValueKind.String:
+                    return DateTime.TryParse(v.GetString(), out _) ? "date" : "text";
+                case JsonValueKind.Null: continue;
+                default: return "text";
+            }
+        }
+        return "text";
+    }
+
+    static object JsonValue(JsonElement v) => v.ValueKind switch
+    {
+        JsonValueKind.Number => v.TryGetInt64(out var l) ? l : (object)v.GetDouble(),
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        JsonValueKind.Null => null,
+        JsonValueKind.String => Trunc(v.GetString(), 200),
+        _ => Trunc(v.GetRawText(), 200)
+    };
 
     // ---------- ИИ-харнесс: исполнитель SQL ----------
     // Второй рубеж: даже пропущенная валидатором запись будет отклонена самим PostgreSQL.

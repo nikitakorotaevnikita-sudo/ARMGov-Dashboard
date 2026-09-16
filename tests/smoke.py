@@ -626,6 +626,30 @@ try:
 except Exception as e:
     check("справка по схеме доступна", False, str(e))
 
+section("Датасет для визуализации  /api/ai/dataset/probe")
+
+def probe(qs):
+    try:
+        st, d = _req("/api/ai/dataset/probe?" + qs)
+        return d
+    except Exception as e:
+        return {"_exc": str(e)}
+
+d = probe("tool=leaders&array=items&columns=name,overdue")
+check("датасет собран из массива инструмента", isinstance(d.get("rows"), list) and len(d["rows"]) > 0,
+      str(d.get("error") or "")[:80])
+check("колонки с типами", [c.get("type") for c in d.get("cols", [])] == ["text", "number"],
+      str(d.get("cols")))
+check("источник помечен", d.get("source") == "tool:leaders", str(d.get("source")))
+check("rowCount заполнен", isinstance(d.get("rowCount"), int) and d["rowCount"] > 0, str(d.get("rowCount")))
+
+d = probe("tool=leaders&array=" + urllib.parse.quote("нет_такого") + "&columns=name")
+check("несуществующий массив даёт понятную ошибку", bool(d.get("error")), str(d.get("error"))[:80])
+
+d = probe("tool=leaders&array=items&columns=name," + urllib.parse.quote("нет_такой_колонки"))
+check("несуществующая колонка отбрасывается, а не роняет сборку",
+      [c["name"] for c in d.get("cols", [])] == ["name"], str(d.get("cols")))
+
 # ---------------- ИИ: цикл агента ----------------
 section("Цикл агента  /api/ai/sql")
 

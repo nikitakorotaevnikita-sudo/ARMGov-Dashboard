@@ -104,7 +104,9 @@ function dsRoles(ds){
 }
 
 function renderView(ds,view){
-  if(!ds||!ds.cols||!ds.cols.length||!ds.rows)return '<div class="sub">нет данных</div>';
+  // rows:[] истинен как значение, поэтому отдельно проверяем длину: датасет
+  // с колонками, но без строк — это тоже «нет данных», а не пустой график.
+  if(!ds||!ds.cols||!ds.cols.length||!ds.rows||!ds.rows.length)return '<div class="sub">нет данных</div>';
   if(view==='kpi')return renderKpi(ds);
   if(view==='bars')return renderBars(ds);
   if(view==='line')return renderLine(ds);
@@ -112,12 +114,21 @@ function renderView(ds,view){
   return renderTable(ds);
 }
 
+// Общее форматирование значения ячейки для KPI и таблицы: пусто — тире,
+// логическое — по-русски («да»/«нет»), остальное — как есть. Одна функция на
+// оба места вместо дублирования String(v==null?'—':v) в renderKpi и renderTable.
+function fmtCell(v){
+  if(v==null)return '—';
+  if(typeof v==='boolean')return v?'да':'нет';
+  return String(v);
+}
+
 function renderKpi(ds){
   var r=ds.rows[0]||[];
   return '<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">'+
     ds.cols.map(function(c,i){
       return '<div class="kpi"><div class="kpi-label">'+esc(c.title)+'</div>'+
-             '<div class="kpi-value">'+esc(String(r[i]==null?'—':r[i]))+'</div></div>';
+             '<div class="kpi-value">'+esc(fmtCell(r[i]))+'</div></div>';
     }).join('')+'</div>';
 }
 
@@ -129,6 +140,13 @@ function topNote(shown,total){
 
 function renderBars(ds){
   var R=dsRoles(ds); if(!R.nums.length)return renderTable(ds);
+  // Отрицательное значение в svgBars/svgGroupedBars получает высоту 0
+  // (клампится Math.max(0,h) в rect) и подпись рисуется за пределами viewBox —
+  // столбик и число молча пропадают. Примитивы рисуют пять существующих
+  // экранов и не трогаются ради нового вида — вместо этого при отрицательных
+  // значениях показываем таблицу, где число видно как есть.
+  var hasNeg=ds.rows.some(function(r){return R.nums.some(function(ci){return Number(r[ci])<0;});});
+  if(hasNeg)return '<div class="sub" style="margin:0 0 8px">столбики не показывают отрицательные значения — данные ниже, в таблице</div>'+renderTable(ds);
   var li=R.label>=0?R.label:(R.date>=0?R.date:0);
   // Сортировка по первому показателю: руководителя интересует «у кого хуже».
   var rows=ds.rows.slice().sort(function(a,b){
@@ -235,7 +253,7 @@ function renderTable(ds){
   var body=ds.rows.map(function(r){
     return '<tr>'+r.map(function(v,i){
       var num=ds.cols[i]&&ds.cols[i].type==='number';
-      return '<td style="text-align:'+(num?'right':'left')+'">'+esc(String(v==null?'—':v))+'</td>';
+      return '<td style="text-align:'+(num?'right':'left')+'">'+esc(fmtCell(v))+'</td>';
     }).join('')+'</tr>';
   }).join('');
   return '<div style="overflow:auto;max-height:420px"><table style="width:100%"><thead><tr>'+head+'</tr></thead><tbody>'+body+'</tbody></table></div>';

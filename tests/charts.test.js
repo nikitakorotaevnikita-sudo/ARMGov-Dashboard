@@ -66,8 +66,14 @@ check('дата важнее текстовой подписи — динами�
 });
 check('renderView на пустом датасете не падает',
       typeof renderView({cols:[],rows:[]}, 'bars') === 'string');
-check('у каждого вида есть русское название для чипа',
-      ['kpi','bars','line','shares','table'].every(function(v){return viewTitle(v).length > 2;}));
+// Было: viewTitle(v).length > 2 — проходит даже если бы функция возвращала
+// английский ключ как есть (все пять ключей длиннее двух символов), то есть
+// проверка ничего не утверждала. Фиксируем конкретные русские названия.
+check('у каждого вида — конкретное русское название для чипа',
+      viewTitle('kpi') === 'Плитки' && viewTitle('bars') === 'Столбики' &&
+      viewTitle('line') === 'Динамика' && viewTitle('shares') === 'Доли' &&
+      viewTitle('table') === 'Таблица',
+      JSON.stringify(['kpi','bars','line','shares','table'].map(viewTitle)));
 
 // §7 спеки: два и более показателя рисуются сериями рядом, а не только первый.
 // Признак — в разметке присутствуют оба названия колонок (легенда серий).
@@ -84,6 +90,43 @@ for (var i = 0; i < 40; i++) many.push(['НОР ' + i, 40 - i]);
 var manyHtml = renderView(ds([['НОР','text'],['просрочено','number']], many), 'bars');
 check('при 40 категориях сказано, сколько показано',
       manyHtml.indexOf('20 из 40') >= 0, manyHtml.slice(-140));
+
+// Ревью круга 1, п.1: отрицательное значение в svgBars получает высоту 0
+// (клампится Math.max(0,h)) и подпись рисуется за пределами viewBox — столбик
+// и число визуально пропадают. svgBars трогать нельзя (пять экранов на нём),
+// поэтому при отрицательных значениях renderBars должен уходить в таблицу,
+// где число видно как есть.
+var negBars = ds([['НОР', 'text'], ['дельта', 'number']], [['ДИТ', -5], ['ДФ', 7]]);
+var negHtml = renderView(negBars, 'bars');
+check('отрицательные значения не теряются в столбиках — уходят в таблицу',
+      negHtml.indexOf('<table') >= 0 && negHtml.indexOf('-5') >= 0,
+      negHtml.slice(0, 160));
+
+// Ревью круга 1, п.2: bool печатался как true/false — не по-русски.
+var boolDs = ds([['есть просрочка', 'bool'], ['актив', 'bool']], [[true, false]]);
+var boolKpi = renderView(boolDs, 'kpi');
+check('логическое значение в плитках — по-русски, не true/false',
+      boolKpi.indexOf('да') >= 0 && boolKpi.indexOf('нет') >= 0 &&
+      boolKpi.indexOf('true') < 0 && boolKpi.indexOf('false') < 0,
+      boolKpi.slice(0, 200));
+var boolTable = renderView(boolDs, 'table');
+check('логическое значение в таблице — по-русски, не true/false',
+      boolTable.indexOf('да') >= 0 && boolTable.indexOf('нет') >= 0 &&
+      boolTable.indexOf('true') < 0 && boolTable.indexOf('false') < 0,
+      boolTable.slice(0, 200));
+
+// Ревью круга 1, п.4: guard !ds.rows не срабатывает на rows:[] (пустой массив
+// истинен) — датасет с колонками, но без строк, должен давать ту же подпись
+// «нет данных», что и датасет без колонок, а не пустой график.
+// Проверяем на 'table' и 'shares': на 'bars' с одним показателем баг не виден —
+// там случайно спасает собственный guard пустоты внутри svgBars.
+var noRows = ds([['НОР', 'text'], ['просрочено', 'number']], []);
+check('датасет без строк, вид «таблица» — «нет данных», как и без колонок',
+      renderView(noRows, 'table').indexOf('нет данных') >= 0,
+      renderView(noRows, 'table'));
+check('датасет без строк, вид «доли» — «нет данных», как и без колонок',
+      renderView(noRows, 'shares').indexOf('нет данных') >= 0,
+      renderView(noRows, 'shares'));
 
 console.log('\nИТОГ: PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

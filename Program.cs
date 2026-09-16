@@ -3147,9 +3147,26 @@ class Program
                 // (находка ревью р1, п.C1 — Str() отдаёт "" и на пустое поле, и на его
                 // отсутствие, а "" != null, поэтому старый фолбэк не срабатывал).
                 var text = Str("text");
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    steps.Add(new { n, action, thought, ms = (int)stepSw.ElapsedMilliseconds });
+                    msgs.Add(new { role = "user", content = "Поле text пустое. Дай содержательный итоговый ответ текстом." });
+                    continue;
+                }
+
                 // Датасет для визуализации — необязательная часть ответа: модель называет,
                 // ЧТО рисовать (источник, массив, колонки), а числа берутся только из уже
                 // добытого факта (lastToolResult/pre/lastSqlRows). Модель их не переписывает.
+                //
+                // Собираем ТОЛЬКО здесь, после проверки на пустой text и до break: если
+                // собрать раньше guard'а, шаг с пустым text (который цикл отбрасывает и
+                // просит модель повторить) успевает записать dataset, а сбросить его негде —
+                // следующий answer может не попасть ни в одну ветку from, а запасной путь
+                // "chart не указан" заблокирован уже ненулевым dataset. Пользователь тогда
+                // читает текст про одни цифры, а видит график про другие (находка ревью р2,
+                // п.1). Сборка после guard'а заодно не тратит работу на ответ, который
+                // цикл всё равно выбрасывает.
+                string datasetError = null;
                 try
                 {
                     if (el.TryGetProperty("chart", out var ch) && ch.ValueKind == JsonValueKind.Object)
@@ -3162,7 +3179,14 @@ class Program
                             ? cc.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()).ToArray()
                             : Array.Empty<string>();
 
-                        if (from.StartsWith("tool:", StringComparison.Ordinal) && lastToolResult != null)
+                        // Хвост "tool:<имя>" обязан совпасть с ФАКТИЧЕСКИ последним вызванным
+                        // инструментом: если за прогон модель дёрнула несколько инструментов,
+                        // а в chart назвала не тот, что реально запомнен в lastToolResult, —
+                        // рисовать данные другого инструмента под честной подписью нельзя,
+                        // график разойдётся с текстом (находка ревью р2, п.2). При несовпадении
+                        // просто не строим tool-датасет — дальше отработает запасной путь.
+                        if (from.StartsWith("tool:", StringComparison.Ordinal) && lastToolResult != null
+                            && from.Substring("tool:".Length) == lastToolName)
                         {
                             using var doc2 = JsonDocument.Parse(JsonSerializer.Serialize(lastToolResult));
                             dataset = DatasetFromJson(doc2.RootElement, arr, colNames, "tool:" + lastToolName, view);
@@ -3187,13 +3211,15 @@ class Program
                     if (dataset == null && lastSqlRows != null)
                         dataset = DatasetFromSqlResult(lastSqlCols, lastSqlTypes, lastSqlRows, lastSqlTruncated, null);
                 }
-                catch { /* датасет — необязательная часть ответа: его отсутствие не должно ломать ответ */ }
-                steps.Add(new { n, action, thought, ms = (int)stepSw.ElapsedMilliseconds });
-                if (string.IsNullOrWhiteSpace(text))
+                catch (Exception ex)
                 {
-                    msgs.Add(new { role = "user", content = "Поле text пустое. Дай содержательный итоговый ответ текстом." });
-                    continue;
+                    // Датасет — необязательная часть ответа: его отсутствие не должно ломать
+                    // ответ, но и исчезать бесследно не должно — иначе "графика нет" от
+                    // сломанного array или бага в сборке не отличить друг от друга
+                    // (находка ревью р2, п.8).
+                    datasetError = ex.Message;
                 }
+                steps.Add(new { n, action, thought, datasetError, ms = (int)stepSw.ElapsedMilliseconds });
                 reply = text;
                 break;
             }

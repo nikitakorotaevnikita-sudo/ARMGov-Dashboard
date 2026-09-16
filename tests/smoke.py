@@ -710,12 +710,18 @@ except Exception as e:
     print(f"  [ИИ?] цикл агента: запрос не прошёл — {e}")
 
 # --- датасет для визуализации (страница «Аналитика по запросу») ---
+# Точка 4 ревью р2: исключение здесь означает недоступную/медленную модель (_req падает
+# именно на таймауте/отказе соединения) — тот же случай, что уже обрабатывает agent_ok,
+# поэтому на исключении пишем AINOTE + [ИИ?], а не check(False), иначе гарантия "лежащая
+# модель не даёт ни PASS, ни FAIL" здесь не выполняется.
 try:
     st, d = _req("/api/ai/sql", method="POST", body={"messages": [
         {"role": "user", "content": "Покажи просрочку по подразделениям"}]}, timeout=180)
     ds = d.get("dataset") or {}
+    # Точка 5 ревью р2: detail должен быть данностью и в OK-прогоне тоже — раньше зелёная
+    # строка всегда печатала диагноз провала ("поля dataset нет в ответе").
     agent_ok("агент вернул датасет", d, bool(d.get("dataset")),
-             "поля dataset нет в ответе")
+             (f"источник={ds.get('source')}" if ds else "поля dataset нет в ответе"))
     agent_ok("у колонок датасета проставлены типы", d,
              bool(ds.get("cols")) and all(c.get("type") in ("text", "number", "date", "bool")
                                           for c in ds["cols"]),
@@ -723,22 +729,89 @@ try:
     agent_ok("источник датасета указан", d,
              (ds.get("source") or "").split(":")[0] in ("sql", "tool", "preload"),
              str(ds.get("source")))
-    agent_ok("строк не больше потолка исполнителя", d,
-             len(ds.get("rows") or []) <= 200, str(len(ds.get("rows") or [])))
-    agent_ok("rowCount не меньше числа отданных строк", d,
-             int(ds.get("rowCount") or 0) >= len(ds.get("rows") or []),
-             str(ds.get("rowCount")) + " / " + str(len(ds.get("rows") or [])))
+    # Точка 6 ревью р2: старые "rows<=200" и "rowCount>=len(rows)" не могли упасть — первая
+    # недостижима (JSON-путь режет по SqlMaxRows=200, SQL-путь по потолку цикла 50 — оба
+    # меньше 200 по построению), вторая тождественно истинна для sql-источника
+    # (DatasetFromSqlResult кладёт rowCount=rows.Count). Разная семантика rowCount между
+    # двумя сборщиками — известный и отложенный контроллером вопрос, здесь его не трогаем,
+    # а проверяем реальный, различный по источнику инвариант согласованности с truncated.
+    src = ds.get("source") or ""
+    rows_ds = ds.get("rows") or []
+    rc = ds.get("rowCount")
+    if src.startswith("sql"):
+        ok_rc = isinstance(rc, int) and rc == len(rows_ds)
+        detail_rc = f"sql: rowCount={rc} rows={len(rows_ds)}"
+    else:
+        trunc = bool(ds.get("truncated"))
+        ok_rc = isinstance(rc, int) and rc >= len(rows_ds) and trunc == (rc > len(rows_ds))
+        detail_rc = f"{src}: rowCount={rc} rows={len(rows_ds)} truncated={trunc}"
+    agent_ok("rowCount согласован с truncated и числом отданных строк", d, ok_rc, detail_rc)
 except Exception as e:
-    check("датасет: запрос к агенту прошёл", False, str(e))
+    AINOTE.append(f"датасет: запрос к агенту не прошёл — {e}")
+    print(f"  [ИИ?] датасет: запрос к агенту не прошёл — {e}")
 
 # Ответ без визуализируемых данных — штатное состояние, а не ошибка (§9 спеки).
 try:
     st, d = _req("/api/ai/sql", method="POST", body={"messages": [
         {"role": "user", "content": "Что ты умеешь?"}]}, timeout=180)
-    agent_ok("вопрос без данных: ответ есть и без датасета это не ошибка", d,
-             bool(d.get("reply")) and not d.get("error"), str(d.get("error") or "")[:80])
+    # Точка 3 ревью р2: старое условие "bool(reply) and not error" тавтологично — agent_ok
+    # уже уходит в [ИИ?] на d["error"], значит внутри условия "not error" истинно всегда,
+    # а "bool(reply)" дублирует более раннюю проверку "ответ непустой". Настоящее
+    # требование этого блока — датасет НЕ ОБЯЗАН быть, и его отсутствие не должно
+    # выглядеть как сломанный контракт: отсутствующее поле, null и словарь — все три
+    # штатные, а строка/число/список означали бы, что dataset вернул что-то не то.
+    ds2 = d.get("dataset", None) if isinstance(d, dict) else None
+    agent_ok("вопрос без данных: dataset отсутствует, null или объект — контракт не нарушен", d,
+             ds2 is None or isinstance(ds2, dict),
+             f"type={type(ds2).__name__} value={str(ds2)[:80]}")
 except Exception as e:
-    check("вопрос без данных: запрос прошёл", False, str(e))
+    AINOTE.append(f"вопрос без данных: запрос не прошёл — {e}")
+    print(f"  [ИИ?] вопрос без данных: запрос не прошёл — {e}")
+
+# --- регрессия: цифра на графике обязана совпадать с цифрой, добытой харнессом (§ главное
+# обещание фичи; находка ревью р2, п.7) ---
+try:
+    st, d = _req("/api/ai/sql", method="POST", body={"messages": [
+        {"role": "user", "content":
+         "Сколько заданий создано в 2023 году? Это не считает дашборд, нужен запрос."}]},
+        timeout=180)
+    if isinstance(d, dict) and d.get("error"):
+        AINOTE.append(f"регрессия датасет=факт: LLM/инфраструктура недоступна — '{str(d['error'])[:60]}' (ожидаемо до пн)")
+        print("  [ИИ?] регрессия датасет=факт: graceful-ошибка — в ПН ожидаем содержательный результат")
+    else:
+        sql_steps = [s for s in d.get("steps", []) if s.get("action") == "sql" and not s.get("error")]
+        if not sql_steps:
+            # Модель вправе закрыть вопрос иначе (инструментом, готовыми метриками) — это
+            # не провал теста, а неприменимость сценария к этому конкретному прогону.
+            AINOTE.append("регрессия датасет=факт: модель не сходила в sql в этом прогоне (вправе ответить иначе)")
+            print("  [ИИ?] регрессия датасет=факт: sql-шага не было в этом прогоне")
+        else:
+            ds = d.get("dataset") or {}
+            preview = sql_steps[-1].get("preview") or []
+            ds_rows = ds.get("rows") or []
+            agent_ok("датасет по SQL-вопросу собран из sql-источника", d,
+                     (ds.get("source") or "") == "sql", str(ds.get("source")))
+            if len(preview) == 0:
+                # COUNT(*)-подобный запрос всегда возвращает одну строку, но модель могла
+                # выбрать другой запрос (например, группировку, давшую пустой результат) —
+                # сравнивать тогда нечего, и это не повод объявлять FAIL, но и молчать об
+                # этом нельзя (требование п.7 — проверка не должна ничего утверждать молча).
+                AINOTE.append("регрессия датасет=факт: sql-шаг вернул 0 строк, сравнивать нечего")
+                print("  [ИИ?] регрессия датасет=факт: preview пуст — сравнение пропущено")
+            else:
+                # preview в протоколе — первые 5 строк ТОГО ЖЕ SqlRun, что попал в датасет
+                # (Program.cs, ветка action=="sql": steps.Add(..., preview = rows.Take(5))).
+                # Датасет мог урезать лишние колонки сверх DatasetMaxCols — сравниваем
+                # только по фактической длине строки датасета, лишнего в preview не ждём.
+                n = min(len(preview), len(ds_rows))
+                match = n > 0 and all(
+                    list(ds_rows[i]) == list(preview[i])[:len(ds_rows[i])] for i in range(n))
+                agent_ok("значения в датасете совпадают со значениями SQL-шага (preview)", d,
+                         match and n == len(preview),
+                         f"preview={preview[:2]} dataset_rows={ds_rows[:2]}")
+except Exception as e:
+    AINOTE.append(f"регрессия датасет=факт: запрос не прошёл — {e}")
+    print(f"  [ИИ?] регрессия датасет=факт: запрос не прошёл — {e}")
 
 # --- детерминированные проверки харнесса, не требующие живой модели (находка ревью р1, п.I9) ---
 try:

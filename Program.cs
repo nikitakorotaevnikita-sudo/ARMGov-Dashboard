@@ -2990,10 +2990,11 @@ class Program
 "— array: где лежит массив. У инструментов leaders, leader_tasks, stuck, by_kind,\n" +
 "  departments — items; у overview — processes. В предзагрузке путь через точку:\n" +
 "  overview.processes (throughputPct, bottleneckStage, longRunners — сводка по\n" +
-"  пропускной способности), overview.bottlenecksTop (узкие места), overview.whatsBurning\n" +
-"  (что горит), processes.processes (completed, chronic — то, чего нет в overview.processes,\n" +
-"  бери отсюда, если вопрос про завершённость или хронические процессы). Для from=sql\n" +
-"  поле не нужно;\n" +
+"  пропускной способности), overview.bottlenecksTop (узкие места, есть medianDays и\n" +
+"  queue), processes.processes (completed, chronic — то, чего нет в overview.processes,\n" +
+"  бери отсюда, если вопрос про завершённость или хронические процессы). overview.whatsBurning\n" +
+"  для chart не годится — там только текст (process, headline), для графика бери\n" +
+"  overview.processes. Для from=sql поле не нужно;\n" +
 "— columns: какие поля показать, первым — подпись (текст), далее числовые. Среди columns\n" +
 "  обязано быть хотя бы одно числовое поле — без числа графику нечего рисовать;\n" +
 "— view: пожелание вида (bars | line | shares | kpi | table). Это ПОЖЕЛАНИЕ:\n" +

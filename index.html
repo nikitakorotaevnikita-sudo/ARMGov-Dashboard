@@ -15,7 +15,7 @@
   </div>
 </header>
 <aside class="sidebar"><nav id="nav"></nav></aside>
-<main><div id="view-start"></div><div id="view-analytics" class="hidden"></div><div id="view-process" class="hidden"></div><div id="view-appeals" class="hidden"></div><div id="view-backoffice" class="hidden"></div></main>
+<main><div id="view-start"></div><div id="view-analytics" class="hidden"></div><div id="view-process" class="hidden"></div><div id="view-appeals" class="hidden"></div><div id="view-canvas" class="hidden"></div><div id="view-backoffice" class="hidden"></div></main>
 
 <div id="taskDrawer" class="drawer hidden" onclick="if(event.target===this)closeTask()">
   <div class="drawerbox">
@@ -214,12 +214,13 @@ function renderNav(){
   PROCS.forEach(function(p){var sv=SEV[p.severity]||SEV.green;
     n+='<div class="nav-item'+(CUR===p.key?' active':'')+'" onclick="goProcess(\''+p.key+'\')"><span class="nav-dot" style="background:'+sv.c+'"></span>'+esc(p.name)+'</div>';});
   n+='<div class="nav-item'+(CUR==='__appeals'?' active':'')+'" onclick="goAppeals()" style="margin-top:8px">📊 Тематики обращений</div>';
+  n+='<div class="nav-item'+(CUR==='__canvas'?' active':'')+'" onclick="goCanvas()">📈 Аналитика по запросу</div>';
   n+='<div class="nav-item'+(CUR==='__bo'?' active':'')+'" onclick="goBackoffice()" style="margin-top:14px;border-top:1px solid var(--sidebar-border);padding-top:16px">⚙ Бэк-офис</div>';
   document.getElementById('nav').innerHTML=n;
 }
 
 /* ---------- Обзор ---------- */
-function hideViews(){['view-start','view-analytics','view-process','view-appeals','view-backoffice'].forEach(function(v){document.getElementById(v).classList.add('hidden');});}
+function hideViews(){['view-start','view-analytics','view-process','view-appeals','view-canvas','view-backoffice'].forEach(function(v){document.getElementById(v).classList.add('hidden');});}
 function goStart(){CUR=null;CURDATA=null;renderNav();hideViews();document.getElementById('view-start').classList.remove('hidden');}
 function goAnalytics(){CUR='__analytics';CURDATA=null;renderNav();hideViews();document.getElementById('view-analytics').classList.remove('hidden');renderAnalytics();}
 function goBackoffice(){CUR='__bo';CURDATA=null;renderNav();hideViews();document.getElementById('view-backoffice').classList.remove('hidden');renderBackoffice();}
@@ -819,6 +820,111 @@ function sendChat(){
     CHAT.push({role:'assistant',content:d.error?('⚠ ИИ недоступен: '+d.error):(d.reply||'(пустой ответ)'),steps:d.steps,elapsedMs:d.elapsedMs,truncated:d.truncated});
     renderChat();btn.disabled=false;
   }).catch(function(e){CHAT.push({role:'assistant',content:'⚠ ошибка связи: '+e});renderChat();btn.disabled=false;});
+}
+
+/* ---------- Аналитика по запросу ---------- */
+var CANVAS=[];          // история сессии: [{q, reply, dataset, datasetError, steps, elapsedMs, view, views, error}]
+var CANVAS_CUR=-1;      // индекс показанного вопроса
+var CANVAS_BUSY=false;
+
+function goCanvas(){CUR='__canvas';CURDATA=null;renderNav();hideViews();
+  document.getElementById('view-canvas').classList.remove('hidden');renderCanvas();}
+
+function renderCanvas(){
+  var el=document.getElementById('view-canvas');
+  var ui=(OVR&&OVR.ui)||{},ps=ui.chatPrompts||[];
+  var h='<div class="h2">Аналитика по запросу</div>'+
+    '<div class="sub">Спросите про данные — страница покажет график по фактическому результату. Вид можно переключить.</div>'+
+    '<div class="card" style="margin-bottom:16px">'+
+      '<div class="row" style="gap:8px;align-items:flex-end">'+
+        '<textarea id="canvas-input" rows="2" placeholder="Например: просрочка по подразделениям" '+
+        'style="flex:1;resize:none;border:1px solid var(--border);border-radius:8px;padding:9px 11px;font:inherit;font-size:14px" '+
+        'onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();askCanvas();}"></textarea>'+
+        '<button class="btn" id="canvas-send" onclick="askCanvas()">Показать</button>'+
+      '</div>'+
+      (ps.length?'<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:10px">'+ps.map(function(t){
+        return '<span class="expl" style="color:var(--accent)" onclick="quickCanvas('+JSON.stringify(t).replace(/"/g,'&quot;')+')">'+esc(t)+'</span>';}).join('')+'</div>':'')+
+    '</div>'+
+    '<div id="canvas-body"></div>';
+  el.innerHTML=h;
+  renderCanvasBody();
+}
+
+function quickCanvas(t){document.getElementById('canvas-input').value=t;askCanvas();}
+
+function askCanvas(){
+  if(CANVAS_BUSY)return;
+  var inp=document.getElementById('canvas-input');var q=(inp.value||'').trim();if(!q)return;
+  CANVAS_BUSY=true;document.getElementById('canvas-send').disabled=true;
+  var t0=Date.now();
+  var tick=setInterval(function(){
+    var b=document.getElementById('canvas-body');
+    if(b)b.innerHTML='<div class="card"><div class="sub" style="margin:0">собираю данные… '+
+      Math.round((Date.now()-t0)/1000)+' с</div></div>';
+  },500);
+  fetch('/api/ai/sql',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({messages:[{role:'user',content:q}]})})
+   .then(function(r){return r.json();}).then(function(d){
+    clearInterval(tick);CANVAS_BUSY=false;document.getElementById('canvas-send').disabled=false;
+    if(d.error){CANVAS.push({q:q,error:d.error});CANVAS_CUR=CANVAS.length-1;renderCanvasBody();return;}
+    var pv=d.dataset?pickViews(d.dataset):{views:[],def:null};
+    // datasetError лежит в шаге протокола с action:'answer', а не в самом ответе: сервер
+    // кладёт его туда, чтобы отличить «графика нет, потому что вопрос не про данные» от
+    // «график не собрался из-за ошибки» — иначе обе ситуации выглядят одинаково немо.
+    var answerStep=(d.steps||[]).filter(function(s){return s&&s.action==='answer';}).pop();
+    CANVAS.push({q:q,reply:d.reply,dataset:d.dataset,datasetError:answerStep&&answerStep.datasetError,
+                 steps:d.steps,elapsedMs:d.elapsedMs,views:pv.views,view:pv.def});
+    CANVAS_CUR=CANVAS.length-1;inp.value='';renderCanvasBody();
+  }).catch(function(e){
+    clearInterval(tick);CANVAS_BUSY=false;document.getElementById('canvas-send').disabled=false;
+    CANVAS.push({q:q,error:String(e)});CANVAS_CUR=CANVAS.length-1;renderCanvasBody();
+  });
+}
+
+function setCanvasView(v){if(CANVAS[CANVAS_CUR]){CANVAS[CANVAS_CUR].view=v;renderCanvasBody();}}
+function restoreCanvas(i){CANVAS_CUR=i;renderCanvasBody();}
+
+// Честная подпись под графиком при усечении. У «sql» и у «tool»/«preload» разная семантика
+// rowCount: у sql усечение уже произошло на уровне запроса, поэтому rowCount — это число
+// УЖЕ отданных строк (то же самое, что rows.length), а истинный итог модели неизвестен —
+// называть его нельзя. У tool/preload усечение делается здесь же, при сборке датасета, и
+// rowCount — это общее число элементов ДО усечения, так что оба числа осмысленны.
+function canvasCaption(ds){
+  if(!ds.truncated)return 'строк '+ds.rowCount;
+  if(ds.source==='sql')return 'показаны первые '+ds.rows.length+' строк — в источнике их больше';
+  return 'строк '+ds.rowCount+' · показаны первые '+ds.rows.length;
+}
+
+function renderCanvasBody(){
+  var el=document.getElementById('canvas-body');if(!el)return;
+  var it=CANVAS[CANVAS_CUR];
+  if(!it){el.innerHTML='<div class="card"><div class="sub" style="margin:0">Задайте вопрос — здесь появится график.</div></div>';return;}
+  var h='';
+  if(it.error){
+    h+='<div class="card" style="border-color:var(--red)"><div class="card-h" style="color:var(--red)">Не получилось</div>'+
+       '<div class="sub" style="margin:0">'+esc(it.error)+'</div></div>';
+  } else {
+    var ds=it.dataset;
+    var chips=(it.views||[]).map(function(v){
+      return '<span class="expl'+(v===it.view?' on':'')+'" onclick="setCanvasView(\''+v+'\')">'+
+             viewTitle(v)+'</span>';}).join('');
+    h+='<div class="card">'+
+       '<div class="cardhead" style="align-items:center"><div class="card-h" style="margin:0;flex:1">'+esc(it.q)+'</div>'+
+       '<div class="row" style="gap:10px">'+chips+'</div></div>'+
+       (ds?renderView(ds,it.view):
+         '<div class="sub">для этого вопроса графика нет'+(it.datasetError?' — '+esc(it.datasetError):'')+'</div>')+
+       (ds?'<div class="sub" style="margin:10px 0 0">данные: '+esc(ds.source)+' · '+canvasCaption(ds)+'</div>':'')+
+       '</div>';
+    if(it.reply)h+='<div class="card" style="margin-top:12px">'+mdLite(it.reply)+
+       thinkBlock({steps:it.steps,elapsedMs:it.elapsedMs})+'</div>';
+  }
+  if(CANVAS.length>1){
+    h+='<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center">'+
+       '<span class="sub" style="margin:0">История:</span>'+
+       CANVAS.map(function(c,i){return '<span class="expl" style="color:'+(i===CANVAS_CUR?'var(--accent)':'var(--muted)')+
+       '" onclick="restoreCanvas('+i+')">'+esc(c.q.slice(0,40))+'</span>';}).join('')+'</div>';
+  }
+  el.innerHTML=h;
 }
 
 /* ---------- Процесс ---------- */

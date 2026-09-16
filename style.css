@@ -95,6 +95,8 @@ a{color:var(--accent)}
 .hdr-sel{font:inherit;font-size:12px;padding:5px 9px;border:1px solid var(--header-border);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer}
 .expl{font-size:11px;color:var(--accent);cursor:pointer;border:1px solid var(--border);border-radius:var(--radius-pill);padding:2px 9px;font-weight:500;white-space:nowrap}
 .expl:hover{border-color:var(--accent);background:var(--accent-soft)}
+/* активный вид на холсте «Аналитика по запросу»: тот же чип .expl, но выбранный */
+.expl.on{border-color:var(--accent);background:var(--accent-soft);font-weight:600}
 .cardhead{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
 .pcard.wide{grid-column:1/-1}
 .psection-h{display:flex;align-items:center;gap:10px;font-size:12px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.08em;margin:18px 0 10px}

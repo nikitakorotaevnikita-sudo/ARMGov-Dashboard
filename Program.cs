@@ -2564,7 +2564,24 @@ class Program
                 case JsonValueKind.True:
                 case JsonValueKind.False: return "bool";
                 case JsonValueKind.String:
-                    return DateTime.TryParse(v.GetString(), out _) ? "date" : "text";
+                {
+                    var s = v.GetString();
+                    // Предусловие перед TryParse, а не разбор форматов "на глаз": наши значения —
+                    // результат сериализации собственных объектов System.Text.Json, поэтому дата
+                    // всегда выглядит как "2023-07-07" или "2026-09-16T11:25:55Z" (ISO, год-месяц-день
+                    // с дефисами на позициях 4 и 7). Без этой проверки DateTime.TryParse принимает и
+                    // голое время вида "12:30" (достраивая текущую дату), и колонка ошибочно получает
+                    // тип date — клиент выберет ось времени и нарисует бессмыслицу вместо графика.
+                    // Культура и стиль указаны явно (не полагаемся на InvariantGlobalization в csproj —
+                    // это флаг сборки, а не документация намерения этого кода).
+                    bool looksLikeIsoDate = s != null && s.Length >= 10
+                        && char.IsDigit(s[0]) && char.IsDigit(s[1]) && char.IsDigit(s[2]) && char.IsDigit(s[3])
+                        && s[4] == '-' && char.IsDigit(s[5]) && char.IsDigit(s[6])
+                        && s[7] == '-' && char.IsDigit(s[8]) && char.IsDigit(s[9]);
+                    return looksLikeIsoDate
+                        && DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out _)
+                        ? "date" : "text";
+                }
                 case JsonValueKind.Null: continue;
                 default: return "text";
             }

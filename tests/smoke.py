@@ -650,6 +650,14 @@ d = probe("tool=leaders&array=items&columns=name," + urllib.parse.quote("нет_
 check("несуществующая колонка отбрасывается, а не роняет сборку",
       [c["name"] for c in d.get("cols", [])] == ["name"], str(d.get("cols")))
 
+# Находка ревью (круг правок 1, Important): JsonColType сузили так, чтобы "12:30" не
+# считалось датой. Эта проверка — что настоящие даты (deadline инструмента stuck,
+# формат "2023-07-07") сужение не задело.
+d = probe("tool=stuck&array=items&columns=subject,deadline,overdueDays")
+check("настоящая дата (stuck.deadline) по-прежнему определяется как date",
+      [c.get("type") for c in d.get("cols", [])] == ["text", "date", "number"],
+      str(d.get("cols")))
+
 # ---------------- ИИ: цикл агента ----------------
 section("Цикл агента  /api/ai/sql")
 

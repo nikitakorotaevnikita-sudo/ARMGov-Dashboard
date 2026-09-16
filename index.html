@@ -823,9 +823,18 @@ function sendChat(){
 }
 
 /* ---------- Аналитика по запросу ---------- */
-var CANVAS=[];          // история сессии: [{q, reply, dataset, datasetError, steps, elapsedMs, view, views, error}]
+var CANVAS=[];          // история сессии: [{q, reply, dataset, datasetError, steps, elapsedMs, truncated, view, views, error}]
 var CANVAS_CUR=-1;      // индекс показанного вопроса
 var CANVAS_BUSY=false;
+var CANVAS_T0=null;     // время старта запроса в полёте; null — когда ничего не ждём
+
+// Карточка ожидания ответа. Общая для тика интервала и для перерисовки экрана, на который
+// вернулись, пока запрос ещё летит (круг правок 1, п.2) — иначе при возврате на экран
+// кнопка «Показать» на миг или насовсем становится обычной, хотя CANVAS_BUSY всё ещё true.
+function canvasWaitHtml(){
+  var secs=CANVAS_T0?Math.round((Date.now()-CANVAS_T0)/1000):0;
+  return '<div class="card"><div class="sub" style="margin:0">собираю данные… '+secs+' с</div></div>';
+}
 
 function goCanvas(){CUR='__canvas';CURDATA=null;renderNav();hideViews();
   document.getElementById('view-canvas').classList.remove('hidden');renderCanvas();}
@@ -840,14 +849,19 @@ function renderCanvas(){
         '<textarea id="canvas-input" rows="2" placeholder="Например: просрочка по подразделениям" '+
         'style="flex:1;resize:none;border:1px solid var(--border);border-radius:8px;padding:9px 11px;font:inherit;font-size:14px" '+
         'onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();askCanvas();}"></textarea>'+
-        '<button class="btn" id="canvas-send" onclick="askCanvas()">Показать</button>'+
+        '<button class="btn" id="canvas-send"'+(CANVAS_BUSY?' disabled':'')+' onclick="askCanvas()">Показать</button>'+
       '</div>'+
       (ps.length?'<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:10px">'+ps.map(function(t){
         return '<span class="expl" style="color:var(--accent)" onclick="quickCanvas('+JSON.stringify(t).replace(/"/g,'&quot;')+')">'+esc(t)+'</span>';}).join('')+'</div>':'')+
     '</div>'+
     '<div id="canvas-body"></div>';
   el.innerHTML=h;
-  renderCanvasBody();
+  // Запрос ещё в полёте (например, вопрос задали, ушли на другой экран и вернулись до
+  // ответа) — рисуем то же ожидание, что и тик интервала, а не пустой плейсхолдер/старую
+  // историю: иначе кнопка выше выглядит обычной, а тут ничего не подсказывает, что она
+  // на самом деле не работает.
+  if(CANVAS_BUSY)document.getElementById('canvas-body').innerHTML=canvasWaitHtml();
+  else renderCanvasBody();
 }
 
 function quickCanvas(t){document.getElementById('canvas-input').value=t;askCanvas();}
@@ -855,17 +869,21 @@ function quickCanvas(t){document.getElementById('canvas-input').value=t;askCanva
 function askCanvas(){
   if(CANVAS_BUSY)return;
   var inp=document.getElementById('canvas-input');var q=(inp.value||'').trim();if(!q)return;
-  CANVAS_BUSY=true;document.getElementById('canvas-send').disabled=true;
-  var t0=Date.now();
+  CANVAS_BUSY=true;CANVAS_T0=Date.now();
+  var sendBtn=document.getElementById('canvas-send');if(sendBtn)sendBtn.disabled=true;
+  var b0=document.getElementById('canvas-body');if(b0)b0.innerHTML=canvasWaitHtml();
   var tick=setInterval(function(){
     var b=document.getElementById('canvas-body');
-    if(b)b.innerHTML='<div class="card"><div class="sub" style="margin:0">собираю данные… '+
-      Math.round((Date.now()-t0)/1000)+' с</div></div>';
+    if(b)b.innerHTML=canvasWaitHtml();
   },500);
+  function done(){
+    clearInterval(tick);CANVAS_BUSY=false;CANVAS_T0=null;
+    var btn=document.getElementById('canvas-send');if(btn)btn.disabled=false;
+  }
   fetch('/api/ai/sql',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({messages:[{role:'user',content:q}]})})
    .then(function(r){return r.json();}).then(function(d){
-    clearInterval(tick);CANVAS_BUSY=false;document.getElementById('canvas-send').disabled=false;
+    done();
     if(d.error){CANVAS.push({q:q,error:d.error});CANVAS_CUR=CANVAS.length-1;renderCanvasBody();return;}
     var pv=d.dataset?pickViews(d.dataset):{views:[],def:null};
     // datasetError лежит в шаге протокола с action:'answer', а не в самом ответе: сервер
@@ -873,10 +891,10 @@ function askCanvas(){
     // «график не собрался из-за ошибки» — иначе обе ситуации выглядят одинаково немо.
     var answerStep=(d.steps||[]).filter(function(s){return s&&s.action==='answer';}).pop();
     CANVAS.push({q:q,reply:d.reply,dataset:d.dataset,datasetError:answerStep&&answerStep.datasetError,
-                 steps:d.steps,elapsedMs:d.elapsedMs,views:pv.views,view:pv.def});
+                 steps:d.steps,elapsedMs:d.elapsedMs,truncated:d.truncated,views:pv.views,view:pv.def});
     CANVAS_CUR=CANVAS.length-1;inp.value='';renderCanvasBody();
   }).catch(function(e){
-    clearInterval(tick);CANVAS_BUSY=false;document.getElementById('canvas-send').disabled=false;
+    done();
     CANVAS.push({q:q,error:String(e)});CANVAS_CUR=CANVAS.length-1;renderCanvasBody();
   });
 }
@@ -916,7 +934,7 @@ function renderCanvasBody(){
        (ds?'<div class="sub" style="margin:10px 0 0">данные: '+esc(ds.source)+' · '+canvasCaption(ds)+'</div>':'')+
        '</div>';
     if(it.reply)h+='<div class="card" style="margin-top:12px">'+mdLite(it.reply)+
-       thinkBlock({steps:it.steps,elapsedMs:it.elapsedMs})+'</div>';
+       thinkBlock({steps:it.steps,elapsedMs:it.elapsedMs,truncated:it.truncated})+'</div>';
   }
   if(CANVAS.length>1){
     h+='<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center">'+

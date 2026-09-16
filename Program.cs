@@ -2552,6 +2552,25 @@ class Program
         };
     }
 
+    // Сборка датасета из результата SQL: колонки и типы уже известны (задача 1 отдаёт их
+    // из SqlRun), значения переписывать не нужно — берём как есть.
+    static object DatasetFromSqlResult(List<string> cols, List<string> types, List<object[]> rows,
+                                       bool truncated, string hint)
+    {
+        if (cols == null || cols.Count == 0) return null;
+        int n = Math.Min(cols.Count, DatasetMaxCols);
+        var take = rows.Select(r => r.Take(n).ToArray()).ToList();
+        return new
+        {
+            source = "sql",
+            cols = cols.Take(n).Select((c, i) => new { name = c, title = c, type = types[i] }),
+            rows = take,
+            rowCount = rows.Count,
+            truncated,
+            hint
+        };
+    }
+
     // Тип колонки по первому непустому значению: у JSON метаданных нет, в отличие от БД.
     static string JsonColType(List<JsonElement> items, string name)
     {
@@ -3081,7 +3100,12 @@ class Program
                                                  JsonSerializer.Serialize(pre) });
         foreach (var (role, content) in incoming) msgs.Add(new { role, content });
 
-        string reply = null; bool truncated = false;
+        string reply = null; bool truncated = false; object dataset = null;
+        // Фактические результаты, из которых потом собирается датасет.
+        // Модель к ним не прикасается — она может только указать, какой из них рисовать.
+        object lastToolResult = null; string lastToolName = null;
+        List<string> lastSqlCols = null, lastSqlTypes = null; List<object[]> lastSqlRows = null;
+        bool lastSqlTruncated = false;
         for (int n = 1; n <= AgentMaxSteps; n++)
         {
             if (sw.ElapsedMilliseconds > AgentBudgetMs) { truncated = true; break; }
@@ -3123,6 +3147,47 @@ class Program
                 // (находка ревью р1, п.C1 — Str() отдаёт "" и на пустое поле, и на его
                 // отсутствие, а "" != null, поэтому старый фолбэк не срабатывал).
                 var text = Str("text");
+                // Датасет для визуализации — необязательная часть ответа: модель называет,
+                // ЧТО рисовать (источник, массив, колонки), а числа берутся только из уже
+                // добытого факта (lastToolResult/pre/lastSqlRows). Модель их не переписывает.
+                try
+                {
+                    if (el.TryGetProperty("chart", out var ch) && ch.ValueKind == JsonValueKind.Object)
+                    {
+                        string From(string k) => ch.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+                        var from = From("from") ?? "";
+                        var arr = From("array");
+                        var view = From("view");
+                        var colNames = ch.TryGetProperty("columns", out var cc) && cc.ValueKind == JsonValueKind.Array
+                            ? cc.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()).ToArray()
+                            : Array.Empty<string>();
+
+                        if (from.StartsWith("tool:", StringComparison.Ordinal) && lastToolResult != null)
+                        {
+                            using var doc2 = JsonDocument.Parse(JsonSerializer.Serialize(lastToolResult));
+                            dataset = DatasetFromJson(doc2.RootElement, arr, colNames, "tool:" + lastToolName, view);
+                        }
+                        // Промпт задачи 3 просит модель отвечать ровно "preload" (без двоеточия
+                        // и без пути) — путь до массива она кладёт отдельно, в "array". Подпись
+                        // источника под графиком клеим из него же: "preload" само по себе
+                        // пользователю ничего не скажет, а preload:overview.processes — скажет.
+                        else if (from.StartsWith("preload", StringComparison.Ordinal))
+                        {
+                            using var doc2 = JsonDocument.Parse(JsonSerializer.Serialize(pre));
+                            // В предзагрузке лежит { overview, processes } — путь начинается с этих имён.
+                            dataset = DatasetFromJson(doc2.RootElement, arr, colNames, "preload:" + arr, view);
+                        }
+                        else if (from == "sql" && lastSqlRows != null)
+                        {
+                            dataset = DatasetFromSqlResult(lastSqlCols, lastSqlTypes, lastSqlRows, lastSqlTruncated, view);
+                        }
+                    }
+                    // Модель не указала chart, но SQL выполнялся — рисуем его результат:
+                    // данные уже добыты, выбрасывать их незачем.
+                    if (dataset == null && lastSqlRows != null)
+                        dataset = DatasetFromSqlResult(lastSqlCols, lastSqlTypes, lastSqlRows, lastSqlTruncated, null);
+                }
+                catch { /* датасет — необязательная часть ответа: его отсутствие не должно ломать ответ */ }
                 steps.Add(new { n, action, thought, ms = (int)stepSw.ElapsedMilliseconds });
                 if (string.IsNullOrWhiteSpace(text))
                 {
@@ -3144,6 +3209,7 @@ class Program
                 try
                 {
                     var res = ToolCall(name, args);
+                    lastToolResult = res; lastToolName = name;
                     var json = Trunc(JsonSerializer.Serialize(res), 12000);
                     msgs.Add(new { role = "user", content = "Результат " + name + ":\n" + json });
                     steps.Add(new { n, action, thought, tool = name, args = argsJson, ms = (int)stepSw.ElapsedMilliseconds });
@@ -3187,7 +3253,8 @@ class Program
                 }
                 try
                 {
-                    var (cols, _, rows, ms, more) = SqlRun(eff, 50);
+                    var (cols, types, rows, ms, more) = SqlRun(eff, 50);
+                    lastSqlCols = cols; lastSqlTypes = types; lastSqlRows = rows; lastSqlTruncated = more;
                     msgs.Add(new { role = "user", content = "Результат запроса:\n" +
                         JsonSerializer.Serialize(new { cols, rows, truncated = more }) });
                     steps.Add(new { n, action, thought, sql = query, purpose = Str("purpose"),
@@ -3246,7 +3313,7 @@ class Program
             }
         }
         return new { reply, preloaded = new[] { "overview", "processes" },
-                     steps, elapsedMs = (int)sw.ElapsedMilliseconds, truncated };
+                     steps, elapsedMs = (int)sw.ElapsedMilliseconds, truncated, dataset };
     }
 
     // ---------- helpers ----------

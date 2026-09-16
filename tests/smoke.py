@@ -709,6 +709,37 @@ except Exception as e:
     AINOTE.append(f"цикл агента: запрос не прошёл — {e}")
     print(f"  [ИИ?] цикл агента: запрос не прошёл — {e}")
 
+# --- датасет для визуализации (страница «Аналитика по запросу») ---
+try:
+    st, d = _req("/api/ai/sql", method="POST", body={"messages": [
+        {"role": "user", "content": "Покажи просрочку по подразделениям"}]}, timeout=180)
+    ds = d.get("dataset") or {}
+    agent_ok("агент вернул датасет", d, bool(d.get("dataset")),
+             "поля dataset нет в ответе")
+    agent_ok("у колонок датасета проставлены типы", d,
+             bool(ds.get("cols")) and all(c.get("type") in ("text", "number", "date", "bool")
+                                          for c in ds["cols"]),
+             str(ds.get("cols"))[:120])
+    agent_ok("источник датасета указан", d,
+             (ds.get("source") or "").split(":")[0] in ("sql", "tool", "preload"),
+             str(ds.get("source")))
+    agent_ok("строк не больше потолка исполнителя", d,
+             len(ds.get("rows") or []) <= 200, str(len(ds.get("rows") or [])))
+    agent_ok("rowCount не меньше числа отданных строк", d,
+             int(ds.get("rowCount") or 0) >= len(ds.get("rows") or []),
+             str(ds.get("rowCount")) + " / " + str(len(ds.get("rows") or [])))
+except Exception as e:
+    check("датасет: запрос к агенту прошёл", False, str(e))
+
+# Ответ без визуализируемых данных — штатное состояние, а не ошибка (§9 спеки).
+try:
+    st, d = _req("/api/ai/sql", method="POST", body={"messages": [
+        {"role": "user", "content": "Что ты умеешь?"}]}, timeout=180)
+    agent_ok("вопрос без данных: ответ есть и без датасета это не ошибка", d,
+             bool(d.get("reply")) and not d.get("error"), str(d.get("error") or "")[:80])
+except Exception as e:
+    check("вопрос без данных: запрос прошёл", False, str(e))
+
 # --- детерминированные проверки харнесса, не требующие живой модели (находка ревью р1, п.I9) ---
 try:
     st, d = _req_raw("/api/ai/sql", b'{"messages": [invalid json')

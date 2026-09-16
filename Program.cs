@@ -2970,8 +2970,11 @@ class Program
 "— from: tool:<имя инструмента> | sql | preload;\n" +
 "— array: где лежит массив. У инструментов leaders, leader_tasks, stuck, by_kind,\n" +
 "  departments — items; у overview — processes. В предзагрузке путь через точку:\n" +
-"  overview.processes (процессы со сводкой), overview.bottlenecksTop (узкие места),\n" +
-"  overview.whatsBurning (что горит). Для from=sql поле не нужно;\n" +
+"  overview.processes (throughputPct, bottleneckStage, longRunners — сводка по\n" +
+"  пропускной способности), overview.bottlenecksTop (узкие места), overview.whatsBurning\n" +
+"  (что горит), processes.processes (completed, chronic — то, чего нет в overview.processes,\n" +
+"  бери отсюда, если вопрос про завершённость или хронические процессы). Для from=sql\n" +
+"  поле не нужно;\n" +
 "— columns: какие поля показать, первым — подпись (текст), далее числовые;\n" +
 "— view: пожелание вида (bars | line | shares | kpi | table). Это ПОЖЕЛАНИЕ:\n" +
 "  окончательный вид выбирает интерфейс по типам колонок.\n" +

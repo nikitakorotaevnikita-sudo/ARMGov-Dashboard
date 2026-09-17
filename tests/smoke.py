@@ -718,7 +718,10 @@ try:
     agent_ok("вопрос из готовых метрик не потребовал SQL (предзагрузка сработала)", d,
              all(s.get("action") != "sql" for s in d.get("steps", [])),
              str([s.get("action") for s in d.get("steps", [])]))
-    agent_ok("уложились в бюджет", d, isinstance(d.get("elapsedMs"), int) and d["elapsedMs"] < 70000)
+    # Потолок проверки = бюджет агента (120 с) плюс те же 10 с запаса, что были при
+    # бюджете 60 с: проверка цикла агента в Program.cs стоит в начале шага, поэтому шаг,
+    # начавшийся у самой границы, вправе закончиться чуть позже неё.
+    agent_ok("уложились в бюджет", d, isinstance(d.get("elapsedMs"), int) and d["elapsedMs"] < 130000)
 
     st, d = _req("/api/ai/sql", method="POST", body={"messages": [
         {"role": "user", "content":

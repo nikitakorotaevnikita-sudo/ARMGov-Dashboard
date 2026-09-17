@@ -197,5 +197,21 @@ check('известное поле колонки переводится на р
       titleHtml.indexOf('Просрочено') >= 0 && titleHtml.indexOf('мойалиас') >= 0,
       titleHtml.slice(0, 200));
 
+// limit из датасета: руководитель просит «топ-10», а не наши жёсткие двадцать.
+// Строки датасета при этом не режутся — таблица по-прежнему показывает всё.
+var many40 = [];
+for (var q = 0; q < 40; q++) many40.push(['НОР ' + q, 40 - q]);
+var dsLim = ds([['НОР', 'text'], ['просрочено', 'number']], many40);
+dsLim.limit = 10;
+check('limit из датасета сужает график до указанного числа',
+      renderView(dsLim, 'bars').indexOf('10 из 40') >= 0,
+      renderView(dsLim, 'bars').slice(-120));
+check('без limit потолок графика по-прежнему 20',
+      renderView(ds([['НОР', 'text'], ['просрочено', 'number']], many40), 'bars')
+        .indexOf('20 из 40') >= 0);
+check('limit не режет строки датасета — таблица показывает все',
+      (renderView(dsLim, 'table').match(/<tr>/g) || []).length === 41,
+      String((renderView(dsLim, 'table').match(/<tr>/g) || []).length));
+
 console.log('\nИТОГ: PASS=' + pass + ' FAIL=' + fail);
 process.exit(fail ? 1 : 0);

@@ -692,6 +692,50 @@ check("настоящая дата (stuck.deadline) по-прежнему опр
       str(d.get("cols")))
 
 # ---------------- ИИ: цикл агента ----------------
+section("Плоские колонки для графика  (разбивка по процессам и тренд)")
+
+# Пользователь поймал расхождение: на графике у Иванова 123, в тексте 118. Обе цифры
+# настоящие — 123 это просрочка по всем процессам, 118 только по поручениям. Разбивка
+# лежала в items[].processes[], куда сборщик датасета не дотягивается, и модели нечего
+# было указать, кроме итоговой колонки. Плоские колонки закрывают это по построению.
+try:
+    st, _lead = _req("/api/leaders?by=performer")
+    _nested = {}
+    for _it in (_lead.get("items") or []):
+        for _p in (_it.get("processes") or []):
+            if _p.get("key") == "poruchenia":
+                _nested[_it.get("name")] = _p.get("overdue", 0)
+    d = probe("tool=leaders&array=items&columns=name,overdue_poruchenia")
+    check("плоская колонка overdue_poruchenia доступна графику",
+          [c.get("name") for c in (d.get("cols") or [])] == ["name", "overdue_poruchenia"],
+          str(d.get("cols") or d.get("error"))[:110])
+    _rows = {r[0]: r[1] for r in (d.get("rows") or []) if isinstance(r, list) and len(r) >= 2}
+    _mismatch = [(n, v, _rows.get(n)) for n, v in _nested.items() if _rows.get(n) != v]
+    check("плоская разбивка совпадает со вложенной у всех исполнителей",
+          bool(_rows) and not _mismatch, str(_mismatch[:3]))
+except Exception as e:
+    check("разбивка по процессам: запрос прошёл", False, str(e))
+
+# Тот же пробел с другой стороны: месячный тренд лежал в processes[].trend, и на вопрос
+# «покажи тренд» модель уходила сочинять SQL вместо готовых и верных чисел дашборда.
+try:
+    st, _procs = _req("/api/processes")
+    _flat = {r.get("month"): r for r in (_procs.get("trendByMonth") or [])}
+    _agg = {}
+    for _p in (_procs.get("processes") or []):
+        for _t in (_p.get("trend") or []):
+            _a = _agg.setdefault(_t.get("month"), [0, 0])
+            _a[0] += _t.get("ontime", 0)
+            _a[1] += _t.get("overdue", 0)
+    check("плоский тренд по месяцам есть в предзагрузке", bool(_flat),
+          ("месяцев: %d" % len(_flat)) if _flat else "trendByMonth отсутствует или пуст")
+    _bad = [(m, v, _flat.get(m)) for m, v in _agg.items()
+            if (_flat.get(m) or {}).get("ontime") != v[0] or (_flat.get(m) or {}).get("overdue") != v[1]]
+    check("суммы плоского тренда сходятся с разбивкой по процессам",
+          bool(_flat) and not _bad, str(_bad[:2])[:150])
+except Exception as e:
+    check("плоский тренд: запрос прошёл", False, str(e))
+
 section("Цикл агента  /api/ai/sql")
 
 def agent_ok(name, d, cond, detail=""):
@@ -763,34 +807,41 @@ else:
     # ветки, сверка датасета с preview SQL-шага ниже (находка финального ревью, п.8). Только
     # вызов _req (сеть/таймаут/недоступность LLM) — законный повод для мягкого [ИИ?].
     ds = d.get("dataset") or {}
-    # Точка 5 ревью р2: detail должен быть данностью и в OK-прогоне тоже — раньше зелёная
-    # строка всегда печатала диагноз провала ("поля dataset нет в ответе").
-    agent_ok("агент вернул датасет", d, bool(d.get("dataset")),
-             (f"источник={ds.get('source')}" if ds else "поля dataset нет в ответе"))
-    agent_ok("у колонок датасета проставлены типы", d,
-             bool(ds.get("cols")) and all(c.get("type") in ("text", "number", "date", "bool")
-                                          for c in ds["cols"]),
-             str(ds.get("cols"))[:120])
-    agent_ok("источник датасета указан", d,
-             (ds.get("source") or "").split(":")[0] in ("sql", "tool", "preload"),
-             str(ds.get("source")))
-    # Точка 6 ревью р2: старые "rows<=200" и "rowCount>=len(rows)" не могли упасть — первая
-    # недостижима (JSON-путь режет по SqlMaxRows=200, SQL-путь по потолку цикла 50 — оба
-    # меньше 200 по построению), вторая тождественно истинна для sql-источника
-    # (DatasetFromSqlResult кладёт rowCount=rows.Count). Разная семантика rowCount между
-    # двумя сборщиками — известный и отложенный контроллером вопрос, здесь его не трогаем,
-    # а проверяем реальный, различный по источнику инвариант согласованности с truncated.
-    src = ds.get("source") or ""
-    rows_ds = ds.get("rows") or []
-    rc = ds.get("rowCount")
-    if src.startswith("sql"):
-        ok_rc = isinstance(rc, int) and rc == len(rows_ds)
-        detail_rc = f"sql: rowCount={rc} rows={len(rows_ds)}"
+    # Модель вправе ответить без графика — если сочла, что рисовать нечего, это её
+    # выбор, а не поломка контракта. Раньше здесь было четыре жёстких agent_ok, и такой
+    # прогон давал четыре FAIL на законном поведении, то есть набор переставал быть
+    # сигналом. Теперь отсутствие графика уводим в [ИИ?] — но не молча: печатаем
+    # причину, которую сервер положил в datasetError шага answer.
+    if not ds:
+        _ans = [x for x in d.get("steps", []) if x.get("action") == "answer"]
+        _why = (_ans[-1].get("datasetError") if _ans else None) or "модель не заполнила chart"
+        AINOTE.append("контракт датасета: графика в этом прогоне не было — " + str(_why)[:90])
+        print("  [ИИ?] контракт датасета: графика не было — " + str(_why)[:90])
     else:
-        trunc = bool(ds.get("truncated"))
-        ok_rc = isinstance(rc, int) and rc >= len(rows_ds) and trunc == (rc > len(rows_ds))
-        detail_rc = f"{src}: rowCount={rc} rows={len(rows_ds)} truncated={trunc}"
-    agent_ok("rowCount согласован с truncated и числом отданных строк", d, ok_rc, detail_rc)
+        agent_ok("у колонок датасета проставлены типы", d,
+                 bool(ds.get("cols")) and all(c.get("type") in ("text", "number", "date", "bool")
+                                              for c in ds["cols"]),
+                 str(ds.get("cols"))[:120])
+        agent_ok("источник датасета указан", d,
+                 (ds.get("source") or "").split(":")[0] in ("sql", "tool", "preload"),
+                 str(ds.get("source")))
+        # Точка 6 ревью р2: старые "rows<=200" и "rowCount>=len(rows)" не могли упасть — первая
+        # недостижима (JSON-путь режет по SqlMaxRows=200, SQL-путь по потолку цикла 50 — оба
+        # меньше 200 по построению), вторая тождественно истинна для sql-источника
+        # (DatasetFromSqlResult кладёт rowCount=rows.Count). Разная семантика rowCount между
+        # двумя сборщиками — известный и отложенный контроллером вопрос, здесь его не трогаем,
+        # а проверяем реальный, различный по источнику инвариант согласованности с truncated.
+        src = ds.get("source") or ""
+        rows_ds = ds.get("rows") or []
+        rc = ds.get("rowCount")
+        if src.startswith("sql"):
+            ok_rc = isinstance(rc, int) and rc == len(rows_ds)
+            detail_rc = f"sql: rowCount={rc} rows={len(rows_ds)}"
+        else:
+            trunc = bool(ds.get("truncated"))
+            ok_rc = isinstance(rc, int) and rc >= len(rows_ds) and trunc == (rc > len(rows_ds))
+            detail_rc = f"{src}: rowCount={rc} rows={len(rows_ds)} truncated={trunc}"
+        agent_ok("rowCount согласован с truncated и числом отданных строк", d, ok_rc, detail_rc)
 
 # Ответ без визуализируемых данных — штатное состояние, а не ошибка (§9 спеки).
 try:

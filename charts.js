@@ -127,7 +127,14 @@ var COL_TITLES_RU = {
   bottleneckMedianDays:'Медиана дней в узком месте', medianDays:'Медиана дней',
   queue:'В очереди', deadline:'Срок', risk:'Риск', month:'Месяц', ontime:'В срок',
   chronic:'Хронический', n:'Количество', pct:'Доля, %',
-  deptId:'ID подразделения', kindId:'ID вида'
+  deptId:'ID подразделения', kindId:'ID вида',
+  // Плоская разбивка по процессам и плоский тренд — без них на экране губернатора
+  // появилась бы латиница вида overdue_poruchenia.
+  overdue_poruchenia:'Просрочено · Поручения', overdue_appeals:'Просрочено · Обращения',
+  overdue_npa:'Просрочено · НПА', inwork_poruchenia:'В работе · Поручения',
+  inwork_appeals:'В работе · Обращения', inwork_npa:'В работе · НПА',
+  ontime_poruchenia:'В срок · Поручения', ontime_appeals:'В срок · Обращения',
+  ontime_npa:'В срок · НПА'
 };
 function colTitle(c){
   if(!c)return '';
@@ -176,6 +183,13 @@ function renderKpi(ds){
 }
 
 // Подпись об усечении: руководитель должен видеть, что категорий было больше.
+// Сколько категорий рисуем: сколько попросила модель (ds.limit), иначе наш потолок.
+// Руководитель, попросивший «топ-10», должен получить десять, а не двадцать.
+function chartCap(ds){
+  var n=ds&&ds.limit;
+  return (typeof n==='number'&&n>0)?n:CHART_TOP_N;
+}
+
 function topNote(shown,total){
   return shown>=total?'':'<div class="sub" style="margin:6px 0 0">показаны '+shown+
     ' из '+total+', остальные в таблице</div>';
@@ -194,7 +208,7 @@ function renderBars(ds){
   // Сортировка по первому показателю: руководителя интересует «у кого хуже».
   var rows=ds.rows.slice().sort(function(a,b){
     return (Number(b[R.nums[0]])||0)-(Number(a[R.nums[0]])||0);});
-  var total=rows.length; if(total>CHART_TOP_N)rows=rows.slice(0,CHART_TOP_N);
+  var total=rows.length, cap=chartCap(ds); if(total>cap)rows=rows.slice(0,cap);
   var note=topNote(rows.length,total);
 
   if(R.nums.length===1){
@@ -292,7 +306,7 @@ function renderShares(ds){
   // всех», хотя на деле это «половина процента среди 200 из 500».
   var grandTotal=all.reduce(function(s,d){return s+d.value;},0)||1;
   var totalCat=all.length;
-  var data=all; if(data.length>CHART_TOP_N)data=data.slice(0,CHART_TOP_N);
+  var data=all, capS=chartCap(ds); if(data.length>capS)data=data.slice(0,capS);
   var pal=CHART_PAL;
   var warn=(ds&&ds.truncated)
     ? '<div class="sub" style="margin:0 0 8px">доли посчитаны по показанным '+ds.rows.length+

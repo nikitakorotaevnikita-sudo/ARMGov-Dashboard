@@ -537,10 +537,15 @@ class Program
     static string AsgJoin(Proc p) => $"from sungero_wf_assignment a join sungero_wf_task t on t.id=a.task where {p.Where}{NoticeNotIn}";
 
     // ---------- /api/processes ----------
+    // Слот процесса в накопителе плоского тренда: [0,1] — итог по всем,
+    // дальше по паре (в срок, просрочено) на каждый процесс в порядке Procs.
+    static int TrendSlot(string key) => key == "poruchenia" ? 2 : key == "appeals" ? 4 : 6;
+
     static object BuildProcesses()
     {
         using var c = new NpgsqlConnection(Cs); c.Open();
         var list = new List<object>();
+        var trendByMonthAcc = new SortedDictionary<string, int[]>(StringComparer.Ordinal);
         foreach (var p in Procs)
         {
             long total = ScalarL(c, $"select count(*) from sungero_wf_task t where {p.Where}");
@@ -550,10 +555,29 @@ class Program
             long overdueAsg = ScalarL(c, $"select count(*) {AsgJoin(p)} and a.status::text='InProcess' and a.deadline is not null and a.deadline<now()");
             int health = activeAsg > 0 ? (int)Math.Round(100.0 * (1.0 - (double)overdueAsg / activeAsg)) : 100;
             var tr = Trend(c, p);
+            // Копим тот же тренд второй раз — плоской таблицей по месяцам. Причина та
+            // же, что у разбивки выше: processes[].trend лежит в массиве внутри
+            // элемента массива, графику туда не дотянуться, и на вопрос «покажи тренд»
+            // модель уходила сочинять свой SQL мимо готовых и верных чисел дашборда.
+            foreach (dynamic t in tr)
+            {
+                string mm = (string)t.month;
+                if (!trendByMonthAcc.TryGetValue(mm, out var acc)) { acc = new int[8]; trendByMonthAcc[mm] = acc; }
+                int on = (int)t.ontime, ov = (int)t.overdue, slot = TrendSlot(p.Key);
+                acc[0] += on; acc[1] += ov; acc[slot] += on; acc[slot + 1] += ov;
+            }
             int redM = tr.AsEnumerable().Reverse().Take(4).Count(o => { var d = (dynamic)o; int t2 = (int)d.ontime + (int)d.overdue; return t2 > 0 && (100.0 * (int)d.ontime / t2) < 50; });
             list.Add(new { key = p.Key, name = p.Name, total, inwork, completed, overdue = overdueAsg, health, severity = Sev(health), chronic = redM >= 3, trend = tr });
         }
-        return new { generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), processes = list };
+        var trendByMonth = trendByMonthAcc.Select(kv => new
+        {
+            month = kv.Key,
+            ontime = kv.Value[0], overdue = kv.Value[1],
+            ontime_poruchenia = kv.Value[2], overdue_poruchenia = kv.Value[3],
+            ontime_appeals    = kv.Value[4], overdue_appeals    = kv.Value[5],
+            ontime_npa        = kv.Value[6], overdue_npa        = kv.Value[7]
+        }).ToList();
+        return new { generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), processes = list, trendByMonth };
     }
 
     // ---------- /api/overview (Уровень 0 — стратегический обзор + машиночитаемый агрегат) ----------
@@ -1296,7 +1320,21 @@ class Program
                 key = p.Key, name = p.Name,
                 inwork = kv.Value.procs.TryGetValue(p.Key, out var x) ? x.inwork : 0,
                 overdue = kv.Value.procs.TryGetValue(p.Key, out var y) ? y.overdue : 0
-            }).ToList()
+            }).ToList(),
+            // Та же разбивка плоскими колонками. Вложенный processes[] остаётся — его
+            // читает карточка сотрудника на экране, — но график из него не построить:
+            // сборщик датасета ходит по объектам через точку и не умеет вынимать
+            // значение из массива внутри элемента массива. Пока плоских колонок не
+            // было, модель писала текст по разбивке («118 поручений»), а график могла
+            // попросить только по итоговой колонке overdue («123 всего») — и картинка
+            // расходилась с текстом на глазах у руководителя.
+            // Ключи зашиты так же, как в Procs: домен закрыт, процессов ровно три.
+            overdue_poruchenia = kv.Value.procs.TryGetValue("poruchenia", out var o1) ? o1.overdue : 0,
+            overdue_appeals    = kv.Value.procs.TryGetValue("appeals",    out var o2) ? o2.overdue : 0,
+            overdue_npa        = kv.Value.procs.TryGetValue("npa",        out var o3) ? o3.overdue : 0,
+            inwork_poruchenia  = kv.Value.procs.TryGetValue("poruchenia", out var w1) ? w1.inwork  : 0,
+            inwork_appeals     = kv.Value.procs.TryGetValue("appeals",    out var w2) ? w2.inwork  : 0,
+            inwork_npa         = kv.Value.procs.TryGetValue("npa",        out var w3) ? w3.inwork  : 0
         })
         .Where(x => x.inwork > 0 || x.overdue > 0 || x.coOverdue > 0)   // не показываем пустые группы; coOverdue тоже повод показать
         .OrderByDescending(x => x.overdue).ThenByDescending(x => x.inwork)
@@ -2520,8 +2558,11 @@ class Program
     // и с дашбордом, а заметить это будет нечем.
     const int DatasetMaxCols = 12;
 
+    // limit — сколько категорий рисовать на графике. Строк в датасете он не режет:
+    // таблица по-прежнему показывает всё, а подпись говорит «показаны N из M».
+    // Нужен потому, что «топ-10» руководителя раньше упиралось в наш жёсткий потолок 20.
     static object DatasetFromJson(JsonElement root, string arrayPath, string[] columns,
-                                  string source, string hint)
+                                  string source, string hint, int limit = 0)
     {
         // Путь вида "items" или "region.items" — по точке вглубь объекта.
         var el = root;
@@ -2561,14 +2602,15 @@ class Program
             rows,
             rowCount = items.Count,
             truncated = items.Count > rows.Count,
-            hint
+            hint,
+            limit
         };
     }
 
     // Сборка датасета из результата SQL: колонки и типы уже известны (задача 1 отдаёт их
     // из SqlRun), значения переписывать не нужно — берём как есть.
     static object DatasetFromSqlResult(List<string> cols, List<string> types, List<object[]> rows,
-                                       bool truncated, string hint)
+                                       bool truncated, string hint, int limit = 0)
     {
         if (cols == null || cols.Count == 0) return null;
         int n = Math.Min(cols.Count, DatasetMaxCols);
@@ -2580,7 +2622,8 @@ class Program
             rows = take,
             rowCount = rows.Count,
             truncated,
-            hint
+            hint,
+            limit
         };
     }
 
@@ -3025,9 +3068,21 @@ class Program
 "  headline), для графика бери overview.processes. Для from=sql поле не нужно;\n" +
 "— columns: какие поля показать, первым — подпись (текст), далее числовые. Среди columns\n" +
 "  обязано быть хотя бы одно числовое поле — без числа графику нечего рисовать;\n" +
+"— limit: сколько категорий показать на графике (например 10, если просят «топ-10»).\n" +
+"  Строки при этом не теряются — таблица покажет все, а подпись скажет «10 из 53»;\n" +
 "— view: пожелание вида (bars | line | shares | kpi | table). Это ПОЖЕЛАНИЕ:\n" +
 "  окончательный вид выбирает интерфейс по типам колонок.\n" +
 "Значения ты НЕ переписываешь — их подставит код из фактического результата.\n" +
+"РАЗБИВКА ПО ПРОЦЕССАМ. У инструмента leaders, кроме итоговых inwork и overdue (это\n" +
+"сумма по всем процессам), есть плоские колонки на каждый процесс: overdue_poruchenia,\n" +
+"overdue_appeals, overdue_npa и такие же inwork_*. Если текст ответа про один процесс —\n" +
+"бери колонку этого процесса, а не итоговую: иначе на графике будет одно число, а в\n" +
+"тексте другое, и оба верные.\n" +
+"ТРЕНД ПО МЕСЯЦАМ лежит в предзагрузке плоской таблицей: array=processes.trendByMonth,\n" +
+"колонки month, ontime, overdue (итог по всем процессам) и ontime_<ключ>/overdue_<ключ>\n" +
+"на каждый процесс. Для вопросов про динамику бери её, а не сочиняй свой запрос.\n" +
+"ЕСЛИ метрики, о которой ты пишешь в тексте, нет ни в одной доступной колонке — chart\n" +
+"НЕ заполняй вовсе. Отсутствие графика честнее, чем график про другую метрику.\n" +
 "ВАЖНО: если итоговый ответ построен на результате твоего SQL-запроса — обязательно\n" +
 "заполни chart с from=sql. Без этого графика не будет вовсе: показывать результат\n" +
 "запроса, о котором ты не просила, мы не станем — он может относиться к другим данным,\n" +
@@ -3217,6 +3272,11 @@ class Program
                         chartFrom = from;
                         var arr = From("array");
                         var view = From("view");
+                        // Потолок в 200 — та же граница, что у исполнителя SQL: просить
+                        // нарисовать больше двухсот столбиков бессмысленно, а ноль означает
+                        // «решай сам» (тогда действует потолок клиента).
+                        int lim = ch.TryGetProperty("limit", out var lv) && lv.ValueKind == JsonValueKind.Number
+                                  && lv.TryGetInt32(out var lvi) && lvi > 0 && lvi <= 200 ? lvi : 0;
                         var colNames = ch.TryGetProperty("columns", out var cc) && cc.ValueKind == JsonValueKind.Array
                             ? cc.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()).ToArray()
                             : Array.Empty<string>();
@@ -3231,7 +3291,7 @@ class Program
                             && from.Substring("tool:".Length) == lastToolName)
                         {
                             using var doc2 = JsonDocument.Parse(JsonSerializer.Serialize(lastToolResult));
-                            dataset = DatasetFromJson(doc2.RootElement, arr, colNames, "tool:" + lastToolName, view);
+                            dataset = DatasetFromJson(doc2.RootElement, arr, colNames, "tool:" + lastToolName, view, lim);
                         }
                         // Промпт задачи 3 просит модель отвечать ровно "preload" (без двоеточия
                         // и без пути) — путь до массива она кладёт отдельно, в "array". Подпись
@@ -3241,11 +3301,11 @@ class Program
                         {
                             using var doc2 = JsonDocument.Parse(JsonSerializer.Serialize(pre));
                             // В предзагрузке лежит { overview, processes } — путь начинается с этих имён.
-                            dataset = DatasetFromJson(doc2.RootElement, arr, colNames, "preload:" + arr, view);
+                            dataset = DatasetFromJson(doc2.RootElement, arr, colNames, "preload:" + arr, view, lim);
                         }
                         else if (from == "sql" && lastSqlRows != null)
                         {
-                            dataset = DatasetFromSqlResult(lastSqlCols, lastSqlTypes, lastSqlRows, lastSqlTruncated, view);
+                            dataset = DatasetFromSqlResult(lastSqlCols, lastSqlTypes, lastSqlRows, lastSqlTruncated, view, lim);
                         }
                     }
                     // Запасного пути здесь больше нет — и это не упрощение, а починка.

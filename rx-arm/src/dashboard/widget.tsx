@@ -4,7 +4,7 @@
 // Данные — из демо-пресетов виджетов (см. data.ts каждого блока).
 // ============================================================
 import React from 'react';
-import { Dashboard } from './Dashboard';
+import { Dashboard } from './dashboard';
 
 export const ArmDashboardWidget: React.FC = () => <Dashboard />;
 

@@ -14,8 +14,8 @@ import type {
   IRemoteComponentContext,
   ILogger,
 } from '@directum/sungero-remote-component-types';
-import { ArmRoot } from '../shared/ArmRoot';
-import '../shared/arm.css';
+import { ArmRoot } from '../shared/arm-root';
+// styles: tokens+tabler via ArmRoot; layout via arm.module.css (cx)
 
 const ControlApp: React.FC<{ args: ILoaderArgs; Widget: React.ComponentType }> = ({
   args,

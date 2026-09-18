@@ -1,10 +1,11 @@
 // ============================================================
-// ArmRoot.tsx — корневая обёртка контрола: .rx-arm-root + data-theme / lang.
-// Под ней живут все стили (arm.css отскоплен этим классом). Тема и культура
-// приходят из контекста хоста (initialContext / onControlUpdate).
+// arm-root.tsx — корень контрола: .rx-arm-root + data-theme / lang.
+// Глобальные tokens + Tabler; компоненты тянут arm.module.css через cx().
 // ============================================================
 import React from 'react';
 import { Theme } from '@directum/sungero-remote-component-types';
+import './styles/tokens.css';
+import './styles/tabler-icons.css';
 
 export interface ArmRootProps {
   theme?: Theme;

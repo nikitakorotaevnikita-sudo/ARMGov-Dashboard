@@ -1,23 +1,27 @@
 // ============================================================
-// CardShell.tsx — карточка виджета: рамка, радиус, шапка с глифом и заголовком,
-// опциональная шестерёнка «Параметры виджета» справа. Разметка и классы — дословно
-// из макета (.card / .card-head / .wico / .ct / .ci / .card-body), стили в arm.css.
-//
-// Как в rx-cover, карточку рисует сам виджет, а не группа хоста. Открытый пункт тот же:
-// проверить на стенде RX-веб, не рисует ли хост-группа поверх свою рамку/тень (будет дубль).
+// card-shell.tsx — карточка виджета (макет). Стили — CSS Modules через cx().
 // ============================================================
 import React from 'react';
 import { Ti, TiName } from './icons';
+import { SPAN_STYLE, cx } from './cx';
 
 export interface CardProps {
   icon: TiName;
   iconColor: string;
   title: string;
-  /** Показывать шестерёнку в шапке. */
   onSettings?: () => void;
-  /** Ширина в 12-колоночной сетке экрана. По макету все блоки — во всю ширину. */
   span?: number;
   children: React.ReactNode;
+}
+
+const ICON_COLORS: Record<string, React.CSSProperties> = {};
+function iconStyle(color: string): React.CSSProperties {
+  let s = ICON_COLORS[color];
+  if (!s) {
+    s = { color };
+    ICON_COLORS[color] = s;
+  }
+  return s;
 }
 
 export const Card: React.FC<CardProps> = ({
@@ -28,14 +32,19 @@ export const Card: React.FC<CardProps> = ({
   span = 12,
   children,
 }) => (
-  <section className='rx-arm-card' style={{ gridColumn: `span ${span}` }}>
-    <div className='rx-arm-card-head'>
-      <Ti name={icon} className='rx-arm-wico' style={{ color: iconColor }} />
-      <span className='rx-arm-ct'>{title}</span>
+  <section className={cx('rx-arm-card')} style={SPAN_STYLE[span] ?? SPAN_STYLE[12]}>
+    <div className={cx('rx-arm-card-head')}>
+      <Ti name={icon} className={cx('rx-arm-wico')} style={iconStyle(iconColor)} />
+      <span className={cx('rx-arm-ct')}>{title}</span>
       {onSettings ? (
-        <Ti name='settings' className='rx-arm-ci' title='Параметры виджета' onClick={onSettings} />
+        <Ti
+          name='settings'
+          className={cx('rx-arm-ci')}
+          title='Параметры виджета'
+          onClick={onSettings}
+        />
       ) : null}
     </div>
-    <div className='rx-arm-card-body'>{children}</div>
+    <div className={cx('rx-arm-card-body')}>{children}</div>
   </section>
 );

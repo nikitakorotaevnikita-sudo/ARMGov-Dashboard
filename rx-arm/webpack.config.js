@@ -1,66 +1,73 @@
-// webpack.config.js — Webpack 5 Module Federation для Directum RX Remote Component (Cover scope).
-// Канон: knowledge-base/patterns/vendor-frontend/02-build-webpack-mf.md +
-//        .claude/skills/implementor-kb/assets/rc/reference-examples/webpack.config.js
-// Портировано из omni-cover-employee/webpack.config.js — тот же канон сборки, другой хост/визуал.
+// webpack.config.js — Webpack 5 Module Federation для Directum RX Remote Component (Cover).
+// Канон: sungero-remote-component-example-react (deploy path, MiniCss prepend, CSS Modules).
 //
-// Режимы:
-//   release            → webpack --mode production               (MF + metadata + минификация → dist/)
-//   dev:remote         → webpack --mode development               (MF-сборка)
-//   dev:standalone     → webpack --mode development --env mode=standalone (SPA-превью, без MF)
-//
-// react/react-dom НЕ шарим с хостом: RX-веб (26.2.0.0068) сам singleton'ит React 17.0.2,
-// а наш код собран на 18 (createRoot из react-dom/client — API, которого в 17 нет). При
-// shared+singleton MF предупреждает про несовпадение версий, но всё равно отдаёт версию
-// хоста — react-dom/client.createRoot резолвится в undefined → падение в рантайме
-// («(0, n.s) is not a function»). Раз хост не даёт совместимую версию — носим свою React
-// 18 бандлом внутри RC, изолированно от React-дерева хоста (мы монтируемся в свой
-// контейнер через createRoot, в DOM хоста не заходим — изоляция безопасна).
+// WORKAROUND-05: по умолчанию react НЕ в shared (хост RX 26.2 → React 17).
+// Включить shared: ARMGOV_SHARED_REACT=1 в .env после проверки версии хоста ≥18.
+require('dotenv').config();
+
 const path = require('path');
 const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const TerserPlugin = require('terser-webpack-plugin');
 const CssMinimizerPlugin = require('css-minimizer-webpack-plugin');
+const { dependencies } = require('./package.json');
 
-// Плагин метаданных может экспортироваться по-разному (default / named / direct) — fallback-паттерн.
 const _pluginPkg = require('@directum/sungero-remote-component-metadata-plugin');
 const SungeroRemoteComponentMetadataPlugin =
   _pluginPkg.SungeroRemoteComponentMetadataPlugin || _pluginPkg.default || _pluginPkg;
 
 const manifest = require('./component.manifest.js');
 
-// publicName = `${vendorName}_${componentName}_${version с '.'→'_'}` → имя MF-контейнера.
 const remoteEntryName = `${manifest.vendorName}_${manifest.componentName}_${manifest.componentVersion.replace(/\./g, '_')}`;
+const shareReact = process.env.ARMGOV_SHARED_REACT === '1';
+
+function resolveOutputPath(isStandalone, isProduction) {
+  if (
+    !isStandalone &&
+    !isProduction &&
+    process.env.SUNGERO_DEPLOY_BASE &&
+    process.env.SUNGERO_SOLUTION_NAME &&
+    process.env.SUNGERO_COMPONENT_NAME
+  ) {
+    return path.resolve(
+      process.env.SUNGERO_DEPLOY_BASE,
+      `${process.env.SUNGERO_SOLUTION_NAME}.Components`,
+      process.env.SUNGERO_COMPONENT_NAME,
+    );
+  }
+  return path.resolve(__dirname, 'dist');
+}
 
 module.exports = (env, argv) => {
   const isProduction = argv.mode === 'production';
-  const isStandalone = env && env.mode === 'standalone';
+  const isStandalone = Boolean(env && env.mode === 'standalone');
+  const extractCss = !isStandalone;
+  const cssLoader = extractCss ? MiniCssExtractPlugin.loader : 'style-loader';
 
-  // Канон платформы (vendor-frontend/02): хост запрашивает у контейнера единый
-  // реестр `loaders` (component.loaders.ts) + `publicPath`. НЕ пер-loader модули —
-  // иначе хост падает с «Module "loaders" does not exist in container».
-  const exposes = {
-    loaders: './component.loaders.ts',
-    publicPath: './public-path.js',
-  };
+  const federationShared = shareReact
+    ? {
+        'react': { requiredVersion: dependencies.react },
+        'react-dom': { requiredVersion: dependencies['react-dom'] },
+      }
+    : undefined;
 
-  const config = {
+  return {
     entry: isStandalone
       ? { index: './index.js' }
       : {
           index: './index.js',
-          // dual entry — обязательно для Module Federation runtime
           [remoteEntryName]: './public-path.js',
         },
     output: {
-      path: path.resolve(__dirname, 'dist'),
+      path: resolveOutputPath(isStandalone, isProduction),
       filename: isProduction
         ? `[name]_${manifest.componentVersion.replace(/\./g, '_')}_[contenthash:8].js`
-        : '[name].js',
+        : `[name]_${manifest.componentVersion.replace(/\./g, '_')}.js`,
       chunkFilename: isProduction
         ? `chunks/[id]_${manifest.componentVersion.replace(/\./g, '_')}_[contenthash:8].js`
-        : 'chunks/[id].js',
-      publicPath: 'auto',
+        : `chunks/[id]_${manifest.componentVersion.replace(/\./g, '_')}.js`,
+      publicPath: '',
       clean: true,
     },
     resolve: {
@@ -82,54 +89,82 @@ module.exports = (env, argv) => {
           },
         },
         {
+          test: /\.module\.css$/,
+          use: [
+            cssLoader,
+            {
+              loader: 'css-loader',
+              options: {
+                modules: {
+                  localIdentName: isProduction
+                    ? '[hash:base64:8]'
+                    : '[name]__[local]--[hash:base64:5]',
+                  namedExport: false,
+                },
+              },
+            },
+          ],
+        },
+        {
           test: /\.css$/,
-          use: [isProduction ? MiniCssExtractPlugin.loader : 'style-loader', 'css-loader'],
+          exclude: /\.module\.css$/,
+          use: [cssLoader, 'css-loader'],
         },
         {
           test: /\.(png|jpg|jpeg|gif)$/,
           type: 'asset/resource',
+          generator: {
+            filename: `images/[name]_${manifest.componentVersion}[ext]`,
+          },
         },
         {
-          // SVG — data-URI в бандл: remote-компонент не тянет отдельные ассеты.
           test: /\.svg$/,
           type: 'asset/inline',
         },
       ],
     },
-    plugins: [
-      ...(isStandalone
-        ? [new HtmlWebpackPlugin({ template: './public/index.html' })]
-        : [
-            new webpack.container.ModuleFederationPlugin({
-              name: remoteEntryName,
-              filename: 'remoteEntry.js',
-              exposes,
-            }),
-            new SungeroRemoteComponentMetadataPlugin(manifest),
-            ...(isProduction
-              ? [
-                  new MiniCssExtractPlugin({
-                    filename: 'css/[name].[contenthash:8].css',
-                    // Канон платформы: CSS RC выше стилей хоста, иначе правила хоста
-                    // перебивают контрол. См. sungero-remote-component-example-react.
-                    insert: linkTag => document.head.prepend(linkTag),
-                  }),
-                ]
-              : []),
-          ]),
-    ],
+    plugins: isStandalone
+      ? [new HtmlWebpackPlugin({ template: './public/index.html' })]
+      : [
+          new MiniCssExtractPlugin({
+            filename: isProduction ? 'css/[name].[contenthash:8].css' : 'css/[name].css',
+            insert: linkTag => document.head.prepend(linkTag),
+          }),
+          new webpack.container.ModuleFederationPlugin({
+            name: remoteEntryName,
+            filename: 'remoteEntry.js',
+            exposes: {
+              loaders: './component.loaders.ts',
+              publicPath: './public-path.js',
+            },
+            ...(federationShared ? { shared: federationShared } : {}),
+          }),
+          new SungeroRemoteComponentMetadataPlugin(manifest),
+        ],
     optimization: {
       moduleIds: 'deterministic',
-      minimizer: [new TerserPlugin(), new CssMinimizerPlugin()],
-    },
-    devServer: {
-      port: 3002,
-      hot: true,
-      static: { directory: path.resolve(__dirname, 'dist') },
-      headers: { 'Access-Control-Allow-Origin': '*' },
+      minimizer: [
+        new TerserPlugin({
+          parallel: true,
+          terserOptions: {
+            mangle: true,
+            format: { comments: false },
+          },
+          extractComments: false,
+        }),
+        new CssMinimizerPlugin({
+          minimizerOptions: {
+            preset: [
+              'default',
+              {
+                discardComments: { removeAll: true },
+                colormin: false,
+              },
+            ],
+          },
+        }),
+      ],
     },
     devtool: isProduction ? 'nosources-source-map' : 'eval-source-map',
   };
-
-  return config;
 };

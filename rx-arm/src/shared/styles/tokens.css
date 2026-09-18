@@ -1,0 +1,66 @@
+/* Поверхности/текст → --theme_* хоста; акценты макета. */
+:root,
+.rx-arm-root {
+  --navy: #13406d;
+  --create: #13406d;
+  --create-hover: #0f3355;
+  --topbar-create: #187fa9;
+  --orange: #ff8600;
+  --page: var(--theme_background, #f4f4f4);
+  --card: var(--theme_widget-background, #ffffff);
+  --border: var(--theme_widget-border-color, #dfe0e3);
+  --border-strong: var(--theme_border-color-dark, #c2c2c2);
+  --text: var(--theme_text-primary, #121416);
+  --muted: var(--theme_text-secondary, #727272);
+  --hint: var(--theme_text-tertiary, #bdbdbd);
+  --link: var(--theme_text-link, #187fa9);
+  --green: var(--theme_green-entity-color, #2e9f0c);
+  --red: var(--theme_high-importance-text-brush, #ff3333);
+  --amber: var(--theme_warning-text-brush, #ff8600);
+  --soft: var(--theme_hover, #f4f4f4);
+  --selected: var(--theme_primary-selected-light, #f2f7fe);
+  --selected-hover: var(--theme_hover, #f4f8fd);
+  --m-rx: #e09952;
+  --m-proj: #1fad4e;
+  --m-tgt: #2789b9;
+  --m-esm: #2f8f9e;
+  --m-hr: #b381e4;
+}
+
+.rx-arm-root {
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-family:
+    'Segoe UI',
+    -apple-system,
+    BlinkMacSystemFont,
+    system-ui,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.rx-arm-root,
+.rx-arm-root * {
+  box-sizing: border-box;
+}
+
+.rx-arm-root[data-theme='Night'],
+:root:has(.rx-arm-root[data-theme='Night']) {
+  --page: var(--theme_background, #1e1e1e);
+  --card: var(--theme_widget-background, #353535);
+  --border: var(--theme_widget-border-color, #4a4a4a);
+  --border-strong: var(--theme_border-color-dark, #5f5e5e);
+  --text: var(--theme_text-primary, #f4f4f4);
+  --muted: var(--theme_text-secondary, #999999);
+  --hint: var(--theme_text-tertiary, #8a8a8a);
+  --link: var(--theme_text-link, #6fb3f2);
+  --soft: var(--theme_hover, #3f3f3f);
+  --selected: var(--theme_primary-selected-light, #2e3b4a);
+  --selected-hover: var(--theme_hover, #354556);
+  --create: #6b9ac4;
+  --create-hover: #87b0d4;
+  --navy: #6b9ac4;
+}

@@ -1,106 +1,8 @@
-/* Токены: поверхности/текст/ссылка → --theme_* хоста (канон example-react),
-   фоллбэки — макет 2026-09-04-mvp-screen-rx_v2_fixed. Акценты бренда (--create/…)
-   остаются макетными. Расширение палитры только здесь. */
-:root {
-  --navy: #13406d;
-  --create: #13406d;
-  --create-hover: #0f3355;
-  --topbar-create: #187fa9;
-  --orange: #ff8600;
-  --page: var(--theme_background, #f4f4f4);
-  --card: var(--theme_widget-background, #ffffff);
-  --border: var(--theme_widget-border-color, #dfe0e3);
-  --border-strong: var(--theme_border-color-dark, #c2c2c2);
-  --text: var(--theme_text-primary, #121416);
-  --muted: var(--theme_text-secondary, #727272);
-  --hint: var(--theme_text-tertiary, #bdbdbd);
-  --link: var(--theme_text-link, #187fa9);
-  --green: var(--theme_green-entity-color, #2e9f0c);
-  --red: var(--theme_high-importance-text-brush, #ff3333);
-  --amber: var(--theme_warning-text-brush, #ff8600);
-  --soft: var(--theme_hover, #f4f4f4);
-  --selected: var(--theme_primary-selected-light, #f2f7fe);
-  --selected-hover: var(--theme_hover, #f4f8fd);
-  --m-rx: #e09952;
-  --m-proj: #1fad4e;
-  --m-tgt: #2789b9;
-  --m-esm: #2f8f9e;
-  --m-hr: #b381e4;
-}
-
-/* Tabler Icons 3.11.0 — сабсет шрифта из мокапа (9 глифов). Лицензия MIT, tabler.io.
-   Имя семейства с префиксом rx-arm-, чтобы не пересечься с хостом/другими RC. */
-@font-face {
-  font-family: 'rx-arm-tabler-icons';
-  font-style: normal;
-  font-weight: 400;
-  src: url(data:font/woff2;base64,@@FONT@@) format('woff2');
-}
-.rx-arm-ti {
-  font-family: 'rx-arm-tabler-icons' !important;
-  speak: none;
-  font-style: normal;
-  font-weight: normal;
-  font-variant: normal;
-  text-transform: none;
-  line-height: 1;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-.rx-arm-ti-settings:before {
-  content: '\eb20';
-}
-.rx-arm-ti-search:before {
-  content: '\eb1c';
-}
-.rx-arm-ti-x:before {
-  content: '\eb55';
-}
-.rx-arm-ti-check:before {
-  content: '\ea5e';
-}
-.rx-arm-ti-arrow-narrow-right:before {
-  content: '\ea1c';
-}
-.rx-arm-ti-users:before {
-  content: '\ebf2';
-}
-.rx-arm-ti-clipboard-list:before {
-  content: '\ea6d';
-}
-.rx-arm-ti-eye-check:before {
-  content: '\ee88';
-}
-.rx-arm-ti-heartbeat:before {
-  content: '\ef92';
-}
-
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-body {
-  background: var(--page);
-  color: var(--text);
-  font-size: 13px;
-  font-family:
-    'Segoe UI',
-    -apple-system,
-    BlinkMacSystemFont,
-    system-ui,
-    'Helvetica Neue',
-    Arial,
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
+/* CSS Modules: классы макета, изоляция через hash webpack */
 .rx-arm-wrap {
   padding: 20px;
-  max-width: 1440px;
-  margin: 0 auto;
+  width: 100%;
 }
-
-/* кнопки — из v2_fixed */
 .rx-arm-tbtn {
   display: inline-flex;
   align-items: center;
@@ -144,16 +46,12 @@ body {
   border-color: transparent;
   color: var(--text);
 }
-
-/* 12-колоночная сетка стола */
 .rx-arm-cfgw-grid {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 16px;
   align-items: start;
 }
-
-/* карточка виджета */
 .rx-arm-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -185,8 +83,6 @@ body {
 .rx-arm-card-body {
   padding: 12px 14px;
 }
-
-/* шапка виджета в собранном рабочем столе — из v2_fixed */
 .rx-arm-cfgw .rx-arm-card-head {
   gap: 10px;
   padding: 13px 16px;
@@ -203,16 +99,14 @@ body {
   flex: none;
   line-height: 1;
 }
-.rx-arm-card-head .rx-arm-wico.rx-ico,
-.rx-ico {
+.rx-arm-card-head .rx-arm-wico:global(.rx-ico),
+:global(.rx-ico) {
   width: 20px;
   height: 20px;
   display: block;
   flex: none;
   object-fit: contain;
 }
-
-/* футер «показать все» */
 .rx-arm-footer-link {
   border-top: 1px solid var(--border);
   margin-top: 10px;
@@ -233,8 +127,6 @@ body {
 .rx-arm-footer-link a:hover {
   text-decoration: underline;
 }
-
-/* ===== Виджеты АРМ — правила из v2_fixed ===== */
 .armk {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -270,13 +162,11 @@ body {
   margin-top: 4px;
   font-weight: 600;
 }
-
 .arme {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
   gap: 10px;
 }
-/* Акцент статуса — тонкая левая грань (канон RX UI kit), не цветная «шапка» сверху. */
 .arme-c {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -377,7 +267,6 @@ body {
   color: var(--hint);
   font-size: 13px;
 }
-
 .armt-tabs {
   display: flex;
   gap: 2px;
@@ -477,7 +366,6 @@ body {
 .armr-s.rx-arm-over i {
   background: var(--red);
 }
-
 .armtl {
   width: 100%;
   border-collapse: collapse;
@@ -539,12 +427,10 @@ body {
   min-width: 34px;
   text-align: right;
 }
-
-/* диалог «Параметры виджета» */
 .dcp-ov {
   position: fixed;
   inset: 0;
-  /* WORKAROUND-01: 10000 — API хоста не даёт z-index порталов */
+
   z-index: 10000;
   display: flex;
   align-items: center;
@@ -718,64 +604,4 @@ body {
   margin-right: auto;
   font-size: 13px;
   color: var(--muted);
-}
-
-/* Тема Night — data-theme на .rx-arm-root (ArmRoot / onControlUpdate).
-   Поверхности снова через --theme_* (хост или Preview DARK_THEME_VARS);
-   фоллбэки = стенд RX-веб. --create отдельно от --link (navy макета для KPI).
-   WORKAROUND-01: z-index оверлея. Селекторы с корнем — scope_css не трогает. */
-.rx-arm-root[data-theme='Night'] {
-  --page: var(--theme_background, #1e1e1e);
-  --card: var(--theme_widget-background, #353535);
-  --border: var(--theme_widget-border-color, #4a4a4a);
-  --border-strong: var(--theme_border-color-dark, #5f5e5e);
-  --text: var(--theme_text-primary, #f4f4f4);
-  --muted: var(--theme_text-secondary, #999999);
-  --hint: var(--theme_text-tertiary, #8a8a8a);
-  --link: var(--theme_text-link, #6fb3f2);
-  --soft: var(--theme_hover, #3f3f3f);
-  --selected: var(--theme_primary-selected-light, #2e3b4a);
-  --selected-hover: var(--theme_hover, #354556);
-  --create: #6b9ac4;
-  --create-hover: #87b0d4;
-  --navy: #6b9ac4;
-}
-.rx-arm-root[data-theme='Night'] .armk-t:hover {
-  border-color: #5a6a7a;
-  background: var(--card);
-}
-.rx-arm-root[data-theme='Night'] .dcp-ov {
-  background: rgba(0, 0, 0, 0.55);
-}
-.rx-arm-root[data-theme='Night'] .arme-tag.rx-arm-ok {
-  background: #2a3d24;
-  color: #8fd16a;
-}
-.rx-arm-root[data-theme='Night'] .arme-tag.rx-arm-bad {
-  background: #4a2a2a;
-  color: #ff8a8a;
-}
-
-.rx-arm-footer-link button {
-  background: none;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  color: var(--link);
-  cursor: pointer;
-}
-.rx-arm-footer-link button:hover {
-  text-decoration: underline;
-}
-
-@media (max-width: 1100px) {
-  .rx-arm-cfgw-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-  .rx-arm-cfgw-grid > .rx-arm-card {
-    grid-column: span 6 !important;
-  }
-  .armk {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }

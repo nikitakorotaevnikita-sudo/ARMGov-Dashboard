@@ -1,0 +1,52 @@
+@font-face {
+  font-family: 'rx-arm-tabler-icons';
+  font-style: normal;
+  font-weight: 400;
+  src: url(data:font/woff2;base64,@@FONT@@) format('woff2');
+}
+.rx-arm-root .rx-arm-ti {
+  font-family: 'rx-arm-tabler-icons', sans-serif;
+  speak: none;
+  font-style: normal;
+  font-weight: normal;
+  font-variant: normal;
+  text-transform: none;
+  line-height: 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.rx-arm-root .rx-arm-ti-settings:before {
+  content: '\eb20';
+}
+.rx-arm-root .rx-arm-ti-search:before {
+  content: '\eb1c';
+}
+.rx-arm-root .rx-arm-ti-x:before {
+  content: '\eb55';
+}
+.rx-arm-root .rx-arm-ti-check:before {
+  content: '\ea5e';
+}
+.rx-arm-root .rx-arm-ti-arrow-narrow-right:before {
+  content: '\ea1c';
+}
+.rx-arm-root .rx-arm-ti-users:before {
+  content: '\ebf2';
+}
+.rx-arm-root .rx-arm-ti-clipboard-list:before {
+  content: '\ea6d';
+}
+.rx-arm-root .rx-arm-ti-eye-check:before {
+  content: '\ee88';
+}
+.rx-arm-root .rx-arm-ti-heartbeat:before {
+  content: '\ef92';
+}
+
+.rx-arm-root .rx-ico {
+  width: 20px;
+  height: 20px;
+  display: block;
+  flex: none;
+  object-fit: contain;
+}

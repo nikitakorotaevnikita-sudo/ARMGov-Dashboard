@@ -3,12 +3,15 @@ node_modules/
 
 # Артефакты сборки (metadata.json генерируется плагином в dist/ — не коммитить)
 dist/
+build/
+out/
 *.tsbuildinfo
+.eslintcache
 
-# Секреты и локальная среда
+# environment (как в sungero-remote-component-example-react)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Логи и мусор
 *.log
@@ -17,3 +20,7 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 Thumbs.db
+
+# IDE
+.idea/
+.vscode/

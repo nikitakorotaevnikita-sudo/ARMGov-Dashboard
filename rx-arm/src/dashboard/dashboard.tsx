@@ -1,32 +1,22 @@
 // ============================================================
-// Dashboard.tsx — экран АРМ руководителя целиком: то, что ставится на обложку RX
-// одним спец-контролом. Порядок и ширины блоков — из макета 2026-09-04-mvp-screen-rx.html:
-// 12-колоночная сетка .cfgw-grid, все четыре блока во всю ширину (span 12).
-//
-//   1. Поручения организации        — KPI по срокам
-//   2. Статус исполнения по сотрудникам — состав задаёт руководитель (диалог)
-//   3. Мои контрольные поручения    — список с вкладками
-//   4. Здоровье процесса «Поручения»
-//
-// Диалог выбора сотрудников — сосед .wrap, а не потомок: у .wrap включён container-type
-// (контейнерные запросы вместо медиа-запросов макета), а он делает элемент containing block
-// для position:fixed — оверлей внутри .wrap схлопнулся бы до ширины контейнера.
+// Dashboard — экран АРМ на обложку RX одним Cover-контролом.
+// Модалка через createPortal (employee-picker) — вне container-type .wrap.
 // ============================================================
 import React, { useState } from 'react';
-import { OrgOrders } from '../widgets/w1-org-orders/OrgOrders';
+import { OrgOrders } from '../widgets/w1-org-orders/org-orders';
 import { PRESET as ORG_PRESET } from '../widgets/w1-org-orders/data';
-import { Employees } from '../widgets/w2-employees/Employees';
-import { EmployeePicker } from '../widgets/w2-employees/EmployeePicker';
+import { Employees } from '../widgets/w2-employees/employees';
+import { EmployeePicker } from '../widgets/w2-employees/employee-picker';
 import { PRESET as EMP_PRESET } from '../widgets/w2-employees/data';
-import { MyControl } from '../widgets/w3-my-control/MyControl';
+import { MyControl } from '../widgets/w3-my-control/my-control';
 import { PRESET as CONTROL_PRESET } from '../widgets/w3-my-control/data';
-import { ProcessHealth } from '../widgets/w4-process-health/ProcessHealth';
+import { ProcessHealth } from '../widgets/w4-process-health/process-health';
 import { PRESET as HEALTH_PRESET } from '../widgets/w4-process-health/data';
 import { OrgOrdersData } from '../widgets/w1-org-orders/types';
 import { EmployeesData } from '../widgets/w2-employees/types';
 import { MyControlData } from '../widgets/w3-my-control/types';
 import { ProcessHealthData } from '../widgets/w4-process-health/types';
-import '../shared/arm.css';
+import { cx } from '../shared/cx';
 
 export interface DashboardProps {
   org?: OrgOrdersData;
@@ -46,11 +36,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <>
-      {/* Класс cfgw обязателен: он включает вариант шапки виджета из собранного рабочего
-          стола (заголовок 15.5px / 600 / --text, паддинги 13-16) — именно он в макете.
-          Без него срабатывает базовое правило .card-head .ct (13px / 600). */}
-      <div className='rx-arm-wrap rx-arm-cfgw'>
-        <div className='rx-arm-cfgw-grid'>
+      <div className={cx('rx-arm-wrap', 'rx-arm-cfgw')}>
+        <div className={cx('rx-arm-cfgw-grid')}>
           <OrgOrders data={org} />
           <Employees
             employees={employees.employees}

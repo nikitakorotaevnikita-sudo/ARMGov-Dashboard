@@ -1,15 +1,8 @@
-// ============================================================
-// MyControl.tsx — блок 3 «Мои контрольные поручения»: вкладки-фильтры + список строк
-// + ссылка «Показать все». Разметка дословно из макета: .armt-tabs > .armt-tab[.on] > .n,
-// строки .armr (.armr-m > .armr-t + .armr-n, .armr-d, .armr-s[.over]), подвал .w-footer-link.
-//
-// Правило 5 дизайн-гайда: в виджете не более пяти строк, остальное — за ссылкой.
-// Счётчики вкладок считаются по данным, а не проставлены руками (см. data.ts).
-// ============================================================
 import React, { useState } from 'react';
-import { Card } from '../../shared/CardShell';
+import { Card } from '../../shared/card-shell';
 import { Ti } from '../../shared/icons';
 import { ARM } from '../../shared/tokens';
+import { cx } from '../../shared/cx';
 import { ControlTab, MyControlData } from './types';
 import { byTab, dueTone, TABS } from './data';
 
@@ -26,27 +19,27 @@ export const MyControl: React.FC<MyControlProps> = ({ data }) => {
 
   return (
     <Card icon='eye-check' iconColor={ARM.orange} title='Мои контрольные поручения'>
-      <div className='armt-tabs'>
+      <div className={cx('armt-tabs')}>
         {TABS.map(t => (
           <span
             key={t.id}
-            className={t.id === tab ? 'armt-tab rx-arm-on' : 'armt-tab'}
+            className={cx('armt-tab', t.id === tab && 'rx-arm-on')}
             onClick={() => setTab(t.id)}
           >
             {t.label}
-            <span className='rx-arm-n'>{byTab(data.orders, t.id).length}</span>
+            <span className={cx('rx-arm-n')}>{byTab(data.orders, t.id).length}</span>
           </span>
         ))}
       </div>
 
       {shown.map(o => (
-        <div key={o.id} className='armr'>
-          <span className='armr-m'>
-            <span className='armr-t'>{o.title}</span>
-            <span className='armr-n'>{o.note}</span>
+        <div key={o.id} className={cx('armr')}>
+          <span className={cx('armr-m')}>
+            <span className={cx('armr-t')}>{o.title}</span>
+            <span className={cx('armr-n')}>{o.note}</span>
           </span>
-          <span className={dueTone(o.status)}>{o.due}</span>
-          <span className={o.status === 'overdue' ? 'armr-s rx-arm-over' : 'armr-s'}>
+          <span className={cx(...dueTone(o.status).split(/\s+/))}>{o.due}</span>
+          <span className={cx('armr-s', o.status === 'overdue' && 'rx-arm-over')}>
             <i />
             {o.status === 'overdue' ? 'Просрочено' : 'В работе'}
           </span>
@@ -54,7 +47,7 @@ export const MyControl: React.FC<MyControlProps> = ({ data }) => {
       ))}
 
       {rest > 0 ? (
-        <div className='rx-arm-footer-link'>
+        <div className={cx('rx-arm-footer-link')}>
           <Ti name='arrow-narrow-right' />
           <button type='button'>Показать все — ещё {rest}</button>
         </div>

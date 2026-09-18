@@ -1,17 +1,17 @@
 // ============================================================
-// EmployeePicker.tsx — диалог «Параметры виджета — контрольные сотрудники».
-// Разметка .dcp-* из референса RX. Рендер рядом с .wrap (не внутри): у .wrap
-// container-type, иначе position:fixed схлопнется. Esc / фокус / overflow body —
-// с cleanup (WORKAROUND-03 платформы). z-index 10000 — WORKAROUND-01.
+// EmployeePicker — диалог выбора сотрудников.
+// createPortal → document.body (CSS Modules + --theme_* / :root токены).
+// WORKAROUND-01: z-index 10000. WORKAROUND-03: Esc / focus / body overflow.
 // ============================================================
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Ti } from '../../shared/icons';
+import { cx } from '../../shared/cx';
 import { Employee } from './types';
 import { matches } from './data';
 
 export interface EmployeePickerProps {
   employees: Employee[];
-  /** Применённый состав блока — с него начинается черновик при каждом открытии. */
   selected: string[];
   onApply: (selected: string[]) => void;
   onClose: () => void;
@@ -51,9 +51,9 @@ export const EmployeePicker: React.FC<EmployeePickerProps> = ({
 
   const visible = employees.filter(e => matches(e, query));
 
-  return (
+  const ui = (
     <div
-      className='dcp-ov'
+      className={cx('dcp-ov')}
       role='dialog'
       aria-modal='true'
       aria-label='Параметры виджета — контрольные сотрудники'
@@ -61,12 +61,12 @@ export const EmployeePicker: React.FC<EmployeePickerProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className='dcp' onClick={e => e.stopPropagation()}>
-        <div className='dcp-h'>
-          <span className='dcp-ht'>Параметры виджета — контрольные сотрудники</span>
-          <Ti name='x' className='rx-arm-x' title='Закрыть' onClick={onClose} />
+      <div className={cx('dcp')} onClick={e => e.stopPropagation()}>
+        <div className={cx('dcp-h')}>
+          <span className={cx('dcp-ht')}>Параметры виджета — контрольные сотрудники</span>
+          <Ti name='x' className={cx('rx-arm-x')} title='Закрыть' onClick={onClose} />
         </div>
-        <div className='dcp-s'>
+        <div className={cx('dcp-s')}>
           <Ti name='search' />
           <input
             ref={searchRef}
@@ -76,44 +76,44 @@ export const EmployeePicker: React.FC<EmployeePickerProps> = ({
             onChange={e => setQuery(e.target.value)}
           />
         </div>
-        <div className='dcp-list'>
+        <div className={cx('dcp-list')}>
           {visible.length === 0 ? (
-            <div className='dcp-none'>Никого не найдено</div>
+            <div className={cx('dcp-none')}>Никого не найдено</div>
           ) : (
             visible.map(e => {
               const on = draft.includes(e.id);
               return (
                 <div
                   key={e.id}
-                  className={on ? 'dcp-it rx-arm-on' : 'dcp-it'}
+                  className={cx('dcp-it', on && 'rx-arm-on')}
                   onClick={() => toggle(e.id)}
                 >
-                  <span className='dcp-cb'>{on ? <Ti name='check' /> : null}</span>
+                  <span className={cx('dcp-cb')}>{on ? <Ti name='check' /> : null}</span>
                   {e.photo ? (
-                    <img className='armp-ph' src={e.photo} alt='' />
+                    <img className={cx('armp-ph')} src={e.photo} alt='' />
                   ) : (
-                    <span className='armp-ph' />
+                    <span className={cx('armp-ph')} />
                   )}
-                  <span className='dcp-txt'>
-                    <span className='dcp-n'>{e.name}</span>
-                    <span className='dcp-d'>{e.position}</span>
+                  <span className={cx('dcp-txt')}>
+                    <span className={cx('dcp-n')}>{e.name}</span>
+                    <span className={cx('dcp-d')}>{e.position}</span>
                   </span>
-                  <span className='dcp-t'>{e.inWork} в работе</span>
+                  <span className={cx('dcp-t')}>{e.inWork} в работе</span>
                 </div>
               );
             })
           )}
         </div>
-        <div className='dcp-f'>
-          <span className='dcp-cnt'>
+        <div className={cx('dcp-f')}>
+          <span className={cx('dcp-cnt')}>
             Выбрано: {draft.length} из {employees.length}
           </span>
-          <button type='button' className='rx-arm-tbtn' onClick={onClose}>
+          <button type='button' className={cx('rx-arm-tbtn')} onClick={onClose}>
             Отменить
           </button>
           <button
             type='button'
-            className='rx-arm-tbtn rx-arm-primary'
+            className={cx('rx-arm-tbtn', 'rx-arm-primary')}
             onClick={() => onApply(draft)}
           >
             <Ti name='check' />
@@ -123,4 +123,6 @@ export const EmployeePicker: React.FC<EmployeePickerProps> = ({
       </div>
     </div>
   );
+
+  return createPortal(ui, document.body);
 };

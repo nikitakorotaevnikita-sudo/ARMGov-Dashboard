@@ -2,7 +2,7 @@
 // icons.tsx — глифы UI.
 // Шапочные иконки виджетов — цветные SVG из UI kit Directum RX («Обложка»).
 // Системные (settings, search, x, check, arrow) — сабсет Tabler Icons 3.11.0
-// (шрифт в arm.css): монохром, красятся через currentColor.
+// (шрифт в shared/styles/tabler-icons.css): монохром, красятся через currentColor.
 // ============================================================
 import React from 'react';
 import clipboardListSvg from './rx-icons/clipboard-list.svg';

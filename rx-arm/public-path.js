@@ -1,13 +1,8 @@
-// public-path.js — критично для Module Federation.
-// Хост Directum RX кладёт вычисленный publicPath атрибутом на <script>-тег remoteEntry.js;
-// читаем его в рантайме, иначе split-чанки резолвятся от неверного base URL.
-// Если атрибута нет (напр. отдельный IIS-хостинг) — остаётся output.publicPath: 'auto' из webpack.
+// public-path.js — критично для Module Federation (канон example-react).
+// Хост кладёт publicPath атрибутом на <script> remoteEntry.js.
 try {
-  var cs = document.currentScript;
-  if (cs && cs['publicPath']) {
-    // eslint-disable-next-line no-undef, camelcase
-    __webpack_public_path__ = cs['publicPath'];
-  }
+  // eslint-disable-next-line no-undef, camelcase
+  __webpack_public_path__ = document.currentScript['publicPath'];
 } catch (e) {
-  /* fallback → output.publicPath: 'auto' */
+  /* standalone / отсутствие атрибута — остаётся output.publicPath */
 }

@@ -507,6 +507,22 @@
 .dcp-list {
   overflow-y: auto;
   padding: 8px 10px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) var(--soft);
+}
+.dcp-list::-webkit-scrollbar {
+  width: 10px;
+}
+.dcp-list::-webkit-scrollbar-track {
+  background: var(--soft);
+}
+.dcp-list::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+  border: 2px solid var(--soft);
+}
+.dcp-list::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }
 .dcp-g {
   font-size: 11px;
@@ -533,7 +549,7 @@
 }
 .dcp-it.rx-arm-on {
   background: var(--selected);
-  border-color: var(--create);
+  /* без синего контура — выбор виден по чекбоксу и фону */
 }
 .dcp-cb {
   flex: none;

@@ -65,15 +65,15 @@ eslint `check-file`).
 
 ## Отличия от шаблона example-react
 
-| Тема | Шаблон | У нас |
-| ---- | ------ | ----- |
-| Shared React | в `shared` MF | **по умолчанию выкл.** (WORKAROUND-05): хост RX 26.2 ≈ React 17, код на 18. Включить: `ARMGOV_SHARED_REACT=1` в `.env` после проверки хоста ≥18 |
-| Стили | CSS Modules | то же; плюс глобальные `tokens.css` / Tabler |
-| MiniCssExtract | `insert: prepend` | то же — CSS RC выше стилей хоста |
-| Модалка | хостовый Modal / свои хаки | `createPortal` + WORKAROUND-01/03 (z-index, Esc/focus/scroll) |
-| Имена файлов | kebab-case | то же (`check-file`) |
-| Хост-действия | `canExecuteAction` | `safeExecuteAction` в `host-actions.ts` |
-| Scope | примеры Card/Cover | один Cover-контрол на весь MVP-экран |
+| Тема           | Шаблон                     | У нас                                                                                                                                           |
+| -------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared React   | в `shared` MF              | **по умолчанию выкл.** (WORKAROUND-05): хост RX 26.2 ≈ React 17, код на 18. Включить: `ARMGOV_SHARED_REACT=1` в `.env` после проверки хоста ≥18 |
+| Стили          | CSS Modules                | то же; плюс глобальные `tokens.css` / Tabler                                                                                                    |
+| MiniCssExtract | `insert: prepend`          | то же — CSS RC выше стилей хоста                                                                                                                |
+| Модалка        | хостовый Modal / свои хаки | `createPortal` + WORKAROUND-01/03 (z-index, Esc/focus/scroll)                                                                                   |
+| Имена файлов   | kebab-case                 | то же (`check-file`)                                                                                                                            |
+| Хост-действия  | `canExecuteAction`         | `safeExecuteAction` в `host-actions.ts`                                                                                                         |
+| Scope          | примеры Card/Cover         | один Cover-контрол на весь MVP-экран                                                                                                            |
 
 ## Иконки
 

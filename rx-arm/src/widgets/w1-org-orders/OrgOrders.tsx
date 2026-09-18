@@ -13,12 +13,12 @@ export interface OrgOrdersProps {
 }
 
 export const OrgOrders: React.FC<OrgOrdersProps> = ({ data }) => (
-  <Card icon="clipboard-list" iconColor={ARM.navy} title="Поручения организации">
-    <div className="armk">
-      {orgTiles(data).map((t) => (
-        <div key={t.label} className={t.tone === 'normal' ? 'armk-t' : `armk-t ${t.tone}`}>
-          <div className="armk-v">{t.value}</div>
-          <div className="armk-l">{t.label}</div>
+  <Card icon='clipboard-list' iconColor={ARM.navy} title='Поручения организации'>
+    <div className='armk'>
+      {orgTiles(data).map(t => (
+        <div key={t.label} className={t.tone === 'normal' ? 'armk-t' : `armk-t rx-arm-${t.tone}`}>
+          <div className='armk-v'>{t.value}</div>
+          <div className='armk-l'>{t.label}</div>
         </div>
       ))}
     </div>

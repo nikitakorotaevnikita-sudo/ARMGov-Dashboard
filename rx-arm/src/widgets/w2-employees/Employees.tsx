@@ -20,21 +20,21 @@ export interface EmployeesProps {
 }
 
 export const Employees: React.FC<EmployeesProps> = ({ employees, selected, onOpenPicker }) => {
-  const shown = employees.filter((e) => selected.includes(e.id));
+  const shown = employees.filter(e => selected.includes(e.id));
 
   return (
     <Card
-      icon="users"
+      icon='users'
       iconColor={ARM.link}
-      title="Статус исполнения поручений по сотрудникам"
+      title='Статус исполнения поручений по сотрудникам'
       onSettings={onOpenPicker}
     >
-      <div className="arme">
-        {shown.map((e) => (
+      <div className='arme'>
+        {shown.map(e => (
           <EmployeeCard key={e.id} employee={e} />
         ))}
       </div>
-      {shown.length === 0 ? <div className="arme-none">Сотрудники не выбраны</div> : null}
+      {shown.length === 0 ? <div className='arme-none'>Сотрудники не выбраны</div> : null}
     </Card>
   );
 };
@@ -42,30 +42,32 @@ export const Employees: React.FC<EmployeesProps> = ({ employees, selected, onOpe
 const EmployeeCard: React.FC<{ employee: Employee }> = ({ employee: e }) => {
   const risk = isAtRisk(e);
   return (
-    <article className={risk ? 'arme-c risk' : 'arme-c'}>
-      <div className="arme-h">
-        <img className="arme-ph" src={e.photo} alt="" />
+    <article className={risk ? 'arme-c rx-arm-risk' : 'arme-c'}>
+      <div className='arme-h'>
+        <img className='arme-ph' src={e.photo} alt='' />
         <div>
-          <div className="arme-nm">{e.name}</div>
-          <div className="arme-pos">{e.position}</div>
+          <div className='arme-nm'>{e.name}</div>
+          <div className='arme-pos'>{e.position}</div>
         </div>
       </div>
-      <div className="arme-r">
-        <span className="l">В работе</span>
-        <span className="c">{e.inWork}</span>
+      <div className='arme-r'>
+        <span className='rx-arm-l'>В работе</span>
+        <span className='rx-arm-c'>{e.inWork}</span>
       </div>
-      <div className="arme-r">
-        <span className="l">Срок сегодня</span>
-        <span className={e.dueToday > 0 ? 'c a' : 'c'}>{e.dueToday}</span>
+      <div className='arme-r'>
+        <span className='rx-arm-l'>Срок сегодня</span>
+        <span className={e.dueToday > 0 ? 'rx-arm-c rx-arm-a' : 'rx-arm-c'}>{e.dueToday}</span>
       </div>
-      <div className="arme-r">
-        <span className="l">Просрочено</span>
-        <span className={risk ? 'c r' : 'c'}>{e.overdue}</span>
+      <div className='arme-r'>
+        <span className='rx-arm-l'>Просрочено</span>
+        <span className={risk ? 'rx-arm-c rx-arm-r' : 'rx-arm-c'}>{e.overdue}</span>
       </div>
       {/* Ссылки «Поручения в RX» в подвале нет: в список поручений будем проваливаться
           по клику на саму карточку — обработчик появится вместе с переходом. */}
-      <div className="arme-f">
-        <span className={risk ? 'arme-tag bad' : 'arme-tag ok'}>{risk ? 'Просрочки' : 'В норме'}</span>
+      <div className='arme-f'>
+        <span className={risk ? 'arme-tag rx-arm-bad' : 'arme-tag rx-arm-ok'}>
+          {risk ? 'Просрочки' : 'В норме'}
+        </span>
       </div>
     </article>
   );

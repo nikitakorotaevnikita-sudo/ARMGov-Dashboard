@@ -83,14 +83,16 @@ module.exports = (env, argv) => {
         },
         {
           test: /\.css$/,
-          use: [
-            isProduction ? MiniCssExtractPlugin.loader : 'style-loader',
-            'css-loader',
-          ],
+          use: [isProduction ? MiniCssExtractPlugin.loader : 'style-loader', 'css-loader'],
         },
         {
-          test: /\.(png|jpg|jpeg|gif|svg)$/,
+          test: /\.(png|jpg|jpeg|gif)$/,
           type: 'asset/resource',
+        },
+        {
+          // SVG — data-URI в бандл: remote-компонент не тянет отдельные ассеты.
+          test: /\.svg$/,
+          type: 'asset/inline',
         },
       ],
     },
@@ -105,7 +107,14 @@ module.exports = (env, argv) => {
             }),
             new SungeroRemoteComponentMetadataPlugin(manifest),
             ...(isProduction
-              ? [new MiniCssExtractPlugin({ filename: 'css/[name].[contenthash:8].css' })]
+              ? [
+                  new MiniCssExtractPlugin({
+                    filename: 'css/[name].[contenthash:8].css',
+                    // Канон платформы: CSS RC выше стилей хоста, иначе правила хоста
+                    // перебивают контрол. См. sungero-remote-component-example-react.
+                    insert: linkTag => document.head.prepend(linkTag),
+                  }),
+                ]
               : []),
           ]),
     ],

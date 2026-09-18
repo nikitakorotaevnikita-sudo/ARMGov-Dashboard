@@ -93,21 +93,36 @@ body = "\n".join(render(rules))
 # Контейнер именно на .wrap, а не на .rx-arm-root: container-type включает containment,
 # и корень стал бы containing block для position:fixed — оверлей диалога перестал бы
 # раскрываться на весь экран. Диалог рендерится соседом .wrap, вне контейнера.
-assert "@media(max-width:1100px)" in body, "изменилась форма медиа-запроса в макете"
-body = body.replace("@media(max-width:1100px)", "@container (max-width:1100px)")
-body += "\n.rx-arm-root .wrap{container-type:inline-size}\n"
+media_from = None
+for candidate in ("@media(max-width:1100px)", "@media (max-width: 1100px)"):
+    if candidate in body:
+        media_from = candidate
+        break
+assert media_from, "изменилась форма медиа-запроса в макете"
+body = body.replace(media_from, "@container (max-width:1100px)")
+# Класс контейнера — после префиксации rx-arm-wrap (чеклист изоляции CSS).
+body += "\n.rx-arm-root .rx-arm-wrap{container-type:inline-size}\n"
 
 # Фон: макет — отдельная страница и красит подложку сам (--page, серый). На обложке
 # подложку рисует хост (белая), и серый прямоугольник контрола выделялся заплаткой.
 # Контрол становится прозрачным — цвет подложки берётся у хоста.
-assert "background:var(--page)" in body, "изменилась заливка подложки в макете"
-body = body.replace("background:var(--page)", "background:transparent")
+page_bg = None
+for candidate in ("background:var(--page)", "background: var(--page)"):
+    if candidate in body:
+        page_bg = candidate
+        break
+assert page_bg, "изменилась заливка подложки в макете"
+body = body.replace(page_bg, "background:transparent", 1)
 
 # Ширина: max-width макета обрезала экран на 1440px — при отдалении (Ctrl+колесо)
 # виджеты переставали растягиваться и по краям оставались пустые поля.
 # На обложке ширину задаёт хост, поэтому ограничение снимаем.
-assert "max-width:1440px" in body, "изменилось ограничение ширины в макете"
-body = body.replace("max-width:1440px;margin:0 auto", "width:100%")
+width_re = re.compile(
+    r"max-width:\s*1440px;\s*margin:\s*0\s+auto",
+    re.M,
+)
+assert width_re.search(body), "изменилось ограничение ширины в макете"
+body = width_re.sub("width:100%", body, count=1)
 
 header = (
     "/* ============================================================\n"

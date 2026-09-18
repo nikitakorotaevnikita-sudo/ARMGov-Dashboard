@@ -14,8 +14,8 @@ export interface ProcessHealthProps {
 }
 
 export const ProcessHealth: React.FC<ProcessHealthProps> = ({ data }) => (
-  <Card icon="heartbeat" iconColor={ARM.green} title="Здоровье процесса «Поручения»">
-    <table className="armtl">
+  <Card icon='heartbeat' iconColor={ARM.green} title='Здоровье процесса «Поручения»'>
+    <table className='armtl'>
       <thead>
         <tr>
           <th>Вид поручений</th>
@@ -25,15 +25,20 @@ export const ProcessHealth: React.FC<ProcessHealthProps> = ({ data }) => (
         </tr>
       </thead>
       <tbody>
-        {data.rows.map((r) => (
+        {data.rows.map(r => (
           <tr key={r.kind}>
             <td>{r.kind}</td>
             <td>{r.total}</td>
-            <td className="over">{r.overdue}</td>
+            <td className='rx-arm-over'>{r.overdue}</td>
             <td>
-              <span className="armtl-p">
-                <span className="armtl-b">
-                  <i style={{ width: `${r.health}%`, background: healthColor(r, data.healthThreshold) }} />
+              <span className='armtl-p'>
+                <span className='armtl-b'>
+                  <i
+                    style={{
+                      width: `${r.health}%`,
+                      background: healthColor(r, data.healthThreshold),
+                    }}
+                  />
                 </span>
                 <b>{r.health}%</b>
               </span>

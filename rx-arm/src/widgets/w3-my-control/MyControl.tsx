@@ -25,28 +25,28 @@ export const MyControl: React.FC<MyControlProps> = ({ data }) => {
   const rest = filtered.length - shown.length;
 
   return (
-    <Card icon="eye-check" iconColor={ARM.orange} title="Мои контрольные поручения">
-      <div className="armt-tabs">
-        {TABS.map((t) => (
+    <Card icon='eye-check' iconColor={ARM.orange} title='Мои контрольные поручения'>
+      <div className='armt-tabs'>
+        {TABS.map(t => (
           <span
             key={t.id}
-            className={t.id === tab ? 'armt-tab on' : 'armt-tab'}
+            className={t.id === tab ? 'armt-tab rx-arm-on' : 'armt-tab'}
             onClick={() => setTab(t.id)}
           >
             {t.label}
-            <span className="n">{byTab(data.orders, t.id).length}</span>
+            <span className='rx-arm-n'>{byTab(data.orders, t.id).length}</span>
           </span>
         ))}
       </div>
 
-      {shown.map((o) => (
-        <div key={o.id} className="armr">
-          <span className="armr-m">
-            <span className="armr-t">{o.title}</span>
-            <span className="armr-n">{o.note}</span>
+      {shown.map(o => (
+        <div key={o.id} className='armr'>
+          <span className='armr-m'>
+            <span className='armr-t'>{o.title}</span>
+            <span className='armr-n'>{o.note}</span>
           </span>
           <span className={dueTone(o.status)}>{o.due}</span>
-          <span className={o.status === 'overdue' ? 'armr-s over' : 'armr-s'}>
+          <span className={o.status === 'overdue' ? 'armr-s rx-arm-over' : 'armr-s'}>
             <i />
             {o.status === 'overdue' ? 'Просрочено' : 'В работе'}
           </span>
@@ -54,9 +54,9 @@ export const MyControl: React.FC<MyControlProps> = ({ data }) => {
       ))}
 
       {rest > 0 ? (
-        <div className="w-footer-link">
-          <Ti name="arrow-narrow-right" />
-          <a href="#0">Показать все — ещё {rest}</a>
+        <div className='rx-arm-footer-link'>
+          <Ti name='arrow-narrow-right' />
+          <button type='button'>Показать все — ещё {rest}</button>
         </div>
       ) : null}
     </Card>

@@ -1,0 +1,7 @@
+dist
+node_modules
+tools/assets/tabler_sub2.b64
+tools/assets/rx-icons
+src/shared/arm.css
+*.svg
+package-lock.json

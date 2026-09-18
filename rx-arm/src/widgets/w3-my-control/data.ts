@@ -14,24 +14,96 @@ import { ControlOrder, ControlTab, MyControlData } from './types';
 export const PRESET: MyControlData = {
   pageSize: 5,
   orders: [
-    { id: 'o1', title: 'О мерах по обращению «Выплата заработной платы»', note: '№150-ОГ/Б · Соколов И.П.', due: 'просрочено 42 дн', status: 'overdue' },
-    { id: 'o2', title: 'О подготовке ответа по обращению (освещение ул. Ленина)', note: '№071-ОГ/Л · Морозова Е.А.', due: 'просрочено 12 дн', status: 'overdue' },
-    { id: 'o3', title: 'О предоставлении сведений по программе информатизации', note: '№88-ВН · Гусев В.В.', due: 'срок сегодня', status: 'dueToday' },
-    { id: 'o4', title: 'О согласовании проекта НПА «О региональной программе»', note: '№123-НПА · Кузнецова Э.Э.', due: 'через 3 дня', status: 'inWork' },
-    { id: 'o5', title: 'О результатах рабочей группы по цифровизации услуг', note: '№01-20/2361 · Никитин А.К.', due: 'через 9 дней', status: 'inWork' },
-    { id: 'o6', title: 'О подготовке отчёта по обращениям граждан за квартал', note: '№214-ОГ/К · Лебедева О.С.', due: 'просрочено 5 дн', status: 'overdue' },
-    { id: 'o7', title: 'О формировании плана закупок на следующий период', note: '№45-ПЗ · Ковалёв Д.А.', due: 'через 11 дней', status: 'inWork' },
-    { id: 'o8', title: 'О вводе в эксплуатацию регионального сервиса', note: '№76-ИС · Гусев В.В.', due: 'через 14 дней', status: 'inWork' },
-    { id: 'o9', title: 'О рассмотрении обращения по капитальному ремонту', note: '№188-ОГ/Р · Титова М.В.', due: 'через 6 дней', status: 'inWork' },
-    { id: 'o10', title: 'О подготовке материалов к заседанию правительства', note: '№02-14/553 · Ершов П.Н.', due: 'через 2 дня', status: 'inWork' },
-    { id: 'o11', title: 'Об актуализации регламента межведомственного обмена', note: '№91-РГ · Белова А.И.', due: 'через 20 дней', status: 'inWork' },
-    { id: 'o12', title: 'О согласовании изменений в штатное расписание', note: '№33-ШР · Зайцева Н.П.', due: 'через 17 дней', status: 'inWork' },
+    {
+      id: 'o1',
+      title: 'О мерах по обращению «Выплата заработной платы»',
+      note: '№150-ОГ/Б · Соколов И.П.',
+      due: 'просрочено 42 дн',
+      status: 'overdue',
+    },
+    {
+      id: 'o2',
+      title: 'О подготовке ответа по обращению (освещение ул. Ленина)',
+      note: '№071-ОГ/Л · Морозова Е.А.',
+      due: 'просрочено 12 дн',
+      status: 'overdue',
+    },
+    {
+      id: 'o3',
+      title: 'О предоставлении сведений по программе информатизации',
+      note: '№88-ВН · Гусев В.В.',
+      due: 'срок сегодня',
+      status: 'dueToday',
+    },
+    {
+      id: 'o4',
+      title: 'О согласовании проекта НПА «О региональной программе»',
+      note: '№123-НПА · Кузнецова Э.Э.',
+      due: 'через 3 дня',
+      status: 'inWork',
+    },
+    {
+      id: 'o5',
+      title: 'О результатах рабочей группы по цифровизации услуг',
+      note: '№01-20/2361 · Никитин А.К.',
+      due: 'через 9 дней',
+      status: 'inWork',
+    },
+    {
+      id: 'o6',
+      title: 'О подготовке отчёта по обращениям граждан за квартал',
+      note: '№214-ОГ/К · Лебедева О.С.',
+      due: 'просрочено 5 дн',
+      status: 'overdue',
+    },
+    {
+      id: 'o7',
+      title: 'О формировании плана закупок на следующий период',
+      note: '№45-ПЗ · Ковалёв Д.А.',
+      due: 'через 11 дней',
+      status: 'inWork',
+    },
+    {
+      id: 'o8',
+      title: 'О вводе в эксплуатацию регионального сервиса',
+      note: '№76-ИС · Гусев В.В.',
+      due: 'через 14 дней',
+      status: 'inWork',
+    },
+    {
+      id: 'o9',
+      title: 'О рассмотрении обращения по капитальному ремонту',
+      note: '№188-ОГ/Р · Титова М.В.',
+      due: 'через 6 дней',
+      status: 'inWork',
+    },
+    {
+      id: 'o10',
+      title: 'О подготовке материалов к заседанию правительства',
+      note: '№02-14/553 · Ершов П.Н.',
+      due: 'через 2 дня',
+      status: 'inWork',
+    },
+    {
+      id: 'o11',
+      title: 'Об актуализации регламента межведомственного обмена',
+      note: '№91-РГ · Белова А.И.',
+      due: 'через 20 дней',
+      status: 'inWork',
+    },
+    {
+      id: 'o12',
+      title: 'О согласовании изменений в штатное расписание',
+      note: '№33-ШР · Зайцева Н.П.',
+      due: 'через 17 дней',
+      status: 'inWork',
+    },
   ],
 };
 
 export function byTab(orders: ControlOrder[], tab: ControlTab): ControlOrder[] {
-  if (tab === 'overdue') return orders.filter((o) => o.status === 'overdue');
-  if (tab === 'dueToday') return orders.filter((o) => o.status === 'dueToday');
+  if (tab === 'overdue') return orders.filter(o => o.status === 'overdue');
+  if (tab === 'dueToday') return orders.filter(o => o.status === 'dueToday');
   return orders;
 }
 
@@ -43,7 +115,7 @@ export const TABS: { id: ControlTab; label: string }[] = [
 
 /** Цвет срока: красный у просрочки, оранжевый у «сегодня», обычный у остальных. */
 export function dueTone(status: ControlOrder['status']): string {
-  if (status === 'overdue') return 'armr-d r';
-  if (status === 'dueToday') return 'armr-d a';
+  if (status === 'overdue') return 'armr-d rx-arm-r';
+  if (status === 'dueToday') return 'armr-d rx-arm-a';
   return 'armr-d';
 }

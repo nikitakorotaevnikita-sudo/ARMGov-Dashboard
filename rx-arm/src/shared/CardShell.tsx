@@ -20,13 +20,22 @@ export interface CardProps {
   children: React.ReactNode;
 }
 
-export const Card: React.FC<CardProps> = ({ icon, iconColor, title, onSettings, span = 12, children }) => (
-  <section className="card" style={{ gridColumn: `span ${span}` }}>
-    <div className="card-head">
-      <Ti name={icon} className="wico" style={{ color: iconColor }} />
-      <span className="ct">{title}</span>
-      {onSettings ? <Ti name="settings" className="ci" title="Параметры виджета" onClick={onSettings} /> : null}
+export const Card: React.FC<CardProps> = ({
+  icon,
+  iconColor,
+  title,
+  onSettings,
+  span = 12,
+  children,
+}) => (
+  <section className='rx-arm-card' style={{ gridColumn: `span ${span}` }}>
+    <div className='rx-arm-card-head'>
+      <Ti name={icon} className='rx-arm-wico' style={{ color: iconColor }} />
+      <span className='rx-arm-ct'>{title}</span>
+      {onSettings ? (
+        <Ti name='settings' className='rx-arm-ci' title='Параметры виджета' onClick={onSettings} />
+      ) : null}
     </div>
-    <div className="card-body">{children}</div>
+    <div className='rx-arm-card-body'>{children}</div>
   </section>
 );

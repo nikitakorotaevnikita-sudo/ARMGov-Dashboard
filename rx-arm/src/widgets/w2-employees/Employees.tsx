@@ -25,7 +25,7 @@ export const Employees: React.FC<EmployeesProps> = ({ employees, selected, onOpe
   return (
     <Card
       icon="users"
-      iconColor={ARM.create}
+      iconColor={ARM.link}
       title="Статус исполнения поручений по сотрудникам"
       onSettings={onOpenPicker}
     >

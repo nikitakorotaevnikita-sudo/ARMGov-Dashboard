@@ -186,6 +186,12 @@
   align-items: center;
   margin-bottom: 9px;
 }
+/* Flex-ребёнок без min-width:0 не даёт ellipsis на .arme-pos — текст режется краем плитки. */
+.arme-h > div {
+  min-width: 0;
+  flex: 1 1 0%;
+  overflow: hidden;
+}
 .arme-ph {
   width: 38px;
   height: 38px;
@@ -199,6 +205,9 @@
   font-weight: 600;
   color: var(--text);
   line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .arme-pos {
   font-size: 12px;

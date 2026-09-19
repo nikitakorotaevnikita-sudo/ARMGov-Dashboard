@@ -338,7 +338,8 @@ flowchart TD
 | Обращения | `GET /api/appeals/topics` · `GET /api/appeals/systemic` (ИИ) |
 | Детали | `GET /api/task` · `GET /api/performer` · `GET /api/export` |
 | ИИ | `GET /api/ai/summary` · `POST /api/ai/chat` · `POST /api/ai/explain` |
-| ИИ — глубокий анализ (SQL, только локальные вызовы) | `POST /api/ai/sql` (агент) · `GET /api/ai/sql/check` (проверка запроса) · `GET /api/ai/sql/run` (проверка + исполнение) · `GET /api/ai/schema` (справка по таблице) |
+| ИИ — evidence-backed analytics (Canvas, только локальные вызовы) | `POST /api/ai/analysis` (verified report, clarification, run trace) |
+| ИИ — глубокий анализ (SQL, только локальные вызовы; Qwen compatibility) | `POST /api/ai/sql` (агент) · `GET /api/ai/sql/check` (проверка запроса) · `GET /api/ai/sql/run` (проверка + исполнение) · `GET /api/ai/schema` (справка по таблице) |
 | ИИ — служебное для агента | `GET /api/ai/tools` (каталог инструментов) · `GET /api/ai/tool` (вызов инструмента) · `GET /api/ai/dataset/probe` (отладочная сборка датасета для графика без участия модели, только локальные вызовы) |
 | Служебное | `POST /api/refresh` · `GET/POST /api/config` · `POST /api/config/test` |
 

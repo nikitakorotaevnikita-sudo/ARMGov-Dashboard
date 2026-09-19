@@ -54,12 +54,15 @@ dotnet build -c Release && bin\Release\net10.0\armgov-standalone.exe
 
 ```bash
 python tests/smoke.py http://localhost:5080
+python tests/analysis_smoke.py http://localhost:5080
 node tests/charts.test.js
+node tests/analysis.test.js
+dotnet run --project tools/harness-tests -c Release -- all
 ```
 
-Первый: 186 проверок, включая секции ИИ-харнесса (валидатор SQL, исполнитель, инструменты, схема, цикл агента, сборка датасета для графика, достижимость плоских колонок разбивки и тренда) и белый список раздачи статики (`/config.json` не отдаётся, `charts.js`/`style.css`/`tokens.css` отдаются). Ожидаемый результат — `PASS=186 FAIL=0` **при живой модели**: проверки, зависящие от неё, при недоступности уходят в пометку `[ИИ?]` и не дают ни PASS, ни FAIL.
+`smoke.py` — регрессия дашборда и legacy SQL-харнесса (scope policy намеренно отклоняет `pg_settings`/`information_schema` вне каталога). `analysis_smoke.py` — wire + semantic cases для `POST /api/ai/analysis` (offline без `--live`; live отдельно). Контракт: [docs/technical/analytics-harness-v2.md](docs/technical/analytics-harness-v2.md).
 
-Второй — отдельно, `node tests/charts.test.js`: правила выбора вида (`pickViews`) и пять рендереров `charts.js`. Чистые функции формы данных → вид/разметка, ни сервер, ни модель не нужны — быстрее гонять при правке визуализации, чем ждать smoke. 37 проверок, ожидаемый результат — `PASS=37 FAIL=0`.
+`charts.test.js` / `analysis.test.js` — чистые функции визуализации и рендера verified report.
 
 **После правки `charts.js` в выходной папке (`bin\Release\net10.0\charts.js`) проверяй не только новый экран «Аналитика по запросу», а хотя бы один из пяти старых** — `esc()` теперь живёт там же и нужна `renderNav` при самом первом рендере страницы, так что устаревший файл ломает весь SPA, а не только новый вид.
 

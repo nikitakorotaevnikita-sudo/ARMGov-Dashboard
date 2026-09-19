@@ -1,0 +1,46 @@
+{
+  "runId": "offline-dept",
+  "status": "completed",
+  "report": {
+    "title": "Просрочка по подразделениям",
+    "interpretation": {
+      "metricId": "department_overdue",
+      "label": "Просроченные поручения",
+      "unit": "шт",
+      "from": "2025-09-30T00:00:00+03:00",
+      "to": "2026-09-30T23:59:59+03:00",
+      "dateField": "deadline"
+    },
+    "verifiedText": ["ДИТ — 10"],
+    "facts": {},
+    "blocks": [
+      { "kind": "bars", "resultId": "r1", "columns": ["name", "overdue"], "equalsFilter": null, "limit": null }
+    ],
+    "commentary": null
+  },
+  "datasets": [
+    {
+      "runId": "offline-dept",
+      "resultId": "r1",
+      "data": {
+        "source": "tool:departments",
+        "columns": [
+          { "name": "name", "title": "name", "type": "string" },
+          { "name": "overdue", "title": "overdue", "type": "number" }
+        ],
+        "rows": [["ДИТ", 10]],
+        "effectiveSql": null,
+        "retrievedAt": "2026-09-30T23:59:59+03:00",
+        "truncation": { "rows": false, "columns": false, "cells": [], "bytes": false },
+        "warnings": []
+      }
+    }
+  ],
+  "steps": [
+    { "n": 1, "tool": "run_dashboard_metric", "status": "ok", "elapsedMs": 55, "resultId": "r1", "error": null }
+  ],
+  "elapsedMs": 900,
+  "warnings": [],
+  "clarification": null,
+  "error": null
+}

@@ -20,10 +20,20 @@ create table public.sungero_core_recipient
     status text
 );
 
+create table public.sungero_wf_task
+(
+    id bigint primary key,
+    maintask bigint not null default 0,
+    discriminator uuid not null,
+    created timestamptz not null
+);
+
 create table public.sungero_wf_assignment
 (
     id bigint primary key,
-    performer bigint
+    performer bigint,
+    task bigint,
+    discriminator uuid
 );
 
 insert into public.sungero_core_recipient
@@ -34,11 +44,20 @@ values
     (900000003, 'Босов Виктор Тестович', 900000100, 'Active'),
     (900000100, 'Ивановский испытательный отдел', null, 'Active');
 
-insert into public.sungero_wf_assignment(id, performer)
+insert into public.sungero_wf_assignment(id, performer, task, discriminator)
 values
-    (910000001, 900000001),
-    (910000002, 900000002),
-    (910000003, 900000003);
+    (910000001, 900000001, null, null),
+    (910000002, 900000002, null, null),
+    (910000003, 900000003, null, null);
+
+-- Root dedup fixture: one poruchenie (root), two assignments to the same performer → count=1.
+insert into public.sungero_wf_task(id, maintask, discriminator, created)
+values (920000001, 0, 'c290b098-12c7-487d-bb38-73e2c98f9789', '2026-06-15T12:00:00+03:00');
+
+insert into public.sungero_wf_assignment(id, performer, task, discriminator)
+values
+    (910010001, 900000001, 920000001, '11111111-1111-1111-1111-111111111101'),
+    (910010002, 900000001, 920000001, '11111111-1111-1111-1111-111111111102');
 
 insert into public.sungero_core_recipient
     (id, name, department_company_sungero, status)
@@ -49,8 +68,8 @@ select
     'Active'
 from generate_series(1, 21) as n;
 
-insert into public.sungero_wf_assignment(id, performer)
-select 910001000 + n, 900001000 + n
+insert into public.sungero_wf_assignment(id, performer, task, discriminator)
+select 910001000 + n, 900001000 + n, null, null
 from generate_series(1, 21) as n;
 
 revoke all on schema public from public;
@@ -61,5 +80,6 @@ grant connect on database harness_test to harness_reader;
 grant usage on schema public to harness_reader;
 grant select on public.harness_items,
     public.sungero_core_recipient,
-    public.sungero_wf_assignment
+    public.sungero_wf_assignment,
+    public.sungero_wf_task
 to harness_reader;

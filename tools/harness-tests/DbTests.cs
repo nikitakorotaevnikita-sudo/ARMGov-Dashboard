@@ -166,6 +166,29 @@ public static class DbTests
         Check.True(await resolver.GetAsync(999999999, CancellationToken.None) is null);
     }
 
+    public static async Task RootDeduplicationCountsDistinctInstructions()
+    {
+        var connectionString = TestConnectionString();
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        const string sql = """
+            select count(distinct root.id) as instructions
+            from public.sungero_core_recipient p
+            join public.sungero_wf_assignment a on a.performer = p.id
+            join public.sungero_wf_task t on t.id = a.task
+            join public.sungero_wf_task root on root.id = coalesce(nullif(t.maintask, 0), t.id)
+            where p.id = 900000001
+              and root.discriminator = 'c290b098-12c7-487d-bb38-73e2c98f9789'
+              and root.created >= '2026-01-01'::timestamptz
+              and root.created < '2027-01-01'::timestamptz
+            """;
+
+        await using var command = new NpgsqlCommand(sql, connection);
+        var count = Convert.ToInt64(await command.ExecuteScalarAsync());
+        Check.Equal(1L, count);
+    }
+
     public static async Task EmployeeResolverReportsCandidateOverflow()
     {
         var resolver = new EmployeeResolver(TestConnectionString());

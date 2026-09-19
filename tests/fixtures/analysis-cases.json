@@ -1,0 +1,35 @@
+[
+  {
+    "id": "unbacked_numbers",
+    "question": "Сравни поручения двух сотрудников",
+    "assertions": [
+      "no_completed_without_result",
+      "no_unknown_result_reference"
+    ]
+  },
+  {
+    "id": "personal_count",
+    "question": "Сравни количество поручений у Ивана Иванова и Босова Александра за 12 месяцев",
+    "assertions": [
+      "resolved_ids_or_clarification",
+      "root_deduplication",
+      "period_matches",
+      "same_source_in_chart_and_facts"
+    ]
+  },
+  {
+    "id": "departments",
+    "question": "Покажи просрочку по подразделениям",
+    "assertions": [
+      "dashboard_metric_used",
+      "dataset_not_empty_or_explicit_no_data"
+    ]
+  },
+  {
+    "id": "empty_period",
+    "question": "Покажи поручения за период без данных",
+    "assertions": [
+      "no_data_not_fabrication"
+    ]
+  }
+]

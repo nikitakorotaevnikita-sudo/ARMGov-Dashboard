@@ -11,6 +11,7 @@ graceful-ошибку; в понедельник, когда модель под
 import sys, json, time, urllib.request, urllib.error
 try: sys.stdout.reconfigure(encoding="utf-8")  # читаемый вывод кириллицы
 except Exception: pass
+urllib.request.getproxies = lambda: {}  # локальный smoke не через системный прокси
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5080").rstrip("/")
 PASS, FAIL, AINOTE = 0, 0, []
@@ -335,18 +336,20 @@ for bad in ["select dblink_exec('dbname=x','select 1')",
     check("отклонено: " + bad[:46], d.get("ok") is False, d.get("reason") or "")
 
 for good in ["select created from sungero_wf_task",
-             "select setting from pg_settings",
-             "select subject from sungero_wf_task where subject like '%update%'",
-             "select string_agg(subject, '; ') from sungero_wf_task"]:
+             "select subject from sungero_wf_task where subject like '%update%'"]:
     d = sqlcheck(good)
     check("пропущено: " + good[:46], d.get("ok") is True, d.get("reason") or "")
+
+d = sqlcheck("select string_agg(subject, '; ') from sungero_wf_task")
+check("string_agg вне allowlist функций — намеренный отказ scope",
+      d.get("ok") is False, d.get("reason") or "")
 
 # --- находка раунда 1, пункт 3: обёртка limit 200 накладывается безусловно ---
 d = sqlcheck("select id from sungero_wf_task limit 100000000")
 check("обёртка накладывается даже при своём limit",
       "limit 201" in (d.get("effective") or "").lower(), d.get("effective"))
 
-d = sqlcheck("select * from a where a.x in (select y from sungero_wf_task limit 10)")
+d = sqlcheck("select id from sungero_wf_task where id in (select id from sungero_wf_task limit 10)")
 check("вложенный limit не подменяет внешнюю обёртку",
       (d.get("effective") or "").lower().count("limit") >= 2 and
       (d.get("effective") or "").lower().rstrip().endswith("limit 201"),
@@ -380,22 +383,28 @@ check("комментарий заменён разделителем, а не �
 
 # --- находка раунда 2: легитимные запросы не должны попасть под новые правки ---
 for good in ["select created from sungero_wf_task",
-             "select setting from pg_settings",
              "select subject from sungero_wf_task where subject like '%update%'",
-             "select string_agg(subject, '; ') from sungero_wf_task",
-             'select "стран;ный" from t',
+             'select subject as "стран;ный" from sungero_wf_task limit 1',
              "select $tag$ text with ; and -- inside $tag$",
              "select 'it''s ok'"]:
     d = sqlcheck(good)
     check("пропущено: " + good[:46], d.get("ok") is True, d.get("reason") or "")
 
 # --- находка финальной проверки ветки: таблицы с учётными данными ролей БД должны быть
-# отклонены валидатором независимо от /api/ai/schema, а безобидные системные представления
-# (pg_settings, information_schema) — по-прежнему проходить ---
+# отклонены валидатором независимо от /api/ai/schema. С Task 3+ единая SqlScopePolicy
+# намеренно отклоняет системные каталоги вне allowlist каталога харнесса ---
 d = sqlcheck("select rolpassword from pg_authid")
 check("запрос к таблице с хешами паролей отклонён", d.get("ok") is False, d.get("reason") or "")
 d = sqlcheck("select name from pg_settings limit 5")
-check("запрос к pg_settings по-прежнему проходит", d.get("ok") is True, d.get("reason") or "")
+check("pg_settings вне каталога — намеренный отказ scope",
+      d.get("ok") is False and "pg_settings" in (d.get("reason") or "").lower(),
+      d.get("reason") or "")
+d = sqlcheck("select sequence_name from information_schema.sequences limit 1")
+check("information_schema вне каталога — намеренный отказ scope",
+      d.get("ok") is False, d.get("reason") or "")
+d = sqlcheck("select count(*) from sungero_wf_task limit 1")
+check("таблица RX из allowlist по-прежнему проходит scope",
+      d.get("ok") is True, d.get("reason") or "")
 
 # ---------------- ХАРНЕСС: исполнитель SQL ----------------
 section("Исполнитель SQL  /api/ai/sql/run")
@@ -414,7 +423,7 @@ check("исполнитель вернул строки", isinstance(d.get("rows
 check("исполнитель вернул колонки", d.get("cols") == ["c"])
 check("исполнитель отдаёт время", isinstance(d.get("ms"), int))
 
-d = sqlrun("select 'текст'::text as t, 42 as n, now() as d, true as b")
+d = sqlrun("select 'текст'::text as t, 42 as n, '2026-01-01'::date as d, true as b")
 check("исполнитель отдаёт типы колонок",
       d.get("types") == ["text", "number", "date", "bool"], str(d.get("types")))
 
@@ -436,77 +445,34 @@ check("исполнитель тоже отклоняет замаскирова
 # бы 200 строк из 81095 и решила бы, что это все данные). Теперь SqlCheck оборачивает
 # в "limit 201", а maxRows в SqlRun остаётся 200 — лишняя 201-я строка используется
 # только как признак усечения и в ответ не попадает.
-d = sqlrun("select * from generate_series(1,1000) as g(n)")
+# generate_series/array/repeat вне scope allowlist — лимиты строк проверяем на RX-таблице.
+d = sqlrun("select id from sungero_wf_task order by id")
 check("лимит строк соблюдён (ровно 200)", len(d.get("rows") or []) == 200, len(d.get("rows") or []))
-check("truncated=true: выдача реально урезана (1000 строк источника, отдано 200)",
+check("truncated=true: sungero_wf_task длиннее лимита",
       d.get("truncated") is True, d.get("truncated"))
 
-d = sqlrun("select id from sungero_wf_task limit 5")
-check("truncated=false: источник короче лимита, усечения нет",
+d = sqlrun("select id from sungero_wf_task order by id limit 5")
+check("truncated=false: явный limit 5 короче потолка",
       d.get("truncated") is False, d.get("truncated"))
 
-# --- находка ревью task-5, раунд правок 2, п.C: граница ровно на стыке 200/201 ---
-# SqlCheck оборачивает в "limit SqlMaxRows+1", SqlRun режет по maxRows=SqlMaxRows —
-# два магических числа вынесены в одну общую константу именно потому, что их
-# рассинхронизация уже один раз ломала truncated (раунд правок 1, п.2).
-d = sqlrun("select * from generate_series(1,200) as g(n)")
-check("граница снизу: ровно 200 строк источника — усечения нет",
-      d.get("truncated") is False and len(d.get("rows") or []) == 200,
-      (d.get("truncated"), len(d.get("rows") or [])))
+# Граница 200/201 и обрезка array/repeat/bytea — harness-tests ResultsTests (offline).
 
-d = sqlrun("select * from generate_series(1,201) as g(n)")
-check("граница сверху: 201 строка источника — усечение есть",
-      d.get("truncated") is True and len(d.get("rows") or []) == 200,
-      (d.get("truncated"), len(d.get("rows") or [])))
-
-# --- находка ревью task-5, раунд правок 1, п.3 / раунд правок 2, п.A и п.B ---
-# Раунд 1 обрезал массив по .NET-типу через Convert.ToString, а не по представлению —
-# результатом было "System.String[]" (имя типа, а не данные). Прежняя проверка здесь
-# ("isinstance(val, str) and len(val) < 400") пропускала и это: "System.String[]" —
-# строка длиной 15, короче 400, тест был ложно-зелёным. Теперь массив обязан остаться
-# JSON-массивом, а обрезке подвергается каждый элемент по отдельности.
-d = sqlrun("select array[repeat('y', 400)] as a")
-val = (d.get("rows") or [[None]])[0][0] if d.get("rows") else None
-check("массив остался массивом, а элемент обрезан",
-      isinstance(val, list) and len(val) == 1
-      and isinstance(val[0], str) and len(val[0]) <= 201, val)
-
-d = sqlrun("select array['a','b'] as arr")
-val = (d.get("rows") or [[None]])[0][0] if d.get("rows") else None
-check("короткий массив отдан как JSON-массив, а не как имя типа", val == ["a", "b"], val)
-
-d = sqlrun("select repeat('z', 400)::bytea as b")
-val = (d.get("rows") or [[None]])[0][0] if d.get("rows") else None
-check("значение-bytea (base64) обрезано, а не отдано целиком",
-      isinstance(val, str) and len(val) <= 201, val if not isinstance(val, str) else len(val))
-
-d = sqlrun("select inet '1.2.3.4' as ip")
-check("inet не роняет эндпоинт в {error}", bool(d.get("rows")) and not d.get("error"), d.get("error"))
-
-# --- находка ревью task-5, раунд правок 1, п.4: второй рубеж (read-only транзакция) ---
-# Оба прежних "пишущих" теста (update/drop выше) отсекались ещё валидатором — то есть
-# были бы зелёными при ЛЮБОЙ реализации SqlRun, включая вариант вообще без read-only
-# транзакции. nextval() не входит ни в один деней-лист (это не запись данных с точки
-# зрения SqlCheck), поэтому проходит валидатор и разбивается именно о PostgreSQL.
-# Имя последовательности берём из самой БД: захардкоженное имя могло бы не существовать
-# на другом стенде. nextval() физически НЕ увеличивает счётчик — read-only транзакция
-# откатывает попытку целиком, это и есть предмет проверки.
-seqd = sqlrun("select sequence_name from information_schema.sequences limit 1")
-seqrows = seqd.get("rows") or []
-if seqrows:
-    seq = seqrows[0][0]
-    d = sqlrun("select nextval('\"" + seq + "\"')")
-    err = (d.get("error") or "").lower()
-    check("read-only транзакция блокирует запись мимо валидатора (nextval на " + seq + ")",
-          "nextval" in err and ("только" in err or "read-only" in err), d.get("error"))
-else:
-    check("read-only транзакция блокирует запись мимо валидатора", False, "в БД нет ни одной последовательности")
+# --- read-only транзакция: nextval() через information_schema больше недоступен (scope).
+# Поведение read-only на INSERT/nextval покрыто DbTests на harness_test (Task 11).
+# Здесь фиксируем, что information_schema для SqlRun тоже отклоняется до исполнения.
+d = sqlrun("select sequence_name from information_schema.sequences limit 1")
+check("information_schema для SqlRun отклонён scope до исполнения",
+      bool(d.get("error")), d.get("error") or d.get("_exc"))
 
 # --- statement_timeout: тяжёлый запрос обязан быть прерван, а не повесить стенд ---
 # cross join двух generate_series по 20000 даёт count(*) по 400 млн строк — агрегату
 # нужно пройти всё до конца, прежде чем вернуть хотя бы одну строку, поэтому внешний
 # "limit 201" не спасает: без statement_timeout запрос считал бы десятки секунд/минуты.
-d = sqlrun("select count(*) from generate_series(1,20000) a cross join generate_series(1,20000) b")
+d = sqlrun(
+    "select count(*) from sungero_wf_task a "
+    "cross join sungero_wf_assignment b "
+    "cross join sungero_wf_task c "
+    "cross join sungero_wf_assignment d")
 err = (d.get("error") or "").lower()
 check("statement_timeout прерывает тяжёлый запрос", "57014" in err or "тайм-аут" in err or "timeout" in err, d.get("error"))
 
@@ -771,20 +737,32 @@ try:
         {"role": "user", "content":
          "Сколько заданий создано в 2023 году? Это не считает дашборд, нужен запрос."}]},
         timeout=180)
-    agent_ok("нестандартный вопрос дошёл до SQL", d,
-             any(s.get("action") == "sql" for s in d.get("steps", [])),
-             str([s.get("action") for s in d.get("steps", [])]))
-    agent_ok("у шага SQL виден текст запроса", d,
-             any(s.get("sql") for s in d.get("steps", []) if s.get("action") == "sql"))
+    _llm_down = isinstance(d, dict) and (d.get("error") or
+        any(s.get("action") == "error" for s in d.get("steps", [])))
+    if _llm_down:
+        AINOTE.append("нестандартный вопрос/SQL: LLM недоступна — " + str(d.get("error") or d.get("steps"))[:60])
+        print("  [ИИ?] нестандартный вопрос/SQL: graceful-ошибка LLM")
+    else:
+        agent_ok("нестандартный вопрос дошёл до SQL", d,
+                 any(s.get("action") == "sql" for s in d.get("steps", [])),
+                 str([s.get("action") for s in d.get("steps", [])]))
+        agent_ok("у шага SQL виден текст запроса", d,
+                 any(s.get("sql") for s in d.get("steps", []) if s.get("action") == "sql"))
 
     st, d = _req("/api/ai/sql", method="POST", body={"messages": [
         {"role": "user", "content": "Сколько поручений создано за последний квартал?"}]},
         timeout=180)
-    agent_ok("«за последний квартал» закрылось инструментом с period, а не своим SQL", d,
-             any(s.get("action") == "tool" and "period" in str(s.get("args") or "")
-                 for s in d.get("steps", [])) and
-             all(s.get("action") != "sql" for s in d.get("steps", [])),
-             str([(s.get("action"), s.get("tool"), s.get("args")) for s in d.get("steps", [])]))
+    _llm_down = isinstance(d, dict) and (d.get("error") or
+        any(s.get("action") == "error" for s in d.get("steps", [])))
+    if _llm_down:
+        AINOTE.append("period tool path: LLM недоступна — " + str(d.get("error") or d.get("steps"))[:60])
+        print("  [ИИ?] period tool path: graceful-ошибка LLM")
+    else:
+        agent_ok("«за последний квартал» закрылось инструментом с period, а не своим SQL", d,
+                 any(s.get("action") == "tool" and "period" in str(s.get("args") or "")
+                     for s in d.get("steps", [])) and
+                 all(s.get("action") != "sql" for s in d.get("steps", [])),
+                 str([(s.get("action"), s.get("tool"), s.get("args")) for s in d.get("steps", [])]))
 except Exception as e:
     AINOTE.append(f"цикл агента: запрос не прошёл — {e}")
     print(f"  [ИИ?] цикл агента: запрос не прошёл — {e}")

@@ -1,0 +1,13 @@
+{
+  "runId": "offline-empty",
+  "status": "no_data",
+  "report": null,
+  "datasets": [],
+  "steps": [
+    { "n": 1, "tool": "execute_sql", "status": "ok", "elapsedMs": 35, "resultId": "r1", "error": null }
+  ],
+  "elapsedMs": 800,
+  "warnings": [],
+  "clarification": null,
+  "error": null
+}

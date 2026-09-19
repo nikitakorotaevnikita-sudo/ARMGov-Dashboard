@@ -1,0 +1,20 @@
+{
+  "runId": "offline-unbacked",
+  "status": "incomplete",
+  "report": null,
+  "datasets": [],
+  "steps": [
+    {
+      "n": 1,
+      "tool": "submit_report",
+      "status": "error",
+      "elapsedMs": 12,
+      "resultId": null,
+      "error": { "code": "unknown_result", "message": "result r404 not found", "retryable": true }
+    }
+  ],
+  "elapsedMs": 1200,
+  "warnings": ["отчёт не принят"],
+  "clarification": null,
+  "error": null
+}

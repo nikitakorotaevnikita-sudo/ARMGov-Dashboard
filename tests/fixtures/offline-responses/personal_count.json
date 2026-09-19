@@ -1,0 +1,47 @@
+{
+  "runId": "offline-personal",
+  "status": "completed",
+  "report": {
+    "title": "Сравнение поручений",
+    "interpretation": {
+      "metricId": "personal_instruction_count",
+      "label": "Поручения",
+      "unit": "шт",
+      "from": "2025-09-30T00:00:00+03:00",
+      "to": "2026-09-30T23:59:59+03:00",
+      "dateField": "root.created"
+    },
+    "verifiedText": ["У сотрудника A — 5, у B — 3"],
+    "facts": { "delta": 2 },
+    "blocks": [
+      { "kind": "bars", "resultId": "r1", "columns": ["name", "n"], "equalsFilter": null, "limit": null }
+    ],
+    "commentary": "Комментарий модели, не проверен"
+  },
+  "datasets": [
+    {
+      "runId": "offline-personal",
+      "resultId": "r1",
+      "data": {
+        "source": "sql",
+        "columns": [
+          { "name": "name", "title": "name", "type": "string" },
+          { "name": "n", "title": "n", "type": "number" }
+        ],
+        "rows": [["A", 5], ["B", 3]],
+        "effectiveSql": "select name, count(distinct root.id) n from ...",
+        "retrievedAt": "2026-09-30T23:59:59+03:00",
+        "truncation": { "rows": false, "columns": false, "cells": [], "bytes": false },
+        "warnings": []
+      }
+    }
+  ],
+  "steps": [
+    { "n": 1, "tool": "find_employees", "status": "ok", "elapsedMs": 40, "resultId": null, "error": null },
+    { "n": 2, "tool": "execute_sql", "status": "ok", "elapsedMs": 80, "resultId": "r1", "error": null }
+  ],
+  "elapsedMs": 2100,
+  "warnings": [],
+  "clarification": null,
+  "error": null
+}

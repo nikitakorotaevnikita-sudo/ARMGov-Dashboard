@@ -21,6 +21,9 @@ public static class AgentTests
             Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
             Action("submit_report", ReportArgs("r404", meaning)),
             Action("submit_report", ReportArgs("r404", meaning)),
+            Action("submit_report", ReportArgs("r404", meaning)),
+            Action("submit_report", ReportArgs("r404", meaning)),
+            Action("submit_report", ReportArgs("r404", meaning)),
             Action("submit_report", ReportArgs("r404", meaning)));
 
         var response = await Run(provider);
@@ -28,7 +31,7 @@ public static class AgentTests
         Check.True(response.Status != "completed");
         Check.True(response.Report == null);
         Check.True(response.Steps.Any(step => step.Error?.Code == "unknown_result"));
-        Check.True(provider.CallCount <= 8);
+        Check.True(provider.CallCount <= 12);
         Check.Equal("incomplete", response.Status);
     }
 
@@ -214,14 +217,15 @@ public static class AgentTests
         Check.Equal(1, response.Datasets.Length);
     }
 
-    public static async Task ModelCallBudgetStopsAtEight()
+    public static async Task ModelCallBudgetStopsAtLimit()
     {
-        var actions = Enumerable.Range(0, 10)
+        var actions = Enumerable.Range(0, 20)
             .Select(_ => Action("search_catalog", Json("""{"query":"поруч"}""")))
             .ToArray();
         var provider = new ScriptedProvider(actions);
         var response = await Run(provider);
-        Check.True(provider.CallCount <= 8);
+        Check.True(provider.CallCount <= 12);
+        Check.Equal(12, provider.CallCount);
         Check.Equal("incomplete", response.Status);
     }
 

@@ -9,8 +9,8 @@ namespace ArmGov.Harness;
 public sealed class RunContext
 {
     public const int BudgetMs = 120_000;
-    public const int MaxModelCalls = 8;
-    public const int MaxRepairs = 2;
+    public const int MaxModelCalls = 12;
+    public const int MaxRepairs = 4;
 
     private readonly TimeProvider _clock;
     private readonly long _startedAt;

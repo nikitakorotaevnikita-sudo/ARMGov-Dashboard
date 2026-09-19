@@ -15,12 +15,22 @@ namespace ArmGov.Harness;
 
 public sealed class GigaChatProvider : IModelProvider
 {
+    private const int MaxFeedbackBytes = 1500;
+    private const int MaxRequestBytes = 18000;
+
     private const string SystemPrompt =
         "Ты — аналитик процессов Directum RX. Отвечай ТОЛЬКО через function_call " +
         "к переданным функциям. Обычный текст без function_call запрещён и не станет отчётом.\n" +
-        "Порядок: search_catalog → set_context (metricId из каталога или generic_query) → " +
+        "Порядок: search_catalog → set_context (metricId из каталога метрик или generic_query) → " +
         "execute_sql или dashboard_metric → submit_report. " +
         "Без set_context нельзя вызывать execute_sql/dashboard_metric/submit_report. " +
+        "Для «затор/перегруз/кто тормозит» после set_context(overdue_assignment_kpi) " +
+        "зови dashboard_metric name=stuck, затем name=leaders с args.by=performer, " +
+        "затем сразу submit_report. Пример blocks: " +
+        "[{\"kind\":\"table\",\"resultId\":\"r1\",\"columns\":[\"performer\",\"overdueDays\",\"subject\"]}," +
+        "{\"kind\":\"table\",\"resultId\":\"r2\",\"columns\":[\"name\",\"overdue\",\"total\"]}]. " +
+        "facts — ссылки на ячейки resultId/row/column; textTemplates с {factId}. " +
+        "Не вызывай read_result без нужды. " +
         "Если вопрос неоднозначен по сотруднику — clarify.\n" +
         "Числа и факты бери только из результатов функций, ничего не выдумывай.";
 
@@ -51,24 +61,20 @@ public sealed class GigaChatProvider : IModelProvider
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(tools);
 
-        var body = JsonSerializer.Serialize(new
-        {
-            model = _model,
-            messages = BuildMessages(messages),
-            functions = tools.Select(tool => new
-            {
-                name = tool.Name,
-                description = tool.Description,
-                parameters = tool.Parameters
-            }),
-            function_call = "auto"
-        }, HarnessJson.Options);
-
+        var body = BuildRequestBody(messages, tools);
         using var response = await SendWithRetryAsync(body, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var status = (int)response.StatusCode;
-            // Тело ответа — только для 422 (схемы); 401/др. могут содержать секреты.
+            if (status == 413)
+            {
+                throw Error(
+                    "provider_payload_too_large",
+                    $"GigaChat returned HTTP 413: requestBytes={Encoding.UTF8.GetByteCount(body)}. " +
+                    "Соберите submit_report по уже полученным resultId без новых тяжёлых выборок.",
+                    true);
+            }
+
             var detail = status == 422
                 ? await SafeBodyAsync(response, ct).ConfigureAwait(false)
                 : "";
@@ -104,12 +110,83 @@ public sealed class GigaChatProvider : IModelProvider
         ArgumentNullException.ThrowIfNull(action);
         // GigaChat: role=function — только name + content (JSON-строка).
         // functions_state_id оставляем на assistant-сообщении; на function его нет в API.
+        var content = JsonSerializer.Serialize(result, HarnessJson.Options);
+        if (Encoding.UTF8.GetByteCount(content) > MaxFeedbackBytes)
+        {
+            content = JsonSerializer.Serialize(new
+            {
+                truncated = true,
+                tool = action.Name,
+                preview = Trunc(content, MaxFeedbackBytes / 2),
+                hint = "Полные строки доступны через read_result по resultId."
+            }, HarnessJson.Options);
+        }
+
         return JsonSerializer.SerializeToElement(new Dictionary<string, object?>
         {
             ["role"] = "function",
             ["name"] = action.Name,
-            ["content"] = JsonSerializer.Serialize(result, HarnessJson.Options)
+            ["content"] = content
         }, HarnessJson.Options);
+    }
+
+    private string BuildRequestBody(
+        IReadOnlyList<JsonElement> messages,
+        IReadOnlyList<ToolDefinition> tools)
+    {
+        var requestMessages = BuildMessages(messages, compactFunctionContent: false);
+        var body = SerializeRequest(requestMessages, tools);
+        if (Encoding.UTF8.GetByteCount(body) <= MaxRequestBytes)
+            return body;
+
+        requestMessages = BuildMessages(messages, compactFunctionContent: true);
+        return SerializeRequest(requestMessages, tools);
+    }
+
+    private string SerializeRequest(
+        List<object> requestMessages,
+        IReadOnlyList<ToolDefinition> tools) =>
+        JsonSerializer.Serialize(new
+        {
+            model = _model,
+            messages = requestMessages,
+            functions = tools.Select(tool => new
+            {
+                name = tool.Name,
+                description = tool.Description,
+                // Полная схема submit_report раздувает запрос до HTTP 413 у GigaChat.
+                parameters = CompactParameters(tool)
+            }),
+            function_call = "auto",
+            max_tokens = 2048
+        }, HarnessJson.Options);
+
+    private static JsonElement CompactParameters(ToolDefinition tool)
+    {
+        if (!string.Equals(tool.Name, "submit_report", StringComparison.Ordinal))
+            return tool.Parameters;
+
+        return JsonDocument.Parse("""
+            {
+              "type":"object",
+              "properties":{
+                "report":{
+                  "type":"object",
+                  "properties":{
+                    "title":{"type":"string"},
+                    "interpretation":{"type":"object","properties":{},"additionalProperties":true},
+                    "blocks":{"type":"array"},
+                    "facts":{"type":"array"},
+                    "textTemplates":{"type":"array"},
+                    "commentary":{"type":"string"}
+                  },
+                  "additionalProperties":true
+                }
+              },
+              "required":["report"],
+              "additionalProperties":false
+            }
+            """).RootElement.Clone();
     }
 
     private async Task<HttpResponseMessage> SendWithRetryAsync(
@@ -240,26 +317,158 @@ public sealed class GigaChatProvider : IModelProvider
                 "GigaChat requested an unknown function.",
                 false);
 
-        if (!functionCall.TryGetProperty("arguments", out var arguments) ||
-            !JsonSchemaValidator.IsValid(arguments, tool.Parameters))
+        if (!functionCall.TryGetProperty("arguments", out var rawArguments))
         {
             throw Error(
                 "invalid_function_arguments",
-                "GigaChat returned arguments that do not match the function schema.",
+                $"GigaChat returned no arguments for '{name}'.",
+                true);
+        }
+
+        JsonElement arguments;
+        try
+        {
+            arguments = NormalizeArguments(rawArguments, tool.Parameters);
+        }
+        catch (JsonException)
+        {
+            throw Error(
+                "invalid_function_arguments",
+                $"GigaChat returned non-JSON arguments for '{name}': {Trunc(rawArguments.GetRawText(), 180)}",
+                true);
+        }
+
+        // submit_report на проводе ужат; полная проверка — в ReportValidator.
+        var schemaForCheck = string.Equals(name, "submit_report", StringComparison.Ordinal)
+            ? CompactParameters(tool)
+            : tool.Parameters;
+        if (!JsonSchemaValidator.IsValid(arguments, schemaForCheck))
+        {
+            throw Error(
+                "invalid_function_arguments",
+                $"GigaChat returned arguments that do not match the function schema for '{name}': {Trunc(arguments.GetRawText(), 220)}",
                 true);
         }
 
         return new ModelAction(name, arguments.Clone(), message.Clone());
     }
 
-    private static List<object> BuildMessages(IReadOnlyList<JsonElement> messages)
+    /// <summary>
+    /// GigaChat иногда отдаёт arguments строкой JSON, null в optional-полях
+    /// и числа как строки — без нормализации схема падает на валидном по смыслу вызове.
+    /// </summary>
+    internal static JsonElement NormalizeArguments(JsonElement raw, JsonElement schema)
+    {
+        var value = raw;
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            var text = value.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+                return value;
+            using var parsed = JsonDocument.Parse(text);
+            value = parsed.RootElement.Clone();
+        }
+
+        return CoerceToSchema(value, schema);
+    }
+
+    private static JsonElement CoerceToSchema(JsonElement value, JsonElement schema)
+    {
+        if (schema.ValueKind != JsonValueKind.Object)
+            return value.Clone();
+
+        var expectedType = schema.TryGetProperty("type", out var typeElement) &&
+                           typeElement.ValueKind == JsonValueKind.String
+            ? typeElement.GetString()
+            : null;
+
+        if ((expectedType is "integer" or "number") &&
+            value.ValueKind == JsonValueKind.String &&
+            decimal.TryParse(
+                value.GetString(),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var number))
+        {
+            if (expectedType == "integer" && number == Math.Truncate(number) &&
+                number >= long.MinValue && number <= long.MaxValue)
+            {
+                return JsonSerializer.SerializeToElement((long)number, HarnessJson.Options);
+            }
+
+            if (expectedType == "number")
+                return JsonSerializer.SerializeToElement(number, HarnessJson.Options);
+        }
+
+        if (value.ValueKind == JsonValueKind.Array &&
+            schema.TryGetProperty("items", out var itemsSchema))
+        {
+            var items = value.EnumerateArray()
+                .Select(item => CoerceToSchema(item, itemsSchema))
+                .ToArray();
+            return JsonSerializer.SerializeToElement(items, HarnessJson.Options);
+        }
+
+        if (value.ValueKind != JsonValueKind.Object ||
+            !schema.TryGetProperty("properties", out var properties) ||
+            properties.ValueKind != JsonValueKind.Object)
+        {
+            return value.Clone();
+        }
+
+        var obj = new Dictionary<string, JsonElement>();
+        foreach (var property in value.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.Null)
+                continue;
+
+            if (properties.TryGetProperty(property.Name, out var propertySchema))
+                obj[property.Name] = CoerceToSchema(property.Value, propertySchema);
+            else
+                obj[property.Name] = property.Value.Clone();
+        }
+
+        return JsonSerializer.SerializeToElement(obj, HarnessJson.Options);
+    }
+
+    private static List<object> BuildMessages(
+        IReadOnlyList<JsonElement> messages,
+        bool compactFunctionContent)
     {
         var requestMessages = new List<object>
         {
             new { role = "system", content = SystemPrompt }
         };
         foreach (var message in messages)
+        {
+            if (compactFunctionContent &&
+                message.TryGetProperty("role", out var role) &&
+                role.ValueKind == JsonValueKind.String &&
+                role.GetString() == "function" &&
+                message.TryGetProperty("content", out var content) &&
+                content.ValueKind == JsonValueKind.String &&
+                Encoding.UTF8.GetByteCount(content.GetString() ?? "") > 800)
+            {
+                var name = message.TryGetProperty("name", out var nameElement) &&
+                           nameElement.ValueKind == JsonValueKind.String
+                    ? nameElement.GetString()
+                    : "tool";
+                requestMessages.Add(new Dictionary<string, object?>
+                {
+                    ["role"] = "function",
+                    ["name"] = name,
+                    ["content"] = JsonSerializer.Serialize(new
+                    {
+                        truncated = true,
+                        hint = "Результат уже получен ранее; используйте resultId/read_result или submit_report."
+                    }, HarnessJson.Options)
+                });
+                continue;
+            }
+
             requestMessages.Add(message);
+        }
+
         return requestMessages;
     }
 

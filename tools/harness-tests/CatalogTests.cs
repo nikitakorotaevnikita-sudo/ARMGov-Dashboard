@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Linq;
 using System.Text.Json;
 using ArmGov.Harness;
 
@@ -30,9 +31,34 @@ public static class CatalogTests
 
         Check.Equal(JsonValueKind.Array, result.ValueKind);
         Check.True(result.GetArrayLength() > 0);
+        var relation = result.EnumerateArray()
+            .First(item =>
+                item.TryGetProperty("kind", out var kind) &&
+                kind.GetString() == "relation");
         Check.Equal(
             "public.sungero_wf_assignment",
-            result[0].GetProperty("relation").GetString());
+            relation.GetProperty("relation").GetString());
+    }
+
+    public static void SearchReturnsMetricsForOverdueSynonyms()
+    {
+        var result = LoadCatalog().Search("затор", 10);
+
+        Check.Equal(JsonValueKind.Array, result.ValueKind);
+        var metric = result.EnumerateArray()
+            .First(item =>
+                item.TryGetProperty("kind", out var kind) &&
+                kind.GetString() == "metric");
+        Check.Equal("overdue_assignment_kpi", metric.GetProperty("id").GetString());
+    }
+
+    public static void SearchFallsBackToGenericQuery()
+    {
+        var result = LoadCatalog().Search("квантовый флюс", 10);
+
+        Check.Equal(JsonValueKind.Array, result.ValueKind);
+        Check.Equal("metric", result[0].GetProperty("kind").GetString());
+        Check.Equal("generic_query", result[0].GetProperty("id").GetString());
     }
 
     public static void DescribeRejectsUnknownFields()

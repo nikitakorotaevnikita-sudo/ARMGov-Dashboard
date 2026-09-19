@@ -367,5 +367,6 @@ public sealed class ToolDispatcher
     }
 
     private static ResultPage ToResultPage(RunContext context, string resultId) =>
-        context.Results.Page(context.RunId, resultId);
+        // Короткая страница в history: полный объём доступен через read_result.
+        context.Results.Page(context.RunId, resultId, offset: 0, take: 5);
 }

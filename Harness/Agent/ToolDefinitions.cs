@@ -109,18 +109,15 @@ public static class ToolDefinitions
 
 
 
-        if (!JsonSchemaValidator.IsValid(arguments, tool.Parameters))
-
+        // submit_report: полная JSON Schema на проводе ужата (GigaChat 413);
+        // структурная проверка — ReportValidator после десериализации.
+        if (!string.Equals(toolName, "submit_report", StringComparison.Ordinal) &&
+            !JsonSchemaValidator.IsValid(arguments, tool.Parameters))
         {
-
             return Fail(new HarnessError(
-
                 "invalid_function_arguments",
-
                 "Arguments do not match the tool schema.",
-
                 true));
-
         }
 
 
@@ -389,12 +386,14 @@ public static class ToolDefinitions
 
             """),
 
-        Tool("set_context", "Задать метрику и период анализа.",
+        Tool("set_context",
+            "Задать метрику и период. metricId — id из search_catalog (kind=metric) или generic_query.",
             "{\"type\":\"object\",\"properties\":{\"metricId\":{\"type\":\"string\",\"minLength\":1},\"period\":" +
             PeriodSchema + "},\"required\":[\"metricId\",\"period\"],\"additionalProperties\":false}"),
 
         // GigaChat 422, если type=object без properties (нужен хотя бы {}).
-        Tool("dashboard_metric", "Готовая метрика дашборда.",
+        Tool("dashboard_metric",
+            "Готовая метрика дашборда. Для заторов — stuck; для перегруза — leaders.",
             "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"enum\":[" + MetricEnum +
             "]},\"args\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":true}},\"required\":[\"name\",\"args\"],\"additionalProperties\":false}"),
 
@@ -410,7 +409,9 @@ public static class ToolDefinitions
 
             """),
 
-        Tool("submit_report", "Предложить проверяемый отчёт.",
+        Tool("submit_report",
+            "Предложить проверяемый отчёт. report: title, interpretation{metricId,label,unit}, " +
+            "blocks[{kind,resultId,columns}], facts[{id,operation,inputs[{resultId,row,column}]}], textTemplates[].",
             "{\"type\":\"object\",\"properties\":{\"report\":" + ReportSchema +
             "},\"required\":[\"report\"],\"additionalProperties\":false}"),
 

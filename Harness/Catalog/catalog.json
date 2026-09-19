@@ -171,7 +171,7 @@
       "id": "overdue_assignment_kpi",
       "unit": "задание",
       "dateField": "assignment.created",
-      "definition": "count(assignment.id) по заданиям со status = InProcess, deadline is not null и deadline < now(); уведомления исключены; дедупликация поручений не применяется"
+      "definition": "count(assignment.id) по заданиям со status = InProcess, deadline is not null и deadline < now(); уведомления исключены; дедупликация поручений не применяется; просрочка, затор, перегруз, кто тормозит"
     }
   ]
 }

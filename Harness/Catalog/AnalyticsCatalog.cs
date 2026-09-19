@@ -71,7 +71,45 @@ public sealed class AnalyticsCatalog
         if (tokens.Length > 5)
             throw new ArgumentException("Search accepts at most five tokens.", nameof(query));
 
-        var matches = _relations.Values
+        var metricHits = _metrics.Values
+            .Select(metric => new
+            {
+                Metric = metric,
+                Searchable = string.Join(
+                    " ",
+                    metric.Id,
+                    metric.Unit,
+                    metric.DateField,
+                    metric.Definition)
+            })
+            .Where(item => tokens.All(token =>
+                item.Searchable.Contains(token, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(item => item.Metric.Id, StringComparer.Ordinal)
+            .Select(item => (object)new
+            {
+                kind = "metric",
+                id = item.Metric.Id,
+                unit = item.Metric.Unit,
+                dateField = item.Metric.DateField,
+                definition = item.Metric.Definition
+            });
+
+        // Если метрик нет — отдаём generic_query, чтобы модель не выдумывала metricId.
+        var metricList = metricHits.ToList();
+        if (metricList.Count == 0)
+        {
+            metricList.Add(new
+            {
+                kind = "metric",
+                id = "generic_query",
+                unit = "строка результата",
+                dateField = (string?)null,
+                definition =
+                    "Произвольный SELECT-анализ; используйте, если ни одна метрика каталога не подходит."
+            });
+        }
+
+        var relationHits = _relations.Values
             .Select(relation => new
             {
                 Relation = relation,
@@ -86,13 +124,17 @@ public sealed class AnalyticsCatalog
             .Where(item => tokens.All(token =>
                 item.Searchable.Contains(token, StringComparison.OrdinalIgnoreCase)))
             .OrderBy(item => item.Relation.QualifiedName, StringComparer.Ordinal)
-            .Take(take)
-            .Select(item => new
+            .Select(item => (object)new
             {
+                kind = "relation",
                 relation = item.Relation.QualifiedName,
                 title = item.Relation.Title,
                 description = item.Relation.Description
-            })
+            });
+
+        var matches = metricList
+            .Concat(relationHits)
+            .Take(take)
             .ToArray();
 
         return JsonSerializer.SerializeToElement(matches, HarnessJson.Options);

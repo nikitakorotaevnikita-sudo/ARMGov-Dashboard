@@ -50,6 +50,39 @@ public static class GigaChatTests
         Check.Equal("unstructured_response", error.Error.Code);
     }
 
+    public static void NormalizeParsesStringArgumentsAndStripsNulls()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+              "type":"object",
+              "properties":{
+                "metricId":{"type":"string","minLength":1},
+                "period":{
+                  "type":"object",
+                  "properties":{
+                    "kind":{"type":"string","enum":["all","months","range"]},
+                    "months":{"type":"integer","minimum":1,"maximum":1200}
+                  },
+                  "required":["kind"],
+                  "additionalProperties":false
+                }
+              },
+              "required":["metricId","period"],
+              "additionalProperties":false
+            }
+            """).RootElement;
+        var raw = JsonDocument.Parse(
+            "\"{\\\"metricId\\\":\\\"generic_query\\\",\\\"period\\\":{\\\"kind\\\":\\\"months\\\",\\\"months\\\":\\\"12\\\",\\\"from\\\":null}}\"").RootElement;
+
+        var normalized = GigaChatProvider.NormalizeArguments(raw, schema);
+
+        Check.Equal("generic_query", normalized.GetProperty("metricId").GetString());
+        Check.Equal("months", normalized.GetProperty("period").GetProperty("kind").GetString());
+        Check.Equal(12L, normalized.GetProperty("period").GetProperty("months").GetInt64());
+        Check.True(!normalized.GetProperty("period").TryGetProperty("from", out _));
+        Check.True(ToolDefinitions.JsonSchemaValidator.IsValid(normalized, schema));
+    }
+
     public static async Task MalformedArgumentsAreRejected()
     {
         var provider = Provider(Handler((request, _) => request.RequestUri!.AbsolutePath.Contains("oauth")

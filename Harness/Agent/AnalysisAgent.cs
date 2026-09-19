@@ -19,6 +19,8 @@ public sealed class AnalysisAgent
         "unstructured_response",
         "missing_context",
         "unknown_metric",
+        "invalid_period",
+        "provider_payload_too_large",
         "invalid_report",
         "unknown_result",
         "unknown_column",
@@ -121,7 +123,8 @@ public sealed class AnalysisAgent
             catch (HarnessException ex) when (IsRepairable(ex.Error) && context.CanRepair)
             {
                 context.Repairs++;
-                if (string.Equals(ex.Error.Code, "unstructured_response", StringComparison.Ordinal))
+                if (string.Equals(ex.Error.Code, "unstructured_response", StringComparison.Ordinal) ||
+                    string.Equals(ex.Error.Code, "provider_payload_too_large", StringComparison.Ordinal))
                     AppendUnstructuredNudge(context, ex.Error);
                 else
                     AppendProtocolFeedback(context, ex.Error);
@@ -171,6 +174,7 @@ public sealed class AnalysisAgent
 
                 if (payload is ReportSpec report)
                 {
+                    report = EnrichReport(report, context);
                     var reportResult = TryCompleteReport(context, report);
                     if (reportResult.Completed)
                     {
@@ -279,6 +283,42 @@ public sealed class AnalysisAgent
             null), null);
     }
 
+    /// <summary>
+    /// GigaChat часто присылает пустые blocks/facts — достраиваем из уже полученных resultId.
+    /// </summary>
+    private static ReportSpec EnrichReport(ReportSpec report, RunContext context)
+    {
+        var stored = context.Results.All();
+        var title = string.IsNullOrWhiteSpace(report.Title)
+            ? (context.Interpretation?.Label ?? "Анализ")
+            : report.Title;
+
+        var blocks = report.Blocks is { Length: > 0 }
+            ? report.Blocks
+            : stored.Select(result => new BlockSpec(
+                "table",
+                result.ResultId,
+                result.Data.Columns.Select(column => column.Name).Take(5).ToArray(),
+                null,
+                10)).ToArray();
+
+        var facts = report.Facts ?? Array.Empty<FactSpec>();
+        var templates = report.TextTemplates is { Length: > 0 }
+            ? report.TextTemplates
+            : new[]
+            {
+                string.IsNullOrWhiteSpace(report.Commentary) ? title : report.Commentary!
+            };
+
+        return report with
+        {
+            Title = title,
+            Blocks = blocks,
+            Facts = facts,
+            TextTemplates = templates
+        };
+    }
+
     private void RecordStep(
         int stepIndex,
         RunContext context,
@@ -319,34 +359,34 @@ public sealed class AnalysisAgent
 
     private void AppendProtocolFeedback(RunContext context, HarnessError error)
     {
-        context.Messages.Add(_provider.Feedback(
-            new ModelAction(
-                "protocol",
-                JsonSerializer.SerializeToElement(new { }, HarnessJson.Options),
-                JsonSerializer.SerializeToElement(new
-                {
-                    role = "assistant",
-                    content = ""
-                }, HarnessJson.Options)),
-            new
-            {
-                error = new
-                {
-                    code = error.Code,
-                    message = error.Message,
-                    retryable = error.Retryable
-                }
-            }));
-    }
-
-    private static void AppendUnstructuredNudge(RunContext context, HarnessError error)
-    {
+        // GigaChat требует: каждый role=function сразу после assistant.function_call.
+        // Протокольные ошибки чиним user-nudges, без фейкового function-результата.
+        var ids = string.Join(", ", context.Results.All().Select(result => result.ResultId));
+        var resultHint = ids.Length == 0
+            ? ""
+            : " Доступные resultId: " + ids +
+              ". В submit_report.blocks укажи kind, resultId и columns из результата.";
         context.Messages.Add(JsonSerializer.SerializeToElement(new
         {
             role = "user",
             content =
-                "Предыдущий ответ без function_call отклонён (" + error.Message + "). " +
-                "Вызови ровно одну доступную функцию. Текст без function_call недопустим."
+                "Предыдущий ответ отклонён (" + error.Code + ": " + error.Message + "). " +
+                "Вызови ровно одну доступную функцию корректными аргументами." + resultHint
+        }, HarnessJson.Options));
+    }
+
+    private static void AppendUnstructuredNudge(RunContext context, HarnessError error)
+    {
+        var ids = string.Join(", ", context.Results.All().Select(result => result.ResultId));
+        var resultHint = ids.Length == 0
+            ? ""
+            : " Доступные resultId: " + ids + ".";
+        context.Messages.Add(JsonSerializer.SerializeToElement(new
+        {
+            role = "user",
+            content =
+                "Предыдущий ответ отклонён (" + error.Message + "). " +
+                "Вызови ровно одну доступную функцию." + resultHint
         }, HarnessJson.Options));
     }
 

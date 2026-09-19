@@ -8,5 +8,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../armgov-standalone.csproj" />
+    <Reference Include="Npgsql">
+      <HintPath>../../lib/Npgsql.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 </Project>

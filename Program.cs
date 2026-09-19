@@ -2421,76 +2421,30 @@ class Program
         return false;
     }
 
+    static readonly HashSet<string> SqlAllowedRelations = new HashSet<string>(
+        new[] {
+            "public.sungero_wf_task",
+            "public.sungero_wf_assignment",
+            "public.sungero_core_recipient",
+            "public.sungero_recman_taicoassignees",
+            "public.sungero_recman_taiparts",
+            "public.sungero_recman_taipartscoasgs",
+            "public.sungero_wf_workflowhistory",
+            "public.sungero_system_entitytype",
+            "public.sungero_content_edoc",
+            "public.sungero_wf_processkind",
+            "public.sungero_company_jobtitle",
+            "public.sungero_parties_counterparty"
+        },
+        StringComparer.OrdinalIgnoreCase);
+
     static (bool ok, string reason, string effective) SqlCheck(string sql)
     {
-        if (string.IsNullOrWhiteSpace(sql)) return (false, "пустой запрос", null);
-
-        if (!TrySplitSqlIntoCleanAndCode(sql, out var cleaned, out var codeLow, out var gluedDenyLow, out var parseError))
-            return (false, parseError, null);
-
-        cleaned = cleaned.Trim();
-        codeLow = codeLow.Trim();
-        gluedDenyLow = gluedDenyLow.Trim();
-
-        // ';' ищем только в "коде" (вне литералов) — иначе string_agg(x, '; ') отклонялся бы
-        // как "два оператора", хотя ';' там — данные, а не разделитель операторов.
-        // Допускается ровно один ';' и только в самом конце (после него — не более чем
-        // пробелы/остатки комментариев); всё прочее — несколько операторов.
-        int firstSemi = codeLow.IndexOf(';');
-        if (firstSemi >= 0)
-        {
-            bool onlyOneAtEnd = codeLow.IndexOf(';', firstSemi + 1) < 0
-                                 && codeLow.Substring(firstSemi + 1).Trim().Length == 0;
-            if (!onlyOneAtEnd) return (false, "разрешён только один оператор", null);
-            // тот же завершающий ';' убираем и из исполняемого текста
-            int cutAt = cleaned.LastIndexOf(';');
-            cleaned = (cutAt >= 0 ? cleaned.Substring(0, cutAt) : cleaned).TrimEnd();
-        }
-
-        // Ключевые слова — по границе с обеих сторон (см. объявление SqlDenyKeywordRe).
-        // Проверяем и codeLow, и gluedDenyLow: комментарий может разрезать запрещённое
-        // слово пополам ("in/**/to", "se/**/t_config") — в codeLow на месте комментария
-        // стоит пробел (там оно уже не совпадёт), а в gluedDenyLow куски склеены вплотную,
-        // как их когда-то склеивал баг Н1 при построении исполняемого текста. Раунд
-        // исправлений 2 закрыл исполнение через пробел в cleaned, но само разбиение
-        // запрещённого слова комментарием — явная попытка обхода, и она должна отклоняться,
-        // а не молча превращаться в синтаксический мусор.
-        foreach (var (re, word) in SqlDenyKeywordRe)
-            if (re.IsMatch(codeLow) || re.IsMatch(gluedDenyLow))
-                return (false, "запрещённая конструкция: " + word, null);
-
-        // Семейства опасных функций — по границе только слева (см. SqlDenyFamilyRe).
-        foreach (var (re, word) in SqlDenyFamilyRe)
-            if (re.IsMatch(codeLow) || re.IsMatch(gluedDenyLow))
-                return (false, "запрещённая конструкция: " + word, null);
-
-        // Таблицы/представления с учётными данными ролей БД (см. SqlDenyCredentialTables) —
-        // второй, независимый от SchemaHelp рубеж на md5-хеши паролей и т.п.
-        foreach (var (re, word) in SqlDenyCredentialTableRe)
-            if (re.IsMatch(codeLow) || re.IsMatch(gluedDenyLow))
-                return (false, "запрещённая конструкция: " + word, null);
-
-        // Запрещённые слова проверяем раньше требования "начинается с SELECT/WITH":
-        // иначе "drop table x" отклонялся бы с общей причиной "должен начинаться с SELECT",
-        // маскируя настоящий повод отказа — попытку изменить данные.
-        var codeLowTrimStart = codeLow.TrimStart();
-        if (!(codeLowTrimStart.StartsWith("select", StringComparison.Ordinal)
-              || codeLowTrimStart.StartsWith("with", StringComparison.Ordinal)))
-            return (false, "запрос должен начинаться с SELECT или WITH", null);
-
-        // Обёртка накладывается БЕЗУСЛОВНО, вне зависимости от того, есть ли в запросе
-        // собственный LIMIT: собственный LIMIT может относиться к вложенному подзапросу
-        // и не ограничивать внешний результат, а может быть намеренно завышен моделью/
-        // пользователем. select * from (...) t limit 201 корректен и для ORDER BY,
-        // и для UNION, и для WITH — все они являются валидным подзапросом в скобках.
-        //
-        // Находка ревью (task-5, раунд правок 1, п.2): здесь стоит "limit 201", а не 200.
-        // maxRows в SqlRun остаётся 200 — 201-я строка, если она есть, никогда не попадает
-        // в ответ, но её наличие и есть честный признак усечения (truncated=true). Раньше
-        // оба лимита совпадали (200 и 200), поэтому SqlRun физически не мог увидеть 201-ю
-        // строку и truncated был всегда false, даже когда выборка реально была урезана.
-        var eff = "select * from (" + cleaned + ") t limit " + (SqlMaxRows + 1);
-        return (true, null, eff);
+        var result = ArmGov.Harness.SqlGuard.Check(sql);
+        if (!result.Ok) return (false, result.Reason, null);
+        var scope = ArmGov.Harness.SqlScopePolicy.Check(sql, SqlAllowedRelations);
+        if (!scope.Ok) return (false, scope.Errors[0].Message, null);
+        return (result.Ok, result.Reason, result.Effective);
     }
 
     // Общая константа для SqlCheck (обёртка "limit N+1") и SqlRun (maxRows = N).
@@ -2498,6 +2452,7 @@ class Program
     // литералами в разных функциях, и рассинхронизация между ними уже один раз ломала
     // truncated (раунд правок 1, п.2). Один источник правды исключает повтор.
     const int SqlMaxRows = 200;
+    static readonly SemaphoreSlim SqlExecutionSlots = new SemaphoreSlim(2, 2);
 
     // Приведение значения ячейки к виду, который System.Text.Json сериализует сам,
     // с ограничением И по длине строки, И по числу элементов коллекции.
@@ -2686,6 +2641,13 @@ class Program
     // "комментария". Вызывающая сторона (эндпоинт /api/ai/sql/run) обязана брать eff
     // из результата SqlCheck и не иметь доступа к исходному q на этом шаге.
     static (List<string> cols, List<string> types, List<object[]> rows, int ms, bool truncated) SqlRun(string effective, int maxRows = SqlMaxRows)
+    {
+        SqlExecutionSlots.Wait();
+        try { return SqlRunCore(effective, maxRows); }
+        finally { SqlExecutionSlots.Release(); }
+    }
+
+    static (List<string> cols, List<string> types, List<object[]> rows, int ms, bool truncated) SqlRunCore(string effective, int maxRows)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var cols = new List<string>(); var types = new List<string>();

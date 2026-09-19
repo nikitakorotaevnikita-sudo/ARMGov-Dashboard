@@ -119,11 +119,13 @@ public static class SqlScopePolicy
         return null;
     }
 
-    private static HashSet<string> ParseCtes(
+    private sealed record CteDefinition(string Name, int BodyStart, int BodyEnd);
+
+    private static List<CteDefinition> ParseCtes(
         IReadOnlyList<string> tokens,
         out string? error)
     {
-        var ctes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ctes = new List<CteDefinition>();
         error = null;
         if (!tokens[0].Equals("with", StringComparison.OrdinalIgnoreCase))
             return ctes;
@@ -136,7 +138,7 @@ public static class SqlScopePolicy
                 error = "После WITH ожидалось имя CTE.";
                 return ctes;
             }
-            ctes.Add(Unquote(tokens[i++]));
+            var name = Unquote(tokens[i++]);
             if (i < tokens.Count && tokens[i] == "(")
             {
                 var columnsEnd = MatchingParen(tokens, i);
@@ -159,6 +161,7 @@ public static class SqlScopePolicy
                 error = "Незакрытое тело CTE.";
                 return ctes;
             }
+            ctes.Add(new CteDefinition(name, i + 2, end));
             i = end + 1;
             if (i < tokens.Count && tokens[i] == ",")
             {
@@ -172,7 +175,7 @@ public static class SqlScopePolicy
 
     private static string? ValidateRelations(
         IReadOnlyList<string> tokens,
-        IReadOnlySet<string> ctes,
+        IReadOnlyList<CteDefinition> ctes,
         IReadOnlySet<string> allowed)
     {
         var depth = 0;
@@ -235,23 +238,50 @@ public static class SqlScopePolicy
 
             var first = Unquote(token);
             var relation = first;
+            var qualified = false;
             if (i + 2 < tokens.Count && tokens[i + 1] == "." && IsIdentifier(tokens[i + 2]))
             {
+                qualified = true;
                 relation = first + "." + Unquote(tokens[i + 2]);
                 i += 2;
             }
-            else if (!ctes.Contains(first))
+            var isCteReference = !qualified && IsCteBoundAt(ctes, first, i);
+            if (!qualified && !isCteReference)
             {
                 relation = "public." + first;
             }
 
             if (i + 1 < tokens.Count && tokens[i + 1] == "(")
                 return $"Табличная функция {relation} запрещена.";
-            if (!ctes.Contains(first) && !ContainsRelation(allowed, relation))
+            if (!isCteReference && !ContainsRelation(allowed, relation))
                 return $"Отношение {relation} отсутствует в разрешённом каталоге.";
             expecting = false;
         }
         return expecting ? "После FROM/JOIN отсутствует отношение." : null;
+    }
+
+    private static bool IsCteBoundAt(
+        IReadOnlyList<CteDefinition> ctes,
+        string name,
+        int tokenIndex)
+    {
+        var containingCte = -1;
+        for (var i = 0; i < ctes.Count; i++)
+        {
+            if (tokenIndex >= ctes[i].BodyStart && tokenIndex < ctes[i].BodyEnd)
+            {
+                containingCte = i;
+                break;
+            }
+        }
+
+        var boundCount = containingCte >= 0 ? containingCte : ctes.Count;
+        for (var i = 0; i < boundCount; i++)
+        {
+            if (ctes[i].Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     private static bool ContainsRelation(IReadOnlySet<string> allowed, string relation)

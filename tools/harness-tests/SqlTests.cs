@@ -125,6 +125,15 @@ public static class SqlTests
             "with recursive x as (select 1) select * from x", allowed).Ok);
     }
 
+    public static void ScopeRejectsPhysicalRelationShadowedByCteName()
+    {
+        var allowed = new HashSet<string> { "public.sungero_wf_task" };
+
+        Check.True(!SqlScopePolicy.Check(
+            "with private_data as (select * from private_data) select * from private_data",
+            allowed).Ok);
+    }
+
     public static void ScopeHandlesStringsCommentsQualificationAndCasts()
     {
         var allowed = Allowed();
@@ -177,6 +186,46 @@ public static class SqlTests
 
         Check.True(cancelledAsExpected);
         Check.Equal(0, slots.CurrentCount);
+    }
+
+    public static async Task ExecutorUsesSharedProcessSlotsByDefault()
+    {
+        var slots = HarnessSqlSlots.Instance;
+        await slots.WaitAsync();
+        await slots.WaitAsync();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var executor = new ReadOnlyExecutor(
+                "Host=127.0.0.1;Database=harness_test;Username=none;Password=none",
+                Allowed());
+            var query = new QuerySpec(
+                "select count(*) from public.sungero_wf_task",
+                new Dictionary<string, JsonElement>(),
+                "test",
+                null,
+                null);
+
+            var execution = executor.ExecuteAsync(query, cancellation.Token);
+            Check.True(!execution.IsCompleted);
+            cancellation.Cancel();
+
+            var cancelledAsExpected = false;
+            try
+            {
+                await execution;
+            }
+            catch (OperationCanceledException)
+            {
+                cancelledAsExpected = true;
+            }
+            Check.True(cancelledAsExpected);
+            Check.Equal(0, slots.CurrentCount);
+        }
+        finally
+        {
+            slots.Release(2);
+        }
     }
 
     public static async Task ExecutorRejectsNonScalarParametersBeforeConnecting()

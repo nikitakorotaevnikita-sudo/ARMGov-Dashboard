@@ -2452,7 +2452,6 @@ class Program
     // литералами в разных функциях, и рассинхронизация между ними уже один раз ломала
     // truncated (раунд правок 1, п.2). Один источник правды исключает повтор.
     const int SqlMaxRows = 200;
-    static readonly SemaphoreSlim SqlExecutionSlots = new SemaphoreSlim(2, 2);
 
     // Приведение значения ячейки к виду, который System.Text.Json сериализует сам,
     // с ограничением И по длине строки, И по числу элементов коллекции.
@@ -2642,9 +2641,9 @@ class Program
     // из результата SqlCheck и не иметь доступа к исходному q на этом шаге.
     static (List<string> cols, List<string> types, List<object[]> rows, int ms, bool truncated) SqlRun(string effective, int maxRows = SqlMaxRows)
     {
-        SqlExecutionSlots.Wait();
+        ArmGov.Harness.HarnessSqlSlots.Instance.Wait();
         try { return SqlRunCore(effective, maxRows); }
-        finally { SqlExecutionSlots.Release(); }
+        finally { ArmGov.Harness.HarnessSqlSlots.Instance.Release(); }
     }
 
     static (List<string> cols, List<string> types, List<object[]> rows, int ms, bool truncated) SqlRunCore(string effective, int maxRows)

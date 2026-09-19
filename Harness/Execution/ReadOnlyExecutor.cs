@@ -28,6 +28,13 @@ public sealed class ReadOnlyExecutor : IQueryExecutor
 
     public ReadOnlyExecutor(
         string connectionString,
+        IReadOnlySet<string> allowedRelations)
+        : this(connectionString, allowedRelations, HarnessSqlSlots.Instance)
+    {
+    }
+
+    public ReadOnlyExecutor(
+        string connectionString,
         IReadOnlySet<string> allowedRelations,
         SemaphoreSlim slots)
     {

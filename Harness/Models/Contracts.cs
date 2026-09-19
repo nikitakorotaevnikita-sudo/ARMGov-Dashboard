@@ -67,6 +67,18 @@ public record ReportSpec(
     string? Commentary);
 public record HarnessError(string Code, string Message, bool Retryable);
 public record ValidationResult(bool Ok, HarnessError[] Errors);
+
+public sealed class HarnessException : Exception
+{
+    public HarnessException(HarnessError error)
+        : base(error.Message)
+    {
+        Error = error;
+    }
+
+    public HarnessError Error { get; }
+}
+
 public record ToolDefinition(
     string Name,
     string Description,

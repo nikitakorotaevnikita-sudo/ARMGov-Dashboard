@@ -7,6 +7,9 @@
     <AssemblyName>armgov-standalone</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Harness.Tests" />
+  </ItemGroup>
   <!-- Вспомогательные утилиты (tools/) — отдельные проекты, не компилируются в составе дашборда -->
   <ItemGroup>
     <Compile Remove="tools\**\*.cs" />

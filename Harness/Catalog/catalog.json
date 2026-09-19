@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "relations": [
+    {
+      "schema": "public",
+      "table": "sungero_wf_task",
+      "title": "Задачи и корневые поручения",
+      "description": "Задачи процессов. Для персональных поручений корень обозначается алиасом root.",
+      "fields": [
+        { "name": "id", "type": "bigint", "description": "Идентификатор задачи" },
+        { "name": "subject", "type": "text", "description": "Тема задачи" },
+        { "name": "created", "type": "timestamp", "description": "Дата создания" },
+        { "name": "maintask", "type": "bigint", "description": "Корневая задача" },
+        { "name": "processkind", "type": "bigint", "description": "Вид процесса" },
+        { "name": "discriminator", "type": "uuid", "description": "Тип сущности" }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_wf_assignment",
+      "title": "Задания",
+      "description": "Задания внутри задач; performer является исполнителем.",
+      "fields": [
+        { "name": "id", "type": "bigint", "description": "Идентификатор задания" },
+        { "name": "task", "type": "bigint", "description": "Задача" },
+        { "name": "maintask", "type": "bigint", "description": "Корневая задача" },
+        { "name": "performer", "type": "bigint", "description": "Исполнитель" },
+        { "name": "status", "type": "text", "description": "Статус", "examples": ["InProcess", "Completed", "Aborted"] },
+        { "name": "deadline", "type": "timestamp", "description": "Срок" },
+        { "name": "completed", "type": "timestamp", "description": "Дата завершения" },
+        { "name": "created", "type": "timestamp", "description": "Дата создания" },
+        { "name": "discriminator", "type": "uuid", "description": "Тип задания" }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_core_recipient",
+      "title": "Получатели и сотрудники",
+      "description": "Сотрудник считается допустимым только когда встречается как performer задания.",
+      "fields": [
+        { "name": "id", "type": "bigint", "description": "Идентификатор" },
+        { "name": "name", "type": "text", "description": "Наименование" },
+        { "name": "department_company_sungero", "type": "bigint", "description": "Подразделение" },
+        { "name": "emplbunit_company_sungero", "type": "bigint", "description": "Организация" },
+        { "name": "jobtitle_company_sungero", "type": "bigint", "description": "Должность" },
+        { "name": "discriminator", "type": "uuid", "description": "Тип получателя" },
+        { "name": "status", "type": "text", "description": "Статус записи", "examples": ["Active", "Closed"] }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_recman_taicoassignees",
+      "title": "Соисполнители поручения",
+      "description": "Связь поручения с соисполнителями.",
+      "fields": [
+        { "name": "task", "type": "bigint", "description": "Поручение" },
+        { "name": "assignee", "type": "bigint", "description": "Соисполнитель" }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_recman_taiparts",
+      "title": "Пункты поручения",
+      "description": "Пункты и их исполнители.",
+      "fields": [
+        { "name": "task", "type": "bigint", "description": "Поручение" },
+        { "name": "assignee", "type": "bigint", "description": "Исполнитель пункта" }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_recman_taipartscoasgs",
+      "title": "Соисполнители пункта",
+      "description": "Связь пункта поручения с соисполнителями.",
+      "fields": [
+        { "name": "task", "type": "bigint", "description": "Поручение" },
+        { "name": "coassignee", "type": "bigint", "description": "Соисполнитель пункта" }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_wf_workflowhistory",
+      "title": "История маршрута",
+      "description": "История операций по сущностям процесса.",
+      "fields": [
+        { "name": "entityid", "type": "bigint", "description": "Сущность" },
+        { "name": "historydate", "type": "timestamp", "description": "Дата операции" },
+        { "name": "operation", "type": "text", "description": "Операция" }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_system_entitytype",
+      "title": "Типы сущностей",
+      "description": "Справочник типов, включая типы уведомлений.",
+      "fields": [
+        { "name": "id", "type": "uuid", "description": "Идентификатор типа" },
+        { "name": "name", "type": "text", "description": "Системное имя типа" }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_content_edoc",
+      "title": "Документы",
+      "description": "Электронные документы процессов.",
+      "fields": [
+        { "name": "id", "type": "bigint", "description": "Идентификатор" },
+        { "name": "name", "type": "text", "description": "Наименование документа" }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_wf_processkind",
+      "title": "Виды процессов",
+      "description": "Справочник видов процессов.",
+      "fields": [
+        { "name": "id", "type": "bigint", "description": "Идентификатор" },
+        { "name": "name", "type": "text", "description": "Наименование вида процесса" },
+        { "name": "status", "type": "text", "description": "Статус", "examples": ["Active", "Closed"] }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_company_jobtitle",
+      "title": "Должности",
+      "description": "Справочник должностей.",
+      "fields": [
+        { "name": "id", "type": "bigint", "description": "Идентификатор" },
+        { "name": "name", "type": "text", "description": "Наименование должности" }
+      ]
+    },
+    {
+      "schema": "public",
+      "table": "sungero_parties_counterparty",
+      "title": "Контрагенты",
+      "description": "Справочник контрагентов.",
+      "fields": [
+        { "name": "id", "type": "bigint", "description": "Идентификатор" },
+        { "name": "name", "type": "text", "description": "Наименование контрагента" }
+      ]
+    }
+  ],
+  "relationships": [
+    { "from": "public.sungero_wf_assignment.task", "to": "public.sungero_wf_task.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_wf_assignment.maintask", "to": "public.sungero_wf_task.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_wf_assignment.performer", "to": "public.sungero_core_recipient.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_wf_task.processkind", "to": "public.sungero_wf_processkind.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_core_recipient.department_company_sungero", "to": "public.sungero_core_recipient.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_core_recipient.jobtitle_company_sungero", "to": "public.sungero_company_jobtitle.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_recman_taicoassignees.task", "to": "public.sungero_wf_task.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_recman_taicoassignees.assignee", "to": "public.sungero_core_recipient.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_recman_taiparts.task", "to": "public.sungero_wf_task.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_recman_taiparts.assignee", "to": "public.sungero_core_recipient.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_recman_taipartscoasgs.task", "to": "public.sungero_wf_task.id", "direction": "many-to-one", "cardinality": "N:1" },
+    { "from": "public.sungero_recman_taipartscoasgs.coassignee", "to": "public.sungero_core_recipient.id", "direction": "many-to-one", "cardinality": "N:1" }
+  ],
+  "metrics": [
+    {
+      "id": "personal_instruction_count",
+      "unit": "поручение",
+      "dateField": "root.created",
+      "definition": "count(distinct root.id) по поручениям с заданием выбранному performer; уведомления исключены; количество всех поручений, не только выполненных"
+    },
+    {
+      "id": "completed_assignment_count",
+      "unit": "задание",
+      "dateField": "assignment.completed",
+      "definition": "count(assignment.id) по заданиям со status = Completed и непустым completed; уведомления исключены; завершение задания не означает завершение поручения"
+    },
+    {
+      "id": "overdue_assignment_kpi",
+      "unit": "задание",
+      "dateField": "assignment.created",
+      "definition": "count(assignment.id) по заданиям со status = InProcess, deadline is not null и deadline < now(); уведомления исключены; дедупликация поручений не применяется"
+    }
+  ]
+}

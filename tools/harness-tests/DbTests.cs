@@ -124,6 +124,67 @@ public static class DbTests
         Check.Equal(1, slots.CurrentCount);
     }
 
+    public static async Task EmployeeResolverFindsOnlyAssignmentPerformers()
+    {
+        var resolver = new EmployeeResolver(TestConnectionString());
+
+        var candidates = await resolver.SearchAsync(
+            new[] { "Тестович", "Иванов" },
+            CancellationToken.None);
+
+        Check.Equal(2, candidates.Length);
+        Check.Equal(900000001L, candidates[0].Id);
+        Check.Equal(900000002L, candidates[1].Id);
+        Check.True(candidates[1].Department.Contains("Closed", StringComparison.Ordinal));
+        Check.Equal(
+            0,
+            (await resolver.SearchAsync(
+                new[] { "Ивановский" },
+                CancellationToken.None)).Length);
+    }
+
+    public static async Task EmployeeResolverDoesNotTreatWildcardsAsPatterns()
+    {
+        var resolver = new EmployeeResolver(TestConnectionString());
+
+        Check.Equal(
+            0,
+            (await resolver.SearchAsync(new[] { "%" }, CancellationToken.None)).Length);
+        Check.Equal(
+            0,
+            (await resolver.SearchAsync(new[] { "_" }, CancellationToken.None)).Length);
+    }
+
+    public static async Task EmployeeResolverReturnsOnlyExistingEmployees()
+    {
+        var resolver = new EmployeeResolver(TestConnectionString());
+
+        Check.Equal(
+            900000003L,
+            (await resolver.GetAsync(900000003, CancellationToken.None))!.Id);
+        Check.True(await resolver.GetAsync(900000100, CancellationToken.None) is null);
+        Check.True(await resolver.GetAsync(999999999, CancellationToken.None) is null);
+    }
+
+    public static async Task EmployeeResolverReportsCandidateOverflow()
+    {
+        var resolver = new EmployeeResolver(TestConnectionString());
+        try
+        {
+            await resolver.SearchAsync(
+                new[] { "Переполнение" },
+                CancellationToken.None);
+        }
+        catch (HarnessException ex)
+        {
+            Check.Equal("too_many_candidates", ex.Error.Code);
+            Check.True(ex.Error.Retryable);
+            return;
+        }
+
+        throw new InvalidOperationException("Expected too_many_candidates.");
+    }
+
     private static string TestConnectionString()
     {
         var raw = Environment.GetEnvironmentVariable("ARMGOV_TEST_DB");

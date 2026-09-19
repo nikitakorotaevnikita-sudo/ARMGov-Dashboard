@@ -155,6 +155,7 @@
 </div>
 
 <script src="/charts.js"></script>
+<script src="/analysis.js"></script>
 <script>
 var SEV={green:{c:'var(--green)',b:'b-green',a:'accent-green',l:'В норме'},amber:{c:'var(--amber)',b:'b-amber',a:'accent-amber',l:'Внимание'},red:{c:'var(--red)',b:'b-red',a:'accent-red',l:'Высокий риск'}};
 var PROCS=[], CUR=null, CURDATA=null, OVR=null, AISUM=null, CHAT=[], ACTIVE_PROFILE=null, PERIOD='all';
@@ -780,8 +781,9 @@ function thinkPreview(cols,preview){
   }).join('');
   return '<div class="think-prevwrap"><table class="think-prev">'+head+body+'</table></div>';
 }
-function thinkBlock(m){
+function thinkBlock(m, label){
   if(!m.steps||!m.steps.length)return '';
+  label=label||'Размышления';
   var secs=((m.elapsedMs||0)/1000).toFixed(1).replace('.',',');
   var body=m.steps.map(function(s){
     if(!s)return '';
@@ -797,7 +799,7 @@ function thinkBlock(m){
     return h+'</div>';
   }).join('');
   var warn=m.truncated?'<div class="think-meta" style="color:var(--amber)">Модель не уложилась в лимит шагов — ответ по собранным данным</div>':'';
-  return '<details class="think"><summary>Размышления · '+m.steps.length+' '+thinkStepsWord(m.steps.length)+' · '+secs+' с</summary>'+body+warn+'</details>';
+  return '<details class="think"><summary>'+label+' · '+m.steps.length+' '+thinkStepsWord(m.steps.length)+' · '+secs+' с</summary>'+body+warn+'</details>';
 }
 function chatBubble(m){
   var me=m.role==='user';
@@ -823,7 +825,7 @@ function sendChat(){
 }
 
 /* ---------- Аналитика по запросу ---------- */
-var CANVAS=[];          // история сессии: [{q, reply, dataset, datasetError, steps, elapsedMs, truncated, view, views, error}]
+var CANVAS=[];          // история: [{q, response, selections, blockViews, error?}]
 var CANVAS_CUR=-1;      // индекс показанного вопроса
 var CANVAS_BUSY=false;
 var CANVAS_T0=null;     // время старта запроса в полёте; null — когда ничего не ждём
@@ -866,9 +868,8 @@ function renderCanvas(){
 
 function quickCanvas(t){document.getElementById('canvas-input').value=t;askCanvas();}
 
-function askCanvas(){
+function submitCanvasRequest(req, updateIndex, clearInput){
   if(CANVAS_BUSY)return;
-  var inp=document.getElementById('canvas-input');var q=(inp.value||'').trim();if(!q)return;
   CANVAS_BUSY=true;CANVAS_T0=Date.now();
   var sendBtn=document.getElementById('canvas-send');if(sendBtn)sendBtn.disabled=true;
   var b0=document.getElementById('canvas-body');if(b0)b0.innerHTML=canvasWaitHtml();
@@ -880,75 +881,86 @@ function askCanvas(){
     clearInterval(tick);CANVAS_BUSY=false;CANVAS_T0=null;
     var btn=document.getElementById('canvas-send');if(btn)btn.disabled=false;
   }
-  fetch('/api/ai/sql',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({messages:[{role:'user',content:q}]})})
+  fetch('/api/ai/analysis',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(req)})
    .then(function(r){return r.json();}).then(function(d){
     done();
-    if(d.error){CANVAS.push({q:q,error:d.error});CANVAS_CUR=CANVAS.length-1;renderCanvasBody();return;}
-    var pv=d.dataset?pickViews(d.dataset):{views:[],def:null};
-    // datasetError лежит в шаге протокола с action:'answer', а не в самом ответе: сервер
-    // кладёт его туда, чтобы отличить «графика нет, потому что вопрос не про данные» от
-    // «график не собрался из-за ошибки» — иначе обе ситуации выглядят одинаково немо.
-    var answerStep=(d.steps||[]).filter(function(s){return s&&s.action==='answer';}).pop();
-    CANVAS.push({q:q,reply:d.reply,dataset:d.dataset,datasetError:answerStep&&answerStep.datasetError,
-                 steps:d.steps,elapsedMs:d.elapsedMs,truncated:d.truncated,views:pv.views,view:pv.def});
-    CANVAS_CUR=CANVAS.length-1;
-    // Не чистим захваченный до fetch `inp`: если уйти с экрана и вернуться до ответа,
-    // renderCanvas пересоздаёт textarea, и захваченный узел уже отсоединён от DOM —
-    // очистка ему не видна, и текст вопроса остаётся в поле (финальное ревью, п.13).
-    // Ищем актуальный элемент по id заново, на момент готовности ответа.
-    var freshInp=document.getElementById('canvas-input');if(freshInp)freshInp.value='';
+    if(d.error&&!d.status){
+      if(updateIndex!=null&&CANVAS[updateIndex]){
+        CANVAS[updateIndex].error=d.error;
+      } else {
+        CANVAS.push({q:req.question,error:d.error,selections:req.selections||[],blockViews:{}});
+        CANVAS_CUR=CANVAS.length-1;
+      }
+      renderCanvasBody();return;
+    }
+    if(updateIndex!=null&&CANVAS[updateIndex]){
+      CANVAS[updateIndex].response=d;
+      CANVAS[updateIndex].selections=req.selections||[];
+      CANVAS[updateIndex].error=null;
+      if(!CANVAS[updateIndex].blockViews)CANVAS[updateIndex].blockViews={};
+    } else {
+      CANVAS.push({q:req.question,response:d,selections:req.selections||[],blockViews:{}});
+      CANVAS_CUR=CANVAS.length-1;
+    }
+    if(clearInput!==false){
+      var freshInp=document.getElementById('canvas-input');if(freshInp)freshInp.value='';
+    }
     renderCanvasBody();
   }).catch(function(e){
     done();
-    CANVAS.push({q:q,error:String(e)});CANVAS_CUR=CANVAS.length-1;renderCanvasBody();
+    CANVAS.push({q:req.question,error:String(e),selections:req.selections||[],blockViews:{}});
+    CANVAS_CUR=CANVAS.length-1;renderCanvasBody();
   });
 }
 
-function setCanvasView(v){if(CANVAS[CANVAS_CUR]){CANVAS[CANVAS_CUR].view=v;renderCanvasBody();}}
-function restoreCanvas(i){CANVAS_CUR=i;renderCanvasBody();}
-
-// Честная подпись под графиком при усечении. У «sql» и у «tool»/«preload» разная семантика
-// rowCount: у sql усечение уже произошло на уровне запроса, поэтому rowCount — это число
-// УЖЕ отданных строк (то же самое, что rows.length), а истинный итог модели неизвестен —
-// называть его нельзя. У tool/preload усечение делается здесь же, при сборке датасета, и
-// rowCount — это общее число элементов ДО усечения, так что оба числа осмысленны.
-function canvasCaption(ds){
-  if(!ds.truncated)return 'строк '+ds.rowCount;
-  if(ds.source==='sql')return 'показаны первые '+ds.rows.length+' строк — в источнике их больше';
-  return 'строк '+ds.rowCount+' · показаны первые '+ds.rows.length;
+function askCanvas(){
+  var inp=document.getElementById('canvas-input');var q=(inp.value||'').trim();if(!q)return;
+  submitCanvasRequest({question:q,selections:[]}, null, true);
 }
+
+function pickCanvasEntity(idx, mention, employeeId){
+  var item=CANVAS[idx];if(!item)return;
+  var id=typeof employeeId==='string'&&/^\d+$/.test(employeeId)?Number(employeeId):employeeId;
+  if(typeof employeeId==='string'&&!Number.isSafeInteger(Number(employeeId)))id=employeeId;
+  var req=analysisSelectionRequest(item.q, mention, id, item.selections||[]);
+  submitCanvasRequest(req, idx, false);
+}
+
+function setCanvasBlockView(blockIndex, view){
+  var it=CANVAS[CANVAS_CUR];if(!it)return;
+  if(!it.blockViews)it.blockViews={};
+  it.blockViews[blockIndex]=view;
+  renderCanvasBody();
+}
+
+function restoreCanvas(i){CANVAS_CUR=i;renderCanvasBody();}
 
 function renderCanvasBody(){
   var el=document.getElementById('canvas-body');if(!el)return;
   var it=CANVAS[CANVAS_CUR];
-  if(!it){el.innerHTML='<div class="card"><div class="sub" style="margin:0">Задайте вопрос — здесь появится график.</div></div>';return;}
-  var h='';
+  if(!it){el.innerHTML='<div class="card"><div class="sub" style="margin:0">Задайте вопрос — здесь появится отчёт по данным.</div></div>';return;}
+  var h='<div class="card"><div class="card-h" style="margin:0">'+esc(it.q)+'</div></div>';
   if(it.error){
-    h+='<div class="card" style="border-color:var(--red)"><div class="card-h" style="color:var(--red)">Не получилось</div>'+
-       '<div class="sub" style="margin:0">'+esc(it.error)+'</div></div>';
-  } else {
-    var ds=it.dataset;
-    var chips=(it.views||[]).map(function(v){
-      return '<span class="expl'+(v===it.view?' on':'')+'" onclick="setCanvasView(\''+v+'\')">'+
-             viewTitle(v)+'</span>';}).join('');
-    h+='<div class="card">'+
-       '<div class="cardhead" style="align-items:center"><div class="card-h" style="margin:0;flex:1">'+esc(it.q)+'</div>'+
-       '<div class="row" style="gap:10px">'+chips+'</div></div>'+
-       (ds?renderView(ds,it.view):
-         '<div class="sub">для этого вопроса графика нет'+(it.datasetError?' — '+esc(it.datasetError):'')+'</div>')+
-       (ds?'<div class="sub" style="margin:10px 0 0">данные: '+esc(ds.source)+' · '+canvasCaption(ds)+'</div>':'')+
-       '</div>';
-    if(it.reply)h+='<div class="card" style="margin-top:12px">'+mdLite(it.reply)+
-       thinkBlock({steps:it.steps,elapsedMs:it.elapsedMs,truncated:it.truncated})+'</div>';
+    h+='<div class="card" style="margin-top:12px;border-color:var(--red)"><div class="card-h" style="color:var(--red)">Не получилось</div>'+
+       '<div class="sub" style="margin:0">'+esc(typeof it.error==='string'?it.error:(it.error.message||it.error))+'</div></div>';
+  } else if(it.response){
+    h+=renderAnalysis(it.response,{canvasIndex:CANVAS_CUR,blockViews:it.blockViews||{}});
   }
   if(CANVAS.length>1){
-    h+='<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center">'+
+    h+='<div class="canvas-hist row" style="gap:10px;flex-wrap:wrap;margin-top:14px;align-items:center">'+
        '<span class="sub" style="margin:0">История:</span>'+
-       CANVAS.map(function(c,i){return '<span class="expl" style="color:'+(i===CANVAS_CUR?'var(--accent)':'var(--muted)')+
-       '" onclick="restoreCanvas('+i+')">'+esc(c.q.slice(0,40))+'</span>';}).join('')+'</div>';
+       CANVAS.map(function(c,i){
+         return '<span class="expl canvas-hist-item'+(i===CANVAS_CUR?' on':'')+'" onclick="restoreCanvas('+i+')" title="'+esc(c.q)+'">'+
+           esc(truncAnalysisLabel(c.q))+'</span>';
+       }).join('')+'</div>';
   }
   el.innerHTML=h;
+  el.querySelectorAll('[data-block][data-view]').forEach(function(chip){
+    chip.onclick=function(){
+      setCanvasBlockView(parseInt(chip.getAttribute('data-block'),10), chip.getAttribute('data-view'));
+    };
+  });
 }
 
 /* ---------- Процесс ---------- */

@@ -469,7 +469,7 @@ partial class Program
     // Держать в синхроне с armgov-standalone.csproj (CopyToOutputDirectory) и index.html.
     internal static readonly HashSet<string> StaticFileAllowlist = new(StringComparer.OrdinalIgnoreCase)
     {
-        "index.html", "tokens.css", "style.css", "charts.js", "logo-directum.svg",
+        "index.html", "tokens.css", "style.css", "charts.js", "analysis.js", "logo-directum.svg",
         "inter-latin-400.woff2", "inter-latin-600.woff2", "inter-latin-700.woff2",
         "inter-cyrillic-400.woff2", "inter-cyrillic-600.woff2", "inter-cyrillic-700.woff2",
     };

@@ -64,7 +64,7 @@ try:
 except Exception as e:
     check("GET /config.json — не 200 с содержимым (404 или иной отказ)", False, str(e))
 
-for fname in ("/index.html", "/charts.js", "/style.css", "/tokens.css", "/logo-directum.svg"):
+for fname in ("/index.html", "/charts.js", "/analysis.js", "/style.css", "/tokens.css", "/logo-directum.svg"):
     try:
         st, body = _req_static(fname)
         check(f"GET {fname} — по-прежнему отдаётся (200)", st == 200 and len(body) > 0,

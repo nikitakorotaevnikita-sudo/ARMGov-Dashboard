@@ -31,6 +31,7 @@
     <None Include="tokens.css" CopyToOutputDirectory="PreserveNewest" />
     <None Include="style.css" CopyToOutputDirectory="PreserveNewest" />
     <None Include="charts.js" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="analysis.js" CopyToOutputDirectory="PreserveNewest" />
     <None Include="logo-directum.svg" CopyToOutputDirectory="PreserveNewest" />
     <None Include="inter-latin-400.woff2" CopyToOutputDirectory="PreserveNewest" />
     <None Include="inter-latin-600.woff2" CopyToOutputDirectory="PreserveNewest" />

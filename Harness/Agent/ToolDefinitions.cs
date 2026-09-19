@@ -393,13 +393,14 @@ public static class ToolDefinitions
             "{\"type\":\"object\",\"properties\":{\"metricId\":{\"type\":\"string\",\"minLength\":1},\"period\":" +
             PeriodSchema + "},\"required\":[\"metricId\",\"period\"],\"additionalProperties\":false}"),
 
+        // GigaChat 422, если type=object без properties (нужен хотя бы {}).
         Tool("dashboard_metric", "Готовая метрика дашборда.",
             "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"enum\":[" + MetricEnum +
-            "]},\"args\":{\"type\":\"object\",\"additionalProperties\":true}},\"required\":[\"name\",\"args\"],\"additionalProperties\":false}"),
+            "]},\"args\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":true}},\"required\":[\"name\",\"args\"],\"additionalProperties\":false}"),
 
         Tool("execute_sql", "Выполнить проверенный SELECT.", """
 
-            {"type":"object","properties":{"sql":{"type":"string","minLength":1},"parameters":{"type":"object","additionalProperties":true},"metricId":{"type":"string","minLength":1}},"required":["sql","parameters","metricId"],"additionalProperties":false}
+            {"type":"object","properties":{"sql":{"type":"string","minLength":1},"parameters":{"type":"object","properties":{},"additionalProperties":true},"metricId":{"type":"string","minLength":1}},"required":["sql","parameters","metricId"],"additionalProperties":false}
 
             """),
 
@@ -433,7 +434,7 @@ public static class ToolDefinitions
 
     private const string ReportSchema = """
 
-        {"type":"object","properties":{"title":{"type":"string","minLength":1},"interpretation":{"type":"object","properties":{"metricId":{"type":"string","minLength":1},"label":{"type":"string","minLength":1},"unit":{"type":"string","minLength":1},"from":{"type":"string"},"to":{"type":"string"},"dateField":{"type":"string"}},"required":["metricId","label","unit"],"additionalProperties":false},"blocks":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["table","bars","line","shares","kpi"]},"resultId":{"type":"string","minLength":1},"columns":{"type":"array","items":{"type":"string","minLength":1},"minItems":1},"equalsFilter":{"type":"object"},"limit":{"type":"integer","minimum":1}},"required":["kind","resultId","columns"],"additionalProperties":false},"minItems":1},"facts":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","minLength":1},"operation":{"type":"string","enum":["cell","sum","difference","ratio"]},"inputs":{"type":"array","items":{"type":"object","properties":{"resultId":{"type":"string","minLength":1},"row":{"type":"integer","minimum":0},"column":{"type":"string","minLength":1}},"required":["resultId","row","column"],"additionalProperties":false},"minItems":1}},"required":["id","operation","inputs"],"additionalProperties":false}},"textTemplates":{"type":"array","items":{"type":"string","minLength":1},"minItems":1},"commentary":{"type":"string"}},"required":["title","interpretation","blocks","facts","textTemplates"],"additionalProperties":false}
+        {"type":"object","properties":{"title":{"type":"string","minLength":1},"interpretation":{"type":"object","properties":{"metricId":{"type":"string","minLength":1},"label":{"type":"string","minLength":1},"unit":{"type":"string","minLength":1},"from":{"type":"string"},"to":{"type":"string"},"dateField":{"type":"string"}},"required":["metricId","label","unit"],"additionalProperties":false},"blocks":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["table","bars","line","shares","kpi"]},"resultId":{"type":"string","minLength":1},"columns":{"type":"array","items":{"type":"string","minLength":1},"minItems":1},"equalsFilter":{"type":"object","properties":{},"additionalProperties":true},"limit":{"type":"integer","minimum":1}},"required":["kind","resultId","columns"],"additionalProperties":false},"minItems":1},"facts":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","minLength":1},"operation":{"type":"string","enum":["cell","sum","difference","ratio"]},"inputs":{"type":"array","items":{"type":"object","properties":{"resultId":{"type":"string","minLength":1},"row":{"type":"integer","minimum":0},"column":{"type":"string","minLength":1}},"required":["resultId","row","column"],"additionalProperties":false},"minItems":1}},"required":["id","operation","inputs"],"additionalProperties":false}},"textTemplates":{"type":"array","items":{"type":"string","minLength":1},"minItems":1},"commentary":{"type":"string"}},"required":["title","interpretation","blocks","facts","textTemplates"],"additionalProperties":false}
 
         """;
 

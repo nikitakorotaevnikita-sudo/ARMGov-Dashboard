@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -21,7 +22,7 @@ public static class GigaChatTests
         var feedback = provider.Feedback(action, new { resultId = "r1" });
         Check.Equal("function", feedback.GetProperty("role").GetString());
         Check.Equal("execute_sql", feedback.GetProperty("name").GetString());
-        Check.Equal("state-1", feedback.GetProperty("functions_state_id").GetString());
+        Check.True(!feedback.TryGetProperty("functions_state_id", out _));
         Check.Equal("r1", JsonDocument.Parse(feedback.GetProperty("content").GetString()!)
             .RootElement.GetProperty("resultId").GetString());
 
@@ -29,7 +30,11 @@ public static class GigaChatTests
         Check.Equal("auto", chatBody.RootElement.GetProperty("function_call").GetString());
         Check.Equal("execute_sql", chatBody.RootElement.GetProperty("functions")[0]
             .GetProperty("name").GetString());
-        Check.Equal("state-old", chatBody.RootElement.GetProperty("messages")[1]
+        var requestMessages = chatBody.RootElement.GetProperty("messages");
+        Check.Equal("system", requestMessages[0].GetProperty("role").GetString());
+        Check.Equal("state-old", requestMessages.EnumerateArray()
+            .First(message =>
+                message.TryGetProperty("functions_state_id", out _))
             .GetProperty("functions_state_id").GetString());
     }
 

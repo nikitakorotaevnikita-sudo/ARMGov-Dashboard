@@ -16,6 +16,9 @@ public sealed class AnalysisAgent
         "provider_protocol_error",
         "invalid_function_arguments",
         "unknown_function",
+        "unstructured_response",
+        "missing_context",
+        "unknown_metric",
         "invalid_report",
         "unknown_result",
         "unknown_column",
@@ -118,7 +121,10 @@ public sealed class AnalysisAgent
             catch (HarnessException ex) when (IsRepairable(ex.Error) && context.CanRepair)
             {
                 context.Repairs++;
-                AppendProtocolFeedback(context, ex.Error);
+                if (string.Equals(ex.Error.Code, "unstructured_response", StringComparison.Ordinal))
+                    AppendUnstructuredNudge(context, ex.Error);
+                else
+                    AppendProtocolFeedback(context, ex.Error);
                 continue;
             }
             catch (HarnessException ex)
@@ -331,6 +337,17 @@ public sealed class AnalysisAgent
                     retryable = error.Retryable
                 }
             }));
+    }
+
+    private static void AppendUnstructuredNudge(RunContext context, HarnessError error)
+    {
+        context.Messages.Add(JsonSerializer.SerializeToElement(new
+        {
+            role = "user",
+            content =
+                "Предыдущий ответ без function_call отклонён (" + error.Message + "). " +
+                "Вызови ровно одну доступную функцию. Текст без function_call недопустим."
+        }, HarnessJson.Options));
     }
 
     private static bool IsRepairable(HarnessError error) =>

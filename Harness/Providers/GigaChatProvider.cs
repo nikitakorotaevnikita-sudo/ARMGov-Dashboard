@@ -15,6 +15,15 @@ namespace ArmGov.Harness;
 
 public sealed class GigaChatProvider : IModelProvider
 {
+    private const string SystemPrompt =
+        "Ты — аналитик процессов Directum RX. Отвечай ТОЛЬКО через function_call " +
+        "к переданным функциям. Обычный текст без function_call запрещён и не станет отчётом.\n" +
+        "Порядок: search_catalog → set_context (metricId из каталога или generic_query) → " +
+        "execute_sql или dashboard_metric → submit_report. " +
+        "Без set_context нельзя вызывать execute_sql/dashboard_metric/submit_report. " +
+        "Если вопрос неоднозначен по сотруднику — clarify.\n" +
+        "Числа и факты бери только из результатов функций, ничего не выдумывай.";
+
     private readonly HttpClient _client;
     private readonly GigaChatTokenProvider _tokens;
     private readonly string _model;
@@ -45,7 +54,7 @@ public sealed class GigaChatProvider : IModelProvider
         var body = JsonSerializer.Serialize(new
         {
             model = _model,
-            messages,
+            messages = BuildMessages(messages),
             functions = tools.Select(tool => new
             {
                 name = tool.Name,
@@ -57,11 +66,20 @@ public sealed class GigaChatProvider : IModelProvider
 
         using var response = await SendWithRetryAsync(body, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
+        {
+            var status = (int)response.StatusCode;
+            // Тело ответа — только для 422 (схемы); 401/др. могут содержать секреты.
+            var detail = status == 422
+                ? await SafeBodyAsync(response, ct).ConfigureAwait(false)
+                : "";
             throw Error(
                 "provider_http_error",
-                $"GigaChat returned HTTP {(int)response.StatusCode}.",
+                string.IsNullOrWhiteSpace(detail)
+                    ? $"GigaChat returned HTTP {status}."
+                    : $"GigaChat returned HTTP {status}: {Trunc(detail, 300)}",
                 response.StatusCode == HttpStatusCode.TooManyRequests ||
-                (int)response.StatusCode >= 500);
+                status >= 500);
+        }
 
         try
         {
@@ -84,20 +102,14 @@ public sealed class GigaChatProvider : IModelProvider
     public JsonElement Feedback(ModelAction action, object result)
     {
         ArgumentNullException.ThrowIfNull(action);
-        var feedback = new Dictionary<string, object?>
+        // GigaChat: role=function — только name + content (JSON-строка).
+        // functions_state_id оставляем на assistant-сообщении; на function его нет в API.
+        return JsonSerializer.SerializeToElement(new Dictionary<string, object?>
         {
             ["role"] = "function",
             ["name"] = action.Name,
             ["content"] = JsonSerializer.Serialize(result, HarnessJson.Options)
-        };
-        if (action.AssistantMessage.TryGetProperty(
-                "functions_state_id",
-                out var state))
-        {
-            feedback["functions_state_id"] = state.Clone();
-        }
-
-        return JsonSerializer.SerializeToElement(feedback, HarnessJson.Options);
+        }, HarnessJson.Options);
     }
 
     private async Task<HttpResponseMessage> SendWithRetryAsync(
@@ -192,9 +204,21 @@ public sealed class GigaChatProvider : IModelProvider
             !message.TryGetProperty("function_call", out var functionCall) ||
             functionCall.ValueKind != JsonValueKind.Object)
         {
+            var finish = choice.TryGetProperty("finish_reason", out var fr) &&
+                         fr.ValueKind == JsonValueKind.String
+                ? fr.GetString()
+                : null;
+            var content = message.ValueKind == JsonValueKind.Object &&
+                          message.TryGetProperty("content", out var c) &&
+                          c.ValueKind == JsonValueKind.String
+                ? c.GetString()
+                : null;
+            var detail = string.IsNullOrWhiteSpace(content)
+                ? $"finish_reason={finish ?? "?"}"
+                : $"finish_reason={finish ?? "?"}; content={Trunc(content!, 160)}";
             throw Error(
                 "unstructured_response",
-                "GigaChat response contains no native function call.",
+                "GigaChat response contains no native function call. " + detail,
                 true);
         }
 
@@ -228,11 +252,39 @@ public sealed class GigaChatProvider : IModelProvider
         return new ModelAction(name, arguments.Clone(), message.Clone());
     }
 
+    private static List<object> BuildMessages(IReadOnlyList<JsonElement> messages)
+    {
+        var requestMessages = new List<object>
+        {
+            new { role = "system", content = SystemPrompt }
+        };
+        foreach (var message in messages)
+            requestMessages.Add(message);
+        return requestMessages;
+    }
+
     private static HarnessException Error(
         string code,
         string message,
         bool retryable) =>
         new(new HarnessError(code, message, retryable));
+
+    private static async Task<string> SafeBodyAsync(
+        HttpResponseMessage response,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static string Trunc(string s, int n) =>
+        s.Length <= n ? s : s.Substring(0, n) + "…";
 
     private static class JsonSchemaValidator
     {

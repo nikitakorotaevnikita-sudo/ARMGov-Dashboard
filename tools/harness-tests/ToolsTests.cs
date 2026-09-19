@@ -14,6 +14,41 @@ public static class ToolsTests
         }
     }
 
+    // GigaChat отвечает 422, если type=object без поля properties
+    // (даже при additionalProperties:true) — см. live-инцидент 2026-09-19.
+    public static void ObjectSchemasDeclarePropertiesForGigaChat()
+    {
+        foreach (var tool in ToolDefinitions.All)
+            AssertObjectsHaveProperties(tool.Parameters, tool.Name);
+    }
+
+    static void AssertObjectsHaveProperties(JsonElement schema, string path)
+    {
+        if (schema.ValueKind != JsonValueKind.Object)
+            return;
+        if (schema.TryGetProperty("type", out var type) &&
+            type.ValueKind == JsonValueKind.String &&
+            type.GetString() == "object")
+        {
+            if (!(schema.TryGetProperty("properties", out var props) &&
+                  props.ValueKind == JsonValueKind.Object))
+            {
+                throw new InvalidOperationException(
+                    path + ": object schema must declare properties");
+            }
+        }
+
+        if (schema.TryGetProperty("properties", out var properties) &&
+            properties.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in properties.EnumerateObject())
+                AssertObjectsHaveProperties(property.Value, path + "." + property.Name);
+        }
+
+        if (schema.TryGetProperty("items", out var items))
+            AssertObjectsHaveProperties(items, path + ".items");
+    }
+
     public static void UnknownSchemaKeywordFails()
     {
         var schema = JsonDocument.Parse("""

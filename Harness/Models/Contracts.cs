@@ -116,16 +116,6 @@ public record AnalysisResponse(
     Clarification? Clarification,
     HarnessError? Error);
 
-public interface IModelProvider
-{
-    Task<ModelAction> NextAsync(
-        IReadOnlyList<JsonElement> messages,
-        IReadOnlyList<ToolDefinition> tools,
-        CancellationToken ct);
-
-    JsonElement Feedback(ModelAction action, object result);
-}
-
 public interface IQueryExecutor
 {
     Task<QueryResult> ExecuteAsync(QuerySpec query, CancellationToken ct);

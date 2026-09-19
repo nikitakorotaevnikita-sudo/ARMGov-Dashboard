@@ -36,6 +36,13 @@ public static class ContractsTests
         Check.Equal("\"completed\"", json);
     }
 
+    public static void NumericEnumsAreRejected()
+    {
+        Check.Throws<JsonException>(() => JsonSerializer.Deserialize<StatusHolder>(
+            "{\"status\":0}",
+            HarnessJson.Options));
+    }
+
     public static void Int64AndDecimalKeepExactJsonValues()
     {
         var values = new Dictionary<string, JsonElement>
@@ -121,4 +128,6 @@ public static class ContractsTests
     {
         Completed
     }
+
+    private record StatusHolder(SampleStatus Status);
 }

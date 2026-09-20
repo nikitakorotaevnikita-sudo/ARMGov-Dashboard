@@ -13,9 +13,10 @@ namespace ArmGov.Harness;
 
 public sealed class ToolDispatcher
 {
-    private static readonly Regex SqlPeriodToken = new(
-        @"@(?:from|to)\b",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> DashboardPeriodMetrics = new(StringComparer.Ordinal)
+    {
+        "execution_discipline", "overview", "process", "stuck", "by_kind", "departments"
+    };
 
     private readonly AnalyticsCatalog _catalog;
     private readonly IEmployeeResolver _employees;
@@ -63,7 +64,17 @@ public sealed class ToolDispatcher
     private object SearchCatalog(ModelAction action)
     {
         var query = action.Arguments.GetProperty("query").GetString()!;
-        return _catalog.Search(query);
+        try
+        {
+            return _catalog.Search(query);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new HarnessException(new HarnessError(
+                "invalid_search_query",
+                ex.Message,
+                true));
+        }
     }
 
     private object DescribeTable(ModelAction action)
@@ -89,11 +100,17 @@ public sealed class ToolDispatcher
         var mention = string.Join(' ', tokens);
         var candidates = await _employees.SearchAsync(tokens, ct).ConfigureAwait(false);
         context.RegisterCandidates(mention, candidates);
+        var resolved = candidates.Length == 1
+            ? context.RegisterResolved(mention, candidates[0])
+            : null;
         return candidates.Select(candidate => new
         {
             candidate.Id,
             candidate.Name,
-            candidate.Department
+            candidate.Department,
+            ServerParameter = resolved?.Employee.Id == candidate.Id
+                ? "@" + resolved.ParameterName
+                : null
         }).ToArray();
     }
 
@@ -128,12 +145,21 @@ public sealed class ToolDispatcher
         RunContext context,
         CancellationToken ct)
     {
-        EnsureContext(action.Name, context);
+        if (context.ResolvedSelections.Count > 0)
+        {
+            throw new HarnessException(new HarnessError(
+                "selection_not_supported",
+                "Готовая метрика не умеет применять выбранных сотрудников. Используйте execute_sql с серверными параметрами выбора.",
+                true));
+        }
+        EnsureContext(action, context);
         var name = action.Arguments.GetProperty("name").GetString()!;
+        MaybeUpgradeGenericContext(name, context);
         var args = action.Arguments.TryGetProperty("args", out var argsElement) &&
                    argsElement.ValueKind == JsonValueKind.Object
             ? argsElement
             : JsonSerializer.SerializeToElement(new { }, HarnessJson.Options);
+        args = EnsureDashboardPeriod(name, args, context);
         var data = await _dashboard(name, args, ct).ConfigureAwait(false);
         var stored = context.Results.Add(data);
         context.ContextLocked = true;
@@ -145,7 +171,7 @@ public sealed class ToolDispatcher
         RunContext context,
         CancellationToken ct)
     {
-        EnsureContext(action.Name, context);
+        EnsureContext(action, context);
         var sql = action.Arguments.GetProperty("sql").GetString()!;
         var metricId = action.Arguments.GetProperty("metricId").GetString()!;
         if (!string.Equals(metricId, context.Interpretation!.MetricId, StringComparison.OrdinalIgnoreCase))
@@ -156,9 +182,19 @@ public sealed class ToolDispatcher
                 true));
         }
 
+        if (string.Equals(metricId, "personal_instruction_count", StringComparison.OrdinalIgnoreCase) &&
+            context.ResolvedSelections.Count == 0)
+        {
+            throw new HarnessException(new HarnessError(
+                "missing_entity_resolution",
+                "Персональная метрика требует сначала найти сотрудника через find_employees.",
+                true));
+        }
+
         if (context.Interpretation.From is not null || context.Interpretation.To is not null)
         {
-            if (!SqlPeriodToken.IsMatch(sql))
+            if (!SqlGuard.ReferencesParameter(sql, "from") ||
+                !SqlGuard.ReferencesParameter(sql, "to"))
             {
                 throw new HarnessException(new HarnessError(
                     "missing_period_binding",
@@ -168,6 +204,18 @@ public sealed class ToolDispatcher
         }
 
         var parameters = ReadParameters(action.Arguments);
+        foreach (var selection in context.ResolvedSelections)
+        {
+            if (!SqlGuard.ReferencesParameter(sql, selection.ParameterName))
+            {
+                throw new HarnessException(new HarnessError(
+                    "missing_selection_binding",
+                    $"SQL должен фильтровать выбранного сотрудника через @{selection.ParameterName}.",
+                    true));
+            }
+            parameters[selection.ParameterName] =
+                JsonSerializer.SerializeToElement(selection.Employee.Id, HarnessJson.Options);
+        }
         var query = new QuerySpec(
             sql,
             parameters,
@@ -182,6 +230,14 @@ public sealed class ToolDispatcher
 
     private object ReadResult(ModelAction action, RunContext context)
     {
+        if (!context.HasStoredResults)
+        {
+            throw new HarnessException(new HarnessError(
+                "unknown_result",
+                "Результата ещё нет. Сначала вызовите dashboard_metric или execute_sql.",
+                true));
+        }
+
         var resultId = action.Arguments.GetProperty("resultId").GetString()!;
         var offset = action.Arguments.GetProperty("offset").GetInt32();
         var take = action.Arguments.GetProperty("take").GetInt32();
@@ -212,7 +268,7 @@ public sealed class ToolDispatcher
                 throw new HarnessException(new HarnessError(
                     "unknown_candidate",
                     "Уточнение может ссылаться только на найденных кандидатов.",
-                    false));
+                    true));
             }
             candidates.Add(candidate);
         }
@@ -355,18 +411,201 @@ public sealed class ToolDispatcher
         return parameters;
     }
 
-    private static void EnsureContext(string tool, RunContext context)
+    private void EnsureContext(ModelAction action, RunContext context)
     {
-        if (context.Interpretation is null)
+        if (context.Interpretation is not null)
+            return;
+
+        var metricId = InferMetricId(action, context);
+        var period = InferPeriodElement(UserQuestion(context));
+        if (string.Equals(action.Name, "dashboard_metric", StringComparison.Ordinal) &&
+            period.GetProperty("kind").GetString() == "all" &&
+            action.Arguments.TryGetProperty("args", out var dashboardArgs) &&
+            dashboardArgs.ValueKind == JsonValueKind.Object &&
+            dashboardArgs.TryGetProperty("period", out var dashboardPeriod) &&
+            dashboardPeriod.ValueKind == JsonValueKind.String)
+        {
+            period = DashboardPeriodElement(dashboardPeriod.GetString()!);
+        }
+        var (from, to) = ParsePeriod(period, context.AsOf);
+        context.Interpretation = BuildInterpretation(metricId, from, to);
+    }
+
+    private void MaybeUpgradeGenericContext(string dashboardName, RunContext context)
+    {
+        if (context.ContextLocked ||
+            context.Interpretation is null ||
+            !string.Equals(context.Interpretation.MetricId, "generic_query", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var mapped = dashboardName switch
+        {
+            "execution_discipline" or "overview" or "process" => "execution_discipline",
+            "appeal_topics" => "appeal_topics",
+            "stuck" => "overdue_assignment_kpi",
+            _ => "generic_query"
+        };
+        if (string.Equals(mapped, "generic_query", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        context.Interpretation = BuildInterpretation(
+            mapped,
+            context.Interpretation.From,
+            context.Interpretation.To);
+    }
+
+    private string InferMetricId(ModelAction action, RunContext context)
+    {
+        if (string.Equals(action.Name, "execute_sql", StringComparison.Ordinal) &&
+            action.Arguments.TryGetProperty("metricId", out var sqlMetric) &&
+            sqlMetric.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(sqlMetric.GetString()))
+        {
+            return sqlMetric.GetString()!;
+        }
+
+        if (string.Equals(action.Name, "dashboard_metric", StringComparison.Ordinal) &&
+            action.Arguments.TryGetProperty("name", out var name) &&
+            name.ValueKind == JsonValueKind.String)
+        {
+            return name.GetString() switch
+            {
+                "execution_discipline" or "overview" or "process" => "execution_discipline",
+                "appeal_topics" => "appeal_topics",
+                "stuck" => "overdue_assignment_kpi",
+                _ => "generic_query"
+            };
+        }
+
+        var question = UserQuestion(context);
+        if (!string.IsNullOrWhiteSpace(question))
+        {
+            try
+            {
+                var hits = _catalog.Search(question, 5);
+                foreach (var hit in hits.EnumerateArray())
+                {
+                    if (hit.TryGetProperty("kind", out var kind) &&
+                        kind.GetString() == "metric" &&
+                        hit.TryGetProperty("id", out var id) &&
+                        id.GetString() is { Length: > 0 } metricId)
+                    {
+                        return metricId;
+                    }
+                }
+            }
+            catch (ArgumentException)
+            {
+                // пустой или слишком длинный вопрос — generic_query
+            }
+        }
+
+        return "generic_query";
+    }
+
+    internal static JsonElement InferPeriodElement(string question)
+    {
+        var text = question ?? "";
+        if (Regex.IsMatch(text, @"12\s*мес", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(text, @"за\s+год", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return JsonDocument.Parse("""{"kind":"months","months":12}""").RootElement.Clone();
+        }
+
+        if (text.Contains("квартал", StringComparison.OrdinalIgnoreCase))
+            return JsonDocument.Parse("""{"kind":"months","months":3}""").RootElement.Clone();
+
+        if (Regex.IsMatch(text, @"за\s+(последний\s+)?месяц", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return JsonDocument.Parse("""{"kind":"months","months":1}""").RootElement.Clone();
+
+        return JsonDocument.Parse("""{"kind":"all"}""").RootElement.Clone();
+    }
+
+    private static JsonElement EnsureDashboardPeriod(
+        string name,
+        JsonElement args,
+        RunContext context)
+    {
+        var supportsPeriod = DashboardPeriodMetrics.Contains(name);
+        var bounded = context.Interpretation?.From is not null || context.Interpretation?.To is not null;
+        var expected = ExactDashboardPeriod(context);
+
+        if (bounded && !supportsPeriod)
         {
             throw new HarnessException(new HarnessError(
-                "missing_context",
-                $"Инструмент {tool} требует set_context.",
+                "unsupported_dashboard_period",
+                $"Готовая метрика {name} не поддерживает период контекста; используйте execute_sql.",
                 true));
         }
+        if (bounded && expected is null)
+        {
+            throw new HarnessException(new HarnessError(
+                "unsupported_dashboard_period",
+                "Готовые метрики поддерживают только скользящие периоды 1, 3 или 12 месяцев; используйте execute_sql.",
+                true));
+        }
+
+        string? actual = null;
+        if (args.ValueKind == JsonValueKind.Object &&
+            args.TryGetProperty("period", out var actualElement) &&
+            actualElement.ValueKind == JsonValueKind.String)
+        {
+            actual = actualElement.GetString();
+        }
+        if (actual is not null && !string.Equals(actual, expected, StringComparison.Ordinal))
+        {
+            throw new HarnessException(new HarnessError(
+                "period_mismatch",
+                $"Период dashboard_metric ({actual}) не совпадает с периодом контекста ({expected ?? "all"}).",
+                true));
+        }
+        if (expected is null || actual is not null)
+            return args;
+
+        var map = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        if (args.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in args.EnumerateObject())
+                map[property.Name] = property.Value.Clone();
+        }
+
+        map["period"] = JsonSerializer.SerializeToElement(expected);
+        return JsonSerializer.SerializeToElement(map);
+    }
+
+    private static string? ExactDashboardPeriod(RunContext context)
+    {
+        if (context.Interpretation?.From is not DateTimeOffset from ||
+            context.Interpretation.To is not DateTimeOffset to ||
+            to != context.AsOf)
+            return null;
+        if (from == context.AsOf.AddMonths(-1)) return "month";
+        if (from == context.AsOf.AddMonths(-3)) return "quarter";
+        if (from == context.AsOf.AddMonths(-12)) return "year";
+        return null;
+    }
+
+    private static JsonElement DashboardPeriodElement(string period) => period switch
+    {
+        "month" => JsonDocument.Parse("""{"kind":"months","months":1}""").RootElement.Clone(),
+        "quarter" => JsonDocument.Parse("""{"kind":"months","months":3}""").RootElement.Clone(),
+        "year" => JsonDocument.Parse("""{"kind":"months","months":12}""").RootElement.Clone(),
+        _ => JsonDocument.Parse("""{"kind":"all"}""").RootElement.Clone()
+    };
+
+    private static string UserQuestion(RunContext context)
+    {
+        if (context.Messages.Count == 0)
+            return "";
+        var message = context.Messages[0];
+        return message.TryGetProperty("content", out var content) &&
+               content.ValueKind == JsonValueKind.String
+            ? content.GetString() ?? ""
+            : "";
     }
 
     private static ResultPage ToResultPage(RunContext context, string resultId) =>
-        // Короткая страница в history: полный объём доступен через read_result.
         context.Results.Page(context.RunId, resultId, offset: 0, take: 5);
 }

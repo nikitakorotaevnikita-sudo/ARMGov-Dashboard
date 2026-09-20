@@ -163,7 +163,7 @@ def assert_same_source_in_chart_and_facts(resp: dict) -> tuple[bool, str]:
 
 def assert_dashboard_metric_used(resp: dict) -> tuple[bool, str]:
     tools = _step_tools(resp)
-    if any(t in tools for t in ("run_dashboard_metric", "get_departments", "get_process_metric")):
+    if any(t in tools for t in ("dashboard_metric", "run_dashboard_metric", "get_departments", "get_process_metric")):
         return True, "dashboard tool in steps"
     for ds in resp.get("datasets") or []:
         src = (ds.get("data") or {}).get("source") or ""

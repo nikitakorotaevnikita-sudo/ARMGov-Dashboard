@@ -80,6 +80,17 @@ public static class SqlGuard
         return TryScan(sql, out cleaned, out code, out _, out error);
     }
 
+    internal static bool ReferencesParameter(string sql, string parameterName)
+    {
+        if (!TryTokenizeInput(sql, out _, out var code, out _))
+            return false;
+        return Regex.IsMatch(
+            code,
+            @"@" + Regex.Escape(parameterName) + @"\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+            RegexTimeout);
+    }
+
     private static (Regex Regex, string Word)[] Compile(
         IEnumerable<string> words,
         bool suffixBoundary)

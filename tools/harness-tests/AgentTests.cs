@@ -38,20 +38,24 @@ public static class AgentTests
     public static async Task FindExecuteReportCompletesWithFirstSource()
     {
         var meaning = Interpretation();
+        var employee = new EmployeeCandidate(101, "Иванов", "А");
         var provider = new ScriptedProvider(
             Action("find_employees", Json("""
                 {"tokens":["Иванов"]}
                 """)),
             Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
             Action("execute_sql", SqlArgs(
-                "select name, n from t where created >= @from and created < @to",
+                "select name, n from t where employee_id = @selected_employee_1 and created >= @from and created < @to",
                 "personal_instruction_count")),
             Action("execute_sql", SqlArgs(
-                "select name, n from t where created >= @from and created < @to",
+                "select name, n from t where employee_id = @selected_employee_1 and created >= @from and created < @to",
                 "personal_instruction_count")),
             Action("submit_report", ReportArgs("r1", meaning)));
 
-        var response = await Run(provider, rows: Rows(Row("Иванов", 7), Row("Петров", 3)));
+        var response = await Run(
+            provider,
+            rows: Rows(Row("Иванов", 7), Row("Петров", 3)),
+            search: [employee]);
 
         Check.Equal("completed", response.Status);
         Check.True(response.Report != null);
@@ -85,24 +89,43 @@ public static class AgentTests
         Check.Throws<HarnessException>(() => ToolDispatcher.ParsePeriod(period, FixedNow));
     }
 
-    public static async Task ExecuteSqlBeforeContextIsRejected()
+    public static async Task ExecuteSqlBeforeContextUsesMetricIdFromArgs()
     {
         var provider = new ScriptedProvider(
-            Action("execute_sql", SqlArgs("select 1 n", "personal_instruction_count")));
+            Action("execute_sql", SqlArgs("select 1 n", "generic_query")));
 
         var response = await Run(provider);
 
-        Check.True(response.Steps.Any(step => step.Error?.Code == "missing_context"));
+        Check.True(response.Steps.Any(step =>
+            step.Tool == "execute_sql" && step.Status == "ok"));
+        Check.True(response.Steps.All(step => step.Error?.Code != "missing_context"));
+        Check.Equal(1, response.Datasets.Length);
+    }
+
+    public static async Task DashboardMetricWithoutSetContextCompletes()
+    {
+        var provider = new ScriptedProvider(
+            Action("dashboard_metric", Json("""
+                {"name":"execution_discipline","args":{"period":"year"}}
+                """)),
+            Action("submit_report", ReportArgs("r1", Interpretation())));
+
+        var response = await Run(provider);
+
+        Check.Equal("completed", response.Status);
+        Check.True(response.Report != null);
+        Check.Equal("r1", response.Report!.Blocks[0].ResultId);
+        Check.Equal("execution_discipline", response.Report.Interpretation.MetricId);
     }
 
     public static async Task RepeatSetContextAfterResultIsRejected()
     {
         var provider = new ScriptedProvider(
-            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
+            Action("set_context", ContextArgs("generic_query", Months(12))),
             Action("execute_sql", SqlArgs(
                 "select name, n from t where created >= @from and created < @to",
-                "personal_instruction_count")),
-            Action("set_context", ContextArgs("personal_instruction_count", Months(6))));
+                "generic_query")),
+            Action("set_context", ContextArgs("generic_query", Months(6))));
 
         var response = await Run(provider);
 
@@ -112,14 +135,14 @@ public static class AgentTests
     public static async Task TwoRunsDoNotShareResults()
     {
         var first = await Run(new ScriptedProvider(
-            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
+            Action("set_context", ContextArgs("generic_query", Months(12))),
             Action("execute_sql", SqlArgs(
                 "select name, n from t where created >= @from and created < @to",
-                "personal_instruction_count"))),
+                "generic_query"))),
             rows: Rows(Row("Иванов", 7)));
         var second = await Run(new ScriptedProvider(
-            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
-            Action("submit_report", ReportArgs("r1", Interpretation()))));
+            Action("set_context", ContextArgs("generic_query", Months(12))),
+            Action("submit_report", ReportArgs("r1", GenericInterpretation()))));
 
         Check.Equal(1, first.Datasets.Length);
         Check.Equal(0, second.Datasets.Length);
@@ -166,6 +189,27 @@ public static class AgentTests
         Check.True(response.Steps.Any(step => step.Error?.Code == "unknown_candidate"));
     }
 
+    public static async Task ClarifyCanRepairInventedCandidateId()
+    {
+        var provider = new ScriptedProvider(
+            Action("find_employees", Json("""
+                {"tokens":["Иванов"]}
+                """)),
+            Action("clarify", Json("""
+                {"question":"Кого выбрать?","candidateIds":[999]}
+                """)),
+            Action("clarify", Json("""
+                {"question":"Кого выбрать?","candidateIds":[101]}
+                """)));
+
+        var response = await Run(
+            provider,
+            search: [new EmployeeCandidate(101, "Иванов", "А")]);
+
+        Check.Equal("needs_clarification", response.Status);
+        Check.Equal(101L, response.Clarification!.Candidates[0].Id);
+    }
+
     public static async Task WrongSelectionIdFails()
     {
         var response = await Run(
@@ -177,7 +221,57 @@ public static class AgentTests
         Check.Equal("invalid_selection", response.Error!.Code);
     }
 
-    public static async Task ResolvedEntityWithEmptyDataReturnsNoData()
+    public static async Task ResolvedSelectionIsSharedAndServerBound()
+    {
+        var provider = new RecordingProvider(
+            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
+            Action("execute_sql", SqlArgs(
+                "select name, n from t where employee_id = @selected_employee_1 and created >= @from and created < @to",
+                "personal_instruction_count")));
+        var executor = new CapturingQueryExecutor(Rows(Row("Иванов Иван", 7)));
+        var employee = new EmployeeCandidate(101, "Иванов Иван", "Контроль");
+        var agent = CreateAgent(provider, search: [employee], executor: executor);
+
+        var response = await agent.RunAsync(
+            new AnalysisRequest(
+                "Сравни поручения Иванова",
+                [new EntitySelection("Иванов", employee.Id)]),
+            CancellationToken.None);
+
+        var selectionMessage = provider.FirstMessages
+            .Select(item => item.GetProperty("content").GetString() ?? "")
+            .First(text => text.Contains("verified_employee_selections", StringComparison.Ordinal));
+        var selectionPayload = JsonDocument.Parse(selectionMessage).RootElement;
+        var selectedEmployee = selectionPayload.GetProperty("employees")[0];
+        Check.Equal("@selected_employee_1", selectedEmployee.GetProperty("serverParameter").GetString());
+        Check.Equal("Иванов Иван", selectedEmployee.GetProperty("name").GetString());
+        Check.True(executor.LastQuery != null);
+        Check.Equal(employee.Id, executor.LastQuery!.Parameters["selected_employee_1"].GetInt64());
+        Check.Equal(1, response.Datasets.Length);
+    }
+
+    public static async Task UniqueEmployeeSearchCreatesServerBinding()
+    {
+        var employee = new EmployeeCandidate(101, "Иванов Иван", "Контроль");
+        var provider = new ScriptedProvider(
+            Action("find_employees", Json("""{"tokens":["Иванов","Иван"]}""")),
+            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
+            Action("execute_sql", SqlArgs(
+                "select name, n from t where employee_id = @selected_employee_1 and created >= @from and created < @to",
+                "personal_instruction_count")));
+        var executor = new CapturingQueryExecutor(Rows(Row(employee.Name, 7)));
+        var agent = CreateAgent(provider, search: [employee], executor: executor);
+
+        var response = await agent.RunAsync(
+            new AnalysisRequest("Сколько поручений у Иванова Ивана за 12 месяцев", []),
+            CancellationToken.None);
+
+        Check.True(executor.LastQuery != null);
+        Check.Equal(employee.Id, executor.LastQuery!.Parameters["selected_employee_1"].GetInt64());
+        Check.Equal(1, response.Datasets.Length);
+    }
+
+    public static async Task PersonalSqlRequiresEmployeeResolution()
     {
         var provider = new ScriptedProvider(
             Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
@@ -185,7 +279,62 @@ public static class AgentTests
                 "select name, n from t where created >= @from and created < @to",
                 "personal_instruction_count")));
 
-        var response = await Run(provider, rows: Array.Empty<JsonElement[]>());
+        var response = await Run(provider);
+
+        Check.True(response.Steps.Any(step => step.Error?.Code == "missing_entity_resolution"));
+        Check.Equal(0, response.Datasets.Length);
+    }
+
+    public static async Task SelectionSqlWithoutServerBindingIsRejected()
+    {
+        var employee = new EmployeeCandidate(101, "Иванов Иван", "Контроль");
+        var provider = new ScriptedProvider(
+            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
+            Action("execute_sql", SqlArgs(
+                "select name, n from t where created >= @from and created < @to",
+                "personal_instruction_count")));
+
+        var response = await Run(
+            provider,
+            selections: [new EntitySelection("Иванов", employee.Id)],
+            search: [employee]);
+
+        Check.True(response.Steps.Any(step => step.Error?.Code == "missing_selection_binding"));
+        Check.Equal(0, response.Datasets.Length);
+    }
+
+    public static async Task DashboardMetricCannotIgnoreResolvedSelections()
+    {
+        var employee = new EmployeeCandidate(101, "Иванов Иван", "Контроль");
+        var provider = new ScriptedProvider(
+            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
+            Action("dashboard_metric", Json("""
+                {"name":"overview","args":{"period":"year"}}
+                """)));
+
+        var response = await Run(
+            provider,
+            selections: [new EntitySelection("Иванов", employee.Id)],
+            search: [employee]);
+
+        Check.True(response.Steps.Any(step => step.Error?.Code == "selection_not_supported"));
+        Check.Equal(0, response.Datasets.Length);
+    }
+
+    public static async Task ResolvedEntityWithEmptyDataReturnsNoData()
+    {
+        var employee = new EmployeeCandidate(101, "Иванов", "А");
+        var provider = new ScriptedProvider(
+            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
+            Action("execute_sql", SqlArgs(
+                "select name, n from t where employee_id = @selected_employee_1 and created >= @from and created < @to",
+                "personal_instruction_count")));
+
+        var response = await Run(
+            provider,
+            rows: Array.Empty<JsonElement[]>(),
+            search: [employee],
+            selections: [new EntitySelection("Иванов", employee.Id)]);
 
         Check.Equal("no_data", response.Status);
         Check.True(response.Report == null);
@@ -205,10 +354,10 @@ public static class AgentTests
     public static async Task ProviderFailureAfterResultsIsIncomplete()
     {
         var scripted = new ScriptedProvider(
-            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
+            Action("set_context", ContextArgs("generic_query", Months(12))),
             Action("execute_sql", SqlArgs(
                 "select name, n from t where created >= @from and created < @to",
-                "personal_instruction_count")));
+                "generic_query")));
         var provider = new ChainedProvider(
             scripted,
             new FailingProvider(new HarnessError("provider_http_error", "Down.", true)));
@@ -224,18 +373,37 @@ public static class AgentTests
             .ToArray();
         var provider = new ScriptedProvider(actions);
         var response = await Run(provider);
-        Check.True(provider.CallCount <= 12);
-        Check.Equal(12, provider.CallCount);
+        Check.True(provider.CallCount <= 8);
+        Check.Equal(8, provider.CallCount);
         Check.Equal("incomplete", response.Status);
+    }
+
+    public static async Task ExhaustedBudgetWithDataStaysIncomplete()
+    {
+        var actions = new List<ModelAction>
+        {
+            Action("set_context", ContextArgs("generic_query", Months(12))),
+            Action("execute_sql", SqlArgs(
+                "select name, n from t where created >= @from and created < @to",
+                "generic_query"))
+        };
+        actions.AddRange(Enumerable.Range(0, 20)
+            .Select(_ => Action("search_catalog", Json("""{"query":"поруч"}"""))));
+
+        var response = await Run(new ScriptedProvider(actions.ToArray()));
+
+        Check.Equal("incomplete", response.Status);
+        Check.True(response.Report == null);
+        Check.Equal(1, response.Datasets.Length);
     }
 
     public static async Task ToolInjectionInResultTextIsNotExecuted()
     {
         var provider = new ScriptedProvider(
-            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
+            Action("set_context", ContextArgs("generic_query", Months(12))),
             Action("execute_sql", SqlArgs(
                 "select name, n from t where created >= @from and created < @to",
-                "personal_instruction_count")));
+                "generic_query")));
 
         var response = await Run(
             provider,
@@ -248,15 +416,77 @@ public static class AgentTests
     public static async Task SqlMissingPeriodBindingIsRepairable()
     {
         var provider = new ScriptedProvider(
-            Action("set_context", ContextArgs("personal_instruction_count", Months(12))),
-            Action("execute_sql", SqlArgs("select 1 n", "personal_instruction_count")),
+            Action("set_context", ContextArgs("generic_query", Months(12))),
+            Action("execute_sql", SqlArgs("select 1 n", "generic_query")),
             Action("execute_sql", SqlArgs(
                 "select name, n from t where created >= @from and created < @to",
-                "personal_instruction_count")),
-            Action("submit_report", ReportArgs("r1", Interpretation())));
+                "generic_query")),
+            Action("submit_report", ReportArgs("r1", GenericInterpretation())));
 
         var response = await Run(provider, rows: Rows(Row("Иванов", 7)));
         Check.Equal("completed", response.Status);
+    }
+
+    public static async Task SqlMustBindBothPeriodBoundaries()
+    {
+        var provider = new ScriptedProvider(
+            Action("set_context", ContextArgs("generic_query", Months(12))),
+            Action("execute_sql", SqlArgs(
+                "select name, n from t where created >= @from",
+                "generic_query")));
+
+        var response = await Run(provider);
+
+        Check.True(response.Steps.Any(step => step.Error?.Code == "missing_period_binding"));
+        Check.Equal(0, response.Datasets.Length);
+    }
+
+    public static async Task DashboardMetricRejectsMismatchedPeriod()
+    {
+        var dashboardCalls = 0;
+        var provider = new ScriptedProvider(
+            Action("set_context", ContextArgs("execution_discipline", Months(12))),
+            Action("dashboard_metric", Json("""
+                {"name":"execution_discipline","args":{"period":"month"}}
+                """)));
+        var agent = CreateAgent(
+            provider,
+            dashboard: (_, _, _) =>
+            {
+                dashboardCalls++;
+                return Task.FromResult(Query("dashboard"));
+            });
+
+        var response = await agent.RunAsync(
+            new AnalysisRequest("Покажи дисциплину за 12 месяцев", []),
+            CancellationToken.None);
+
+        Check.True(response.Steps.Any(step => step.Error?.Code == "period_mismatch"));
+        Check.Equal(0, dashboardCalls);
+    }
+
+    public static async Task DashboardMetricRejectsUnsupportedRollingPeriod()
+    {
+        var dashboardCalls = 0;
+        var provider = new ScriptedProvider(
+            Action("set_context", ContextArgs("execution_discipline", Months(10))),
+            Action("dashboard_metric", Json("""
+                {"name":"execution_discipline","args":{}}
+                """)));
+        var agent = CreateAgent(
+            provider,
+            dashboard: (_, _, _) =>
+            {
+                dashboardCalls++;
+                return Task.FromResult(Query("dashboard"));
+            });
+
+        var response = await agent.RunAsync(
+            new AnalysisRequest("Покажи дисциплину за 10 месяцев", []),
+            CancellationToken.None);
+
+        Check.True(response.Steps.Any(step => step.Error?.Code == "unsupported_dashboard_period"));
+        Check.Equal(0, dashboardCalls);
     }
 
     public static async Task CancelledRunReturnsIncomplete()
@@ -286,14 +516,16 @@ public static class AgentTests
     private static AnalysisAgent CreateAgent(
         IModelProvider provider,
         JsonElement[][]? rows = null,
-        EmployeeCandidate[]? search = null)
+        EmployeeCandidate[]? search = null,
+        IQueryExecutor? executor = null,
+        Func<string, JsonElement, CancellationToken, Task<QueryResult>>? dashboard = null)
     {
         var catalog = LoadCatalog();
         var dispatcher = new ToolDispatcher(
             catalog,
             new FakeEmployeeResolver(search ?? Array.Empty<EmployeeCandidate>()),
-            new FakeQueryExecutor(rows ?? Rows(Row("Иванов", 7))),
-            (_, _, _) => Task.FromResult(Query("dashboard")));
+            executor ?? new FakeQueryExecutor(rows ?? Rows(Row("Иванов", 7))),
+            dashboard ?? ((_, _, _) => Task.FromResult(Query("dashboard"))));
         return new AnalysisAgent(provider, dispatcher, new FakeClock(FixedNow));
     }
 
@@ -318,6 +550,15 @@ public static class AgentTests
             FixedNow.AddMonths(-12),
             FixedNow,
             "root.created");
+
+    private static Interpretation GenericInterpretation() =>
+        new(
+            "generic_query",
+            "Произвольный запрос",
+            "строка результата",
+            FixedNow.AddMonths(-12),
+            FixedNow,
+            null);
 
     private static JsonElement ContextArgs(string metricId, JsonElement period) =>
         Json($$"""{"metricId":"{{metricId}}","period":{{period.GetRawText()}}}""");
@@ -429,6 +670,55 @@ public static class AgentTests
                 FixedNow,
                 new Truncation(false, false, Array.Empty<string>(), false),
                 Array.Empty<string>()));
+    }
+
+    private sealed class CapturingQueryExecutor : IQueryExecutor
+    {
+        private readonly JsonElement[][] _rows;
+        public CapturingQueryExecutor(JsonElement[][] rows) => _rows = rows;
+        public QuerySpec? LastQuery { get; private set; }
+
+        public Task<QueryResult> ExecuteAsync(QuerySpec query, CancellationToken ct)
+        {
+            LastQuery = query;
+            return Task.FromResult(new QueryResult(
+                "sql",
+                [
+                    new ColumnSpec("name", "Сотрудник", "string"),
+                    new ColumnSpec("n", "Количество", "number")
+                ],
+                _rows,
+                query.Sql,
+                FixedNow,
+                new Truncation(false, false, [], false),
+                []));
+        }
+    }
+
+    private sealed class RecordingProvider : IModelProvider
+    {
+        private readonly Queue<ModelAction> _actions;
+        public RecordingProvider(params ModelAction[] actions) => _actions = new Queue<ModelAction>(actions);
+        public JsonElement[] FirstMessages { get; private set; } = [];
+
+        public Task<ModelAction> NextAsync(
+            IReadOnlyList<JsonElement> messages,
+            IReadOnlyList<ToolDefinition> tools,
+            CancellationToken ct)
+        {
+            if (FirstMessages.Length == 0)
+                FirstMessages = messages.Select(item => item.Clone()).ToArray();
+            if (_actions.Count == 0)
+                throw new HarnessException(new HarnessError("provider_exhausted", "done", false));
+            return Task.FromResult(_actions.Dequeue());
+        }
+
+        public JsonElement Feedback(ModelAction action, object result) =>
+            JsonSerializer.SerializeToElement(new
+            {
+                role = "user",
+                content = JsonSerializer.Serialize(new { tool = action.Name, result }, HarnessJson.Options)
+            }, HarnessJson.Options);
     }
 
     private sealed class FailingProvider : IModelProvider

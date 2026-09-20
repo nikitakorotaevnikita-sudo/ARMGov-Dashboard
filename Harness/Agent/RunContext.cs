@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 
 namespace ArmGov.Harness;
@@ -9,8 +10,8 @@ namespace ArmGov.Harness;
 public sealed class RunContext
 {
     public const int BudgetMs = 120_000;
-    public const int MaxModelCalls = 12;
-    public const int MaxRepairs = 4;
+    public const int MaxModelCalls = 8;
+    public const int MaxRepairs = 2;
 
     private readonly TimeProvider _clock;
     private readonly long _startedAt;
@@ -29,6 +30,7 @@ public sealed class RunContext
         _startedAt = clock.GetTimestamp();
         Candidates = new Dictionary<string, EmployeeCandidate[]>(StringComparer.Ordinal);
         ResolvedEmployees = new Dictionary<string, EmployeeCandidate>(StringComparer.Ordinal);
+        ResolvedSelections = new List<ResolvedEmployeeSelection>();
         Steps = new List<AgentStep>();
         Warnings = new List<string>();
         Messages = new List<System.Text.Json.JsonElement>();
@@ -39,6 +41,7 @@ public sealed class RunContext
     public Interpretation? Interpretation { get; set; }
     public Dictionary<string, EmployeeCandidate[]> Candidates { get; }
     public Dictionary<string, EmployeeCandidate> ResolvedEmployees { get; }
+    public List<ResolvedEmployeeSelection> ResolvedSelections { get; }
     public EntitySelection[] Selections { get; private set; } = Array.Empty<EntitySelection>();
     public DateTimeOffset AsOf { get; }
     public DateTimeOffset Deadline { get; }
@@ -72,9 +75,20 @@ public sealed class RunContext
         Candidates[mention] = candidates;
     }
 
-    public void RegisterResolved(string mention, EmployeeCandidate employee)
+    public ResolvedEmployeeSelection RegisterResolved(string mention, EmployeeCandidate employee)
     {
         ResolvedEmployees[mention] = employee;
+        var existing = ResolvedSelections.FirstOrDefault(selection =>
+            selection.Employee.Id == employee.Id);
+        if (existing is not null)
+            return existing;
+
+        var resolved = new ResolvedEmployeeSelection(
+            mention,
+            employee,
+            $"selected_employee_{ResolvedSelections.Count + 1}");
+        ResolvedSelections.Add(resolved);
+        return resolved;
     }
 
     public bool TryGetKnownCandidate(long id, out EmployeeCandidate candidate)
@@ -104,3 +118,8 @@ public sealed class RunContext
         return false;
     }
 }
+
+public sealed record ResolvedEmployeeSelection(
+    string Mention,
+    EmployeeCandidate Employee,
+    string ParameterName);

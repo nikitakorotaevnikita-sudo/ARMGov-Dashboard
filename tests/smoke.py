@@ -481,7 +481,7 @@ section("Инструменты агента  /api/ai/tools")
 try:
     st, cat = _req("/api/ai/tools")
     names = [t["name"] for t in cat.get("tools", [])]
-    check("в каталоге девять инструментов", len(names) == 9, str(len(names)))
+    check("в каталоге десять инструментов", len(names) == 10, str(len(names)))
     for n in ["overview","process","leaders","leader_tasks","stuck",
               "by_kind","departments","my_tasks","appeal_topics"]:
         check(f"инструмент {n} в каталоге", n in names)

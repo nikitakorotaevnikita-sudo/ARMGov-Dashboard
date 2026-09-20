@@ -213,7 +213,8 @@ partial class Program
                 ["by_kind"] = new[] { "items" },
                 ["departments"] = new[] { "items" },
                 ["my_tasks"] = new[] { "all", "items" },
-                ["appeal_topics"] = new[] { "sections", "topQuestions", "treemap" }
+                ["appeal_topics"] = new[] { "topQuestions", "sections", "treemap" },
+                ["execution_discipline"] = new[] { "months" }
             };
 
         public static QueryResult ToQueryResult(string toolName, object payload)

@@ -65,26 +65,19 @@ public sealed class AnalyticsCatalog
         if (take is < 1 or > 20)
             throw new ArgumentOutOfRangeException(nameof(take), "Take must be between 1 and 20.");
 
-        var tokens = query.Split(
-            (char[]?)null,
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (tokens.Length > 5)
-            throw new ArgumentException("Search accepts at most five tokens.", nameof(query));
+        var tokens = SignificantSearchTokens(query);
 
         var metricHits = _metrics.Values
             .Select(metric => new
             {
                 Metric = metric,
-                Searchable = string.Join(
-                    " ",
-                    metric.Id,
-                    metric.Unit,
-                    metric.DateField,
-                    metric.Definition)
+                Score = TokenScore(
+                    string.Join(" ", metric.Id, metric.Unit, metric.DateField, metric.Definition),
+                    tokens)
             })
-            .Where(item => tokens.All(token =>
-                item.Searchable.Contains(token, StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(item => item.Metric.Id, StringComparer.Ordinal)
+            .Where(item => item.Score > 0)
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Metric.Id, StringComparer.Ordinal)
             .Select(item => (object)new
             {
                 kind = "metric",
@@ -113,17 +106,19 @@ public sealed class AnalyticsCatalog
             .Select(relation => new
             {
                 Relation = relation,
-                Searchable = string.Join(
-                    " ",
-                    relation.QualifiedName,
-                    relation.Title,
-                    relation.Description,
-                    string.Join(" ", relation.Fields.Select(
-                        field => $"{field.Name} {field.Description}")))
+                Score = TokenScore(
+                    string.Join(
+                        " ",
+                        relation.QualifiedName,
+                        relation.Title,
+                        relation.Description,
+                        string.Join(" ", relation.Fields.Select(
+                            field => $"{field.Name} {field.Description}"))),
+                    tokens)
             })
-            .Where(item => tokens.All(token =>
-                item.Searchable.Contains(token, StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(item => item.Relation.QualifiedName, StringComparer.Ordinal)
+            .Where(item => item.Score > 0)
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Relation.QualifiedName, StringComparer.Ordinal)
             .Select(item => (object)new
             {
                 kind = "relation",
@@ -177,6 +172,43 @@ public sealed class AnalyticsCatalog
             fields = selected,
             relationships
         }, HarnessJson.Options);
+    }
+
+    private static readonly HashSet<string> SearchStopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "покажи", "дай", "статистику", "статистика", "по", "за", "в", "и", "на", "для",
+        "про", "как", "что", "кто", "где", "сравни", "нужна", "нужен", "месяц", "месяца",
+        "месяцев", "год", "года", "лет", "квартал", "топ", "the", "a", "an"
+    };
+
+    private static string[] SignificantSearchTokens(string query)
+    {
+        var raw = query.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var significant = raw
+            .Where(token =>
+                token.Length > 1 &&
+                !token.All(char.IsDigit) &&
+                !SearchStopwords.Contains(token))
+            .Take(5)
+            .ToArray();
+        if (significant.Length > 0)
+            return significant;
+        return raw.Take(5).ToArray();
+    }
+
+    private static int TokenScore(string searchable, string[] tokens)
+    {
+        if (tokens.Length == 0)
+            return 0;
+        var score = 0;
+        foreach (var token in tokens)
+        {
+            if (searchable.Contains(token, StringComparison.OrdinalIgnoreCase))
+                score++;
+        }
+        return score;
     }
 
     private static JsonElement SchemaMismatch(string relation, string[] fields) =>

@@ -61,6 +61,53 @@ public static class CatalogTests
         Check.Equal("generic_query", result[0].GetProperty("id").GetString());
     }
 
+    public static void SearchTruncatesLongPhrasesInsteadOfThrowing()
+    {
+        var result = LoadCatalog().Search(
+            "дай статистику по вопросам в обращениях топ десять",
+            10);
+
+        Check.Equal(JsonValueKind.Array, result.ValueKind);
+        Check.True(result.GetArrayLength() > 0);
+    }
+
+    public static void SearchFindsAppealTopics()
+    {
+        var result = LoadCatalog().Search("обращения топ", 10);
+        var metric = result.EnumerateArray()
+            .FirstOrDefault(item =>
+                item.TryGetProperty("kind", out var kind) &&
+                kind.GetString() == "metric" &&
+                item.GetProperty("id").GetString() == "appeal_topics");
+        Check.Equal("appeal_topics", metric.GetProperty("id").GetString());
+    }
+
+    public static void SearchFindsExecutionDisciplineFromInflectedPhrase()
+    {
+        var result = LoadCatalog().Search(
+            "покажи исполнительску дисциплину за 12 месяцев",
+            10);
+        var metric = result.EnumerateArray()
+            .First(item =>
+                item.TryGetProperty("kind", out var kind) &&
+                kind.GetString() == "metric");
+        Check.Equal("execution_discipline", metric.GetProperty("id").GetString());
+    }
+
+    public static void InferPeriodTwelveMonthsFromQuestion()
+    {
+        var period = ToolDispatcher.InferPeriodElement(
+            "покажи исполнительскую дисциплину за 12 месяцев");
+        Check.Equal("months", period.GetProperty("kind").GetString());
+        Check.Equal(12, period.GetProperty("months").GetInt32());
+    }
+
+    public static void ExecutionDisciplineDeclaresItsActualPeriodField()
+    {
+        var metric = LoadCatalog().GetMetric("execution_discipline");
+        Check.Equal("task.created", metric.DateField);
+    }
+
     public static void DescribeRejectsUnknownFields()
     {
         var result = LoadCatalog().Describe(

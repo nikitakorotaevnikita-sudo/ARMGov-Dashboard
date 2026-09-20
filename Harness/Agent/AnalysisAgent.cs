@@ -20,6 +20,8 @@ public sealed class AnalysisAgent
         "missing_context",
         "unknown_metric",
         "invalid_period",
+        "invalid_search_query",
+        "unknown_candidate",
         "provider_payload_too_large",
         "invalid_report",
         "unknown_result",
@@ -35,6 +37,7 @@ public sealed class AnalysisAgent
         "numeric_literal",
         "unknown_placeholder",
         "duplicate_fact_id",
+        "unverified_numeric_text",
         "invalid_text_templates",
         "invalid_shares",
         "invalid_kpi",
@@ -42,7 +45,12 @@ public sealed class AnalysisAgent
         "invalid_bars",
         "decimal_overflow",
         "metric_mismatch",
-        "missing_period_binding"
+        "missing_period_binding",
+        "missing_selection_binding",
+        "missing_entity_resolution",
+        "selection_not_supported",
+        "period_mismatch",
+        "unsupported_dashboard_period"
     };
 
     private readonly IModelProvider _provider;
@@ -101,6 +109,7 @@ public sealed class AnalysisAgent
             }
             context.RegisterResolved(selection.Mention, employee);
         }
+        AppendResolvedSelections(context);
 
         while (true)
         {
@@ -117,7 +126,7 @@ public sealed class AnalysisAgent
                 context.ModelCalls++;
                 action = await _provider.NextAsync(
                     context.Messages,
-                    ToolDefinitions.All,
+                    ToolDefinitions.Available(context.HasStoredResults),
                     context.LinkedToken(ct)).ConfigureAwait(false);
             }
             catch (HarnessException ex) when (IsRepairable(ex.Error) && context.CanRepair)
@@ -261,7 +270,7 @@ public sealed class AnalysisAgent
         {
             return (false, null, new HarnessError(
                 "missing_context",
-                "Отчёт требует установленного контекста.",
+                "Отчёт требует установленного контекста. Сначала вызовите set_context или dashboard_metric.",
                 true));
         }
 
@@ -284,14 +293,18 @@ public sealed class AnalysisAgent
     }
 
     /// <summary>
-    /// GigaChat часто присылает пустые blocks/facts — достраиваем из уже полученных resultId.
+    /// GigaChat часто присылает пустые blocks/facts и цифры в тексте.
+    /// Достраиваем блоки из resultId и убираем непроверенные числа из title/templates.
     /// </summary>
     private static ReportSpec EnrichReport(ReportSpec report, RunContext context)
     {
         var stored = context.Results.All();
-        var title = string.IsNullOrWhiteSpace(report.Title)
-            ? (context.Interpretation?.Label ?? "Анализ")
-            : report.Title;
+        var fallbackTitle = StripDigits(context.Interpretation?.Label);
+        if (string.IsNullOrWhiteSpace(fallbackTitle))
+            fallbackTitle = "Анализ";
+        var title = StripDigits(report.Title);
+        if (string.IsNullOrWhiteSpace(title))
+            title = fallbackTitle;
 
         var blocks = report.Blocks is { Length: > 0 }
             ? report.Blocks
@@ -300,23 +313,37 @@ public sealed class AnalysisAgent
                 result.ResultId,
                 result.Data.Columns.Select(column => column.Name).Take(5).ToArray(),
                 null,
-                10)).ToArray();
+                Math.Min(12, Math.Max(1, result.Data.Rows.Length)))).ToArray();
 
         var facts = report.Facts ?? Array.Empty<FactSpec>();
-        var templates = report.TextTemplates is { Length: > 0 }
-            ? report.TextTemplates
-            : new[]
-            {
-                string.IsNullOrWhiteSpace(report.Commentary) ? title : report.Commentary!
-            };
+        var templates = (report.TextTemplates ?? Array.Empty<string>())
+            .Select(StripDigits)
+            .Where(text => !string.IsNullOrWhiteSpace(text) &&
+                           !text.Contains("{{", StringComparison.Ordinal))
+            .ToArray();
+        if (templates.Length == 0)
+            templates = ["См. таблицу ниже. Числа только в блоках по данным запросов."];
+
+        var commentary = StripDigits(report.Commentary);
+        if (string.IsNullOrWhiteSpace(commentary))
+            commentary = null;
 
         return report with
         {
             Title = title,
             Blocks = blocks,
             Facts = facts,
-            TextTemplates = templates
+            TextTemplates = templates,
+            Commentary = commentary
         };
+    }
+
+    private static string StripDigits(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return "";
+        var chars = text.Where(ch => !char.IsDigit(ch)).ToArray();
+        return new string(chars).Trim();
     }
 
     private void RecordStep(
@@ -392,6 +419,33 @@ public sealed class AnalysisAgent
 
     private static bool IsRepairable(HarnessError error) =>
         RepairableCodes.Contains(error.Code);
+
+    private static void AppendResolvedSelections(RunContext context)
+    {
+        if (context.ResolvedSelections.Count == 0)
+            return;
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            type = "verified_employee_selections",
+            instruction =
+                "Для каждого выбранного сотрудника фильтруй SQL только по указанному serverParameter. " +
+                "Значения параметров привязывает сервер; не добавляй их в execute_sql.parameters.",
+            employees = context.ResolvedSelections.Select(selection => new
+            {
+                mention = selection.Mention,
+                employeeId = selection.Employee.Id,
+                name = selection.Employee.Name,
+                department = selection.Employee.Department,
+                serverParameter = "@" + selection.ParameterName
+            })
+        }, HarnessJson.Options);
+        context.Messages.Add(JsonSerializer.SerializeToElement(new
+        {
+            role = "user",
+            content = payload
+        }, HarnessJson.Options));
+    }
 
     private AnalysisResponse Incomplete(RunContext context, string warning)
     {

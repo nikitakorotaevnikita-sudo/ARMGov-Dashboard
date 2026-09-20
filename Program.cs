@@ -720,6 +720,43 @@ partial class Program
         return pts;
     }
 
+    static object BuildExecutionDiscipline(string period)
+    {
+        using var dbLease = DashboardConnectionLease.Open();
+        var c = dbLease.Connection;
+        var acc = new SortedDictionary<string, int[]>(StringComparer.Ordinal);
+        foreach (var p0 in Procs)
+        {
+            var p = new Proc { Key = p0.Key, Name = p0.Name, Where = p0.Where + PeriodClause(period) };
+            foreach (dynamic t in Trend(c, p))
+            {
+                var m = (string)t.month;
+                if (!acc.ContainsKey(m)) acc[m] = new int[8];
+                acc[m][0] += (int)t.ontime;
+                acc[m][1] += (int)t.overdue;
+                var slot = TrendSlot(p.Key);
+                acc[m][slot] += (int)t.ontime;
+                acc[m][slot + 1] += (int)t.overdue;
+            }
+        }
+
+        var months = acc.Select(kv => new
+        {
+            month = kv.Key,
+            ontime = kv.Value[0],
+            overdue = kv.Value[1],
+            ontime_poruchenia = kv.Value[2],
+            overdue_poruchenia = kv.Value[3],
+            ontime_appeals = kv.Value[4],
+            overdue_appeals = kv.Value[5],
+            ontime_npa = kv.Value[6],
+            overdue_npa = kv.Value[7]
+        }).ToList();
+        if (string.Equals(period, "year", StringComparison.Ordinal) && months.Count > 12)
+            months = months.Skip(months.Count - 12).ToList();
+        return new { months, period = string.IsNullOrEmpty(period) ? "all" : period };
+    }
+
     // ---------- /api/process ----------
     // Блок «Мои задания» демо-руководителя: сводка + топ-3 (просроченные, затем ближайший срок).
     static object BuildMyTasks()
@@ -2944,6 +2981,7 @@ partial class Program
         ("departments", "key, " + PeriodArgDoc, "Разрез процесса по подразделениям"),
         ("my_tasks", "", "Личный контроль руководителя: его поручения и задания"),
         ("appeal_topics", "", "Тематики обращений граждан: разделы, темы, топ вопросов"),
+        ("execution_discipline", PeriodArgDoc, "Исполнительская дисциплина: помесячно вовремя / просрочено"),
     };
 
     static object ToolCall(string name, JsonElement args)
@@ -2983,6 +3021,7 @@ partial class Program
             case "departments": return BuildDepartments(S("key", "poruchenia"), S("period"));
             case "my_tasks": return BuildMyTasks();
             case "appeal_topics": return BuildAppealTopics();
+            case "execution_discipline": return BuildExecutionDiscipline(S("period"));
             default: throw new Exception("неизвестный инструмент: " + name);
         }
     }

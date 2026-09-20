@@ -28,8 +28,14 @@ public static class ToolDefinitions
 
         "overview", "process", "leaders", "leader_tasks", "stuck",
 
-        "by_kind", "departments", "my_tasks", "appeal_topics"
+        "by_kind", "departments", "my_tasks", "appeal_topics", "execution_discipline"
 
+    ];
+
+    private static readonly string[] MetricIds =
+    [
+        "generic_query", "personal_instruction_count", "completed_assignment_count",
+        "overdue_assignment_kpi", "appeal_topics", "execution_discipline"
     ];
 
 
@@ -38,7 +44,7 @@ public static class ToolDefinitions
 
     {
 
-        "overview", "process", "stuck", "by_kind", "departments"
+        "overview", "process", "stuck", "by_kind", "departments", "execution_discipline"
 
     };
 
@@ -65,6 +71,13 @@ public static class ToolDefinitions
 
 
     public static IReadOnlyList<ToolDefinition> All => AllTools;
+
+    public static IReadOnlyList<ToolDefinition> Available(bool hasStoredResults) =>
+        hasStoredResults
+            ? AllTools
+            : AllTools.Where(tool =>
+                    tool.Name is not ("read_result" or "submit_report"))
+                .ToArray();
 
     private static ValidationResult Success { get; } =
         new(true, Array.Empty<HarnessError>());
@@ -186,7 +199,10 @@ public static class ToolDefinitions
 
 
 
-            if (property.Name is "from" or "to" or "asOf")
+            if (property.Name.Equals("from", StringComparison.OrdinalIgnoreCase) ||
+                property.Name.Equals("to", StringComparison.OrdinalIgnoreCase) ||
+                property.Name.Equals("asof", StringComparison.OrdinalIgnoreCase) ||
+                property.Name.StartsWith("selected_employee_", StringComparison.OrdinalIgnoreCase))
 
             {
 
@@ -194,7 +210,7 @@ public static class ToolDefinitions
 
                     "invalid_function_arguments",
 
-                    "from/to/asOf are reserved server parameters.",
+                    "from/to/asOf/selected_employee_* are reserved server parameters.",
 
                     true));
 
@@ -292,6 +308,16 @@ public static class ToolDefinitions
 
         }
 
+        if (args.TryGetProperty("period", out var period) &&
+            (period.ValueKind != JsonValueKind.String ||
+             period.GetString() is not ("month" or "quarter" or "year")))
+        {
+            return Fail(new HarnessError(
+                "invalid_function_arguments",
+                "dashboard_metric period must be month, quarter, or year.",
+                true));
+        }
+
 
 
         if (string.Equals(name, "leaders", StringComparison.Ordinal) &&
@@ -387,21 +413,21 @@ public static class ToolDefinitions
             """),
 
         Tool("set_context",
-            "Задать метрику и период. metricId — id из search_catalog (kind=metric) или generic_query.",
-            "{\"type\":\"object\",\"properties\":{\"metricId\":{\"type\":\"string\",\"minLength\":1},\"period\":" +
+            "Задать метрику и период. Для относительного периода используй kind=months; kind=range требует from и to ISO8601.",
+            "{\"type\":\"object\",\"properties\":{\"metricId\":{\"type\":\"string\",\"enum\":[" + MetricIdEnum + "]},\"period\":" +
             PeriodSchema + "},\"required\":[\"metricId\",\"period\"],\"additionalProperties\":false}"),
 
         // GigaChat 422, если type=object без properties (нужен хотя бы {}).
         Tool("dashboard_metric",
-            "Готовая метрика дашборда. Для заторов — stuck; для перегруза — leaders.",
+            "Готовая метрика дашборда. Заторы — stuck; перегруз — leaders; дисциплина — execution_discipline.",
             "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"enum\":[" + MetricEnum +
             "]},\"args\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":true}},\"required\":[\"name\",\"args\"],\"additionalProperties\":false}"),
 
-        Tool("execute_sql", "Выполнить проверенный SELECT.", """
-
-            {"type":"object","properties":{"sql":{"type":"string","minLength":1},"parameters":{"type":"object","properties":{},"additionalProperties":true},"metricId":{"type":"string","minLength":1}},"required":["sql","parameters","metricId"],"additionalProperties":false}
-
-            """),
+        Tool("execute_sql", "Выполнить проверенный SELECT.",
+            "{\"type\":\"object\",\"properties\":{\"sql\":{\"type\":\"string\",\"minLength\":1}," +
+            "\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":true}," +
+            "\"metricId\":{\"type\":\"string\",\"enum\":[" + MetricIdEnum + "]}}," +
+            "\"required\":[\"sql\",\"parameters\",\"metricId\"],\"additionalProperties\":false}"),
 
         Tool("read_result", "Прочитать страницу сохранённого результата.", """
 
@@ -446,6 +472,12 @@ public static class ToolDefinitions
         ",",
 
         DashboardMetricNames.Select(name => JsonSerializer.Serialize(name)));
+
+    private static string MetricIdEnum => string.Join(
+
+        ",",
+
+        MetricIds.Select(id => JsonSerializer.Serialize(id)));
 
 
 

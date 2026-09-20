@@ -119,6 +119,42 @@ public static class ToolsTests
         Check.True(result.Ok);
     }
 
+    public static void DashboardMetricRejectsInvalidPeriod()
+    {
+        var result = ToolDefinitions.Validate(
+            "dashboard_metric",
+            JsonDocument.Parse("""
+                {"name":"overview","args":{"period":"decade"}}
+                """).RootElement);
+
+        Check.True(!result.Ok);
+        Check.Equal("invalid_function_arguments", result.Errors[0].Code);
+    }
+
+    public static void ExecuteSqlRejectsUnknownMetricId()
+    {
+        var args = JsonDocument.Parse("""
+            {"sql":"select 1","parameters":{},"metricId":"invented_metric"}
+            """).RootElement;
+
+        var result = ToolDefinitions.Validate("execute_sql", args);
+
+        Check.True(!result.Ok);
+        Check.Equal("invalid_function_arguments", result.Errors[0].Code);
+    }
+
+    public static void SetContextRejectsUnknownMetricId()
+    {
+        var args = JsonDocument.Parse("""
+            {"metricId":"invented_metric","period":{"kind":"all"}}
+            """).RootElement;
+
+        var result = ToolDefinitions.Validate("set_context", args);
+
+        Check.True(!result.Ok);
+        Check.Equal("invalid_function_arguments", result.Errors[0].Code);
+    }
+
     public static void DashboardMetricRejectsInvalidProcessKey()
     {
         var args = JsonDocument.Parse("""

@@ -172,6 +172,18 @@
       "unit": "задание",
       "dateField": "assignment.created",
       "definition": "count(assignment.id) по заданиям со status = InProcess, deadline is not null и deadline < now(); уведомления исключены; дедупликация поручений не применяется; просрочка, затор, перегруз, кто тормозит"
+    },
+    {
+      "id": "appeal_topics",
+      "unit": "вопрос",
+      "dateField": "document.created",
+      "definition": "статистика вопросов в обращениях граждан: топ тем, treemap, разделы; обращения, вопросы"
+    },
+    {
+      "id": "execution_discipline",
+      "unit": "задание",
+      "dateField": "task.created",
+      "definition": "помесячный тренд исполнительской дисциплины: вовремя против просрочено, период фильтруется по дате создания задачи; исполнительскую дисциплину, соблюдение сроков, тренд"
     }
   ]
 }

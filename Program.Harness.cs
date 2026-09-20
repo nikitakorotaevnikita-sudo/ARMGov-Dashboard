@@ -21,6 +21,7 @@ partial class Program
     public static Func<IModelProvider>? TestModelProviderFactory;
     public static Func<IEmployeeResolver>? TestEmployeeResolverFactory;
     public static Func<IQueryExecutor>? TestQueryExecutorFactory;
+    public static Func<IAnalysisRunner>? TestAnalysisRunnerFactory;
     public static Func<bool>? TestAnalyticsEnabled;
 
     static string EffectiveNoticeNotIn => HarnessSnapshotScope.Value?.NoticeNotIn ?? NoticeNotIn;
@@ -61,6 +62,10 @@ partial class Program
         AnalysisRequest request,
         CancellationToken ct)
     {
+        var testRunner = TestAnalysisRunnerFactory?.Invoke();
+        if (testRunner != null)
+            return await testRunner.RunAsync(request, ct).ConfigureAwait(false);
+
         var snapshot = HarnessRunSnapshot.Capture();
         if (!snapshot.Llm.IsConfigured)
         {
@@ -79,11 +84,11 @@ partial class Program
                     false));
         }
 
-        var agent = CreateAnalysisAgent(snapshot);
-        return await agent.RunAsync(request, ct).ConfigureAwait(false);
+        var runner = CreateAnalysisRunner(snapshot);
+        return await runner.RunAsync(request, ct).ConfigureAwait(false);
     }
 
-    static AnalysisAgent CreateAnalysisAgent(HarnessRunSnapshot snapshot)
+    static IAnalysisRunner CreateAnalysisRunner(HarnessRunSnapshot snapshot)
     {
         var catalog = AnalyticsCatalog.Load(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
         var provider = TestModelProviderFactory?.Invoke() ?? CreateModelProvider(snapshot.Llm);

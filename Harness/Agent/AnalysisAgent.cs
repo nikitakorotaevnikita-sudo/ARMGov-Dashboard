@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace ArmGov.Harness;
 
-public sealed class AnalysisAgent
+public sealed class AnalysisAgent : IAnalysisRunner
 {
     private static readonly HashSet<string> RepairableCodes = new(StringComparer.Ordinal)
     {

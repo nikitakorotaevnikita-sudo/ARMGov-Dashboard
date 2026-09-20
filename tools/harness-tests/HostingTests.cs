@@ -8,6 +8,53 @@ using ArmGov.Harness.Hosting;
 
 public static class HostingTests
 {
+    public static async Task HostUsesInjectedAnalysisRunner()
+    {
+        var runner = new RecordingAnalysisRunner();
+        HarnessHost.TestAnalysisRunnerFactory = () => runner;
+        try
+        {
+            var response = await HarnessHost.RunAnalysisAsync(
+                new AnalysisRequest("Покажи просрочку", []),
+                CancellationToken.None);
+
+            Check.Equal("runner-test", response.RunId);
+            Check.Equal(1, runner.CallCount);
+        }
+        finally
+        {
+            HarnessHost.TestAnalysisRunnerFactory = null;
+        }
+    }
+
+    public static void AnalysisResponseSerializationKeepsHttpContract()
+    {
+        var response = new AnalysisResponse(
+            "contract-test",
+            "completed",
+            null,
+            Array.Empty<StoredResult>(),
+            Array.Empty<AgentStep>(),
+            0,
+            Array.Empty<string>(),
+            null,
+            null);
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(response, HarnessJson.Options));
+        var keys = document.RootElement.EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var expected = new[]
+        {
+            "runId", "status", "report", "datasets", "steps", "elapsedMs", "warnings",
+            "clarification", "error"
+        };
+
+        Check.Equal(expected.Length, keys.Count);
+        foreach (var key in expected)
+            Check.True(keys.Contains(key));
+    }
+
     public static void LocalHostNamesAreAccepted()
     {
         Check.True(LocalAccess.IsLocalHostName("localhost:5080"));
@@ -210,6 +257,7 @@ public static class HostingTests
         HarnessHost.TestModelProviderFactory = null;
         HarnessHost.TestEmployeeResolverFactory = null;
         HarnessHost.TestQueryExecutorFactory = null;
+        HarnessHost.TestAnalysisRunnerFactory = null;
         HarnessHost.TestAnalyticsEnabled = null;
         CountingProvider.Calls = 0;
     }
@@ -234,6 +282,26 @@ public static class HostingTests
 
         public JsonElement Feedback(ModelAction action, object result) =>
             Json("""{"role":"user","content":"{}"}""");
+    }
+
+    private sealed class RecordingAnalysisRunner : IAnalysisRunner
+    {
+        public int CallCount { get; private set; }
+
+        public Task<AnalysisResponse> RunAsync(AnalysisRequest request, CancellationToken ct)
+        {
+            CallCount++;
+            return Task.FromResult(new AnalysisResponse(
+                "runner-test",
+                "completed",
+                null,
+                Array.Empty<StoredResult>(),
+                Array.Empty<AgentStep>(),
+                0,
+                Array.Empty<string>(),
+                null,
+                null));
+        }
     }
 
     private sealed class FakeEmployeeResolver : IEmployeeResolver

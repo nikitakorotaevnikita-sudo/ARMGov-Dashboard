@@ -27,6 +27,12 @@ public static class HarnessHost
         set => Program.TestQueryExecutorFactory = value;
     }
 
+    public static Func<IAnalysisRunner>? TestAnalysisRunnerFactory
+    {
+        get => Program.TestAnalysisRunnerFactory;
+        set => Program.TestAnalysisRunnerFactory = value;
+    }
+
     public static Func<bool>? TestAnalyticsEnabled
     {
         get => Program.TestAnalyticsEnabled;

@@ -513,7 +513,7 @@ public static class AgentTests
             ct);
     }
 
-    private static AnalysisAgent CreateAgent(
+    private static IAnalysisRunner CreateAgent(
         IModelProvider provider,
         JsonElement[][]? rows = null,
         EmployeeCandidate[]? search = null,

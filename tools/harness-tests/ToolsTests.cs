@@ -85,6 +85,18 @@ public static class ToolsTests
         Check.True(result.Errors[0].Message.Contains("from/to/asOf", StringComparison.Ordinal));
     }
 
+    public static void ExecuteSqlRejectsServerSelectedEmployeeParameter()
+    {
+        var args = JsonDocument.Parse("""
+            {"sql":"select 1","parameters":{"selected_employee_1":101},"metricId":"personal_instruction_count"}
+            """).RootElement;
+
+        var result = ToolDefinitions.Validate("execute_sql", args);
+
+        Check.True(!result.Ok);
+        Check.Equal("invalid_function_arguments", result.Errors[0].Code);
+    }
+
     public static void ExecuteSqlRejectsNonScalarParameter()
     {
         var args = JsonDocument.Parse("""

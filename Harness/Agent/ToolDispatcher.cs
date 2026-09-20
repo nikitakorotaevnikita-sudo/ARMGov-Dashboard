@@ -38,6 +38,13 @@ public sealed class ToolDispatcher
     public Task<EmployeeCandidate?> ResolveEmployeeAsync(long id, CancellationToken ct) =>
         _employees.GetAsync(id, ct);
 
+    internal void EnsureSqlAllowed(string sql)
+    {
+        var validation = SqlScopePolicy.Check(sql, _catalog.AllowedRelations);
+        if (!validation.Ok)
+            throw new HarnessException(validation.Errors[0]);
+    }
+
     public async Task<object> ExecuteAsync(
         ModelAction action,
         RunContext context,

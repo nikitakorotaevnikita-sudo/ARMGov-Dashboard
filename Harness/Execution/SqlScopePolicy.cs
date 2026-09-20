@@ -206,6 +206,8 @@ public static class SqlScopePolicy
 
             if (token.Equals("from", StringComparison.OrdinalIgnoreCase))
             {
+                if (i > 0 && tokens[i - 1] == "@")
+                    continue;
                 if (functionStack.Count > 0
                     && string.Equals(functionStack.Peek(), "extract", StringComparison.OrdinalIgnoreCase))
                     continue;

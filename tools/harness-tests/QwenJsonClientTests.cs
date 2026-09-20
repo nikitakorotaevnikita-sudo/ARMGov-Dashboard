@@ -100,7 +100,8 @@ public static class QwenJsonClientTests
 
     public static async Task ReportsSanitizedBoundedHttpErrors()
     {
-        var detail = "server\r\n" + new string('x', 400);
+        var detail = "Authorization: Bearer test-token\r\nprovider detail: retry later\r\n" +
+                     new string('x', 400);
         var error = await ThrowsHarness(() => Client(new CaptureHandler((_, _, _) => Task.FromResult(
                 new HttpResponseMessage(HttpStatusCode.InternalServerError)
                 {
@@ -115,6 +116,8 @@ public static class QwenJsonClientTests
         Check.True(!error.Error.Message.Contains('\r'));
         Check.True(!error.Error.Message.Contains('\n'));
         Check.True(!error.Error.Message.Contains("test-token", StringComparison.Ordinal));
+        Check.True(!error.Error.Message.Contains("Bearer test-token", StringComparison.Ordinal));
+        Check.True(error.Error.Message.Contains("provider detail: retry later", StringComparison.Ordinal));
     }
 
     public static async Task RejectsLengthFinishedResponses()

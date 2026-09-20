@@ -161,13 +161,15 @@ public sealed class QwenJsonClient : IQwenJsonClient
         }
     }
 
-    private static async Task<HarnessException> HttpErrorAsync(
+    private async Task<HarnessException> HttpErrorAsync(
         HttpResponseMessage response,
         CancellationToken ct)
     {
         var detail = response.Content is null
             ? ""
-            : SanitizeDetail(await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+            : SanitizeDetail(
+                await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false),
+                _token);
         var message = $"Qwen returned HTTP {(int)response.StatusCode}.";
         if (detail.Length > 0)
             message += $" Detail: {detail}";
@@ -179,11 +181,12 @@ public sealed class QwenJsonClient : IQwenJsonClient
             (int)response.StatusCode >= 500));
     }
 
-    private static string SanitizeDetail(string detail)
+    private static string SanitizeDetail(string detail, string token)
     {
-        var normalized = new StringBuilder(detail.Length);
+        var redacted = detail.Replace(token, "[REDACTED]", StringComparison.Ordinal);
+        var normalized = new StringBuilder(redacted.Length);
         var previousWhitespace = false;
-        foreach (var character in detail)
+        foreach (var character in redacted)
         {
             if (char.IsControl(character) || char.IsWhiteSpace(character))
             {

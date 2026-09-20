@@ -10,10 +10,11 @@ internal static class WorkflowExecution
 {
     internal static WorkflowState Next(WorkflowState state, AnalysisPlan? plan = null,
         SqlDraft? sql = null, ReportSpec? report = null, AnalysisResponse? terminal = null,
-        int? modelCalls = null, int? sqlRepairs = null, int? reportRepairs = null) => new(
+        int? modelCalls = null, int? sqlRepairs = null, int? reportRepairs = null,
+        System.Collections.Immutable.ImmutableArray<VerifiedEmployee>? employees = null) => new(
             state.Request, state.Context, plan ?? state.Plan, sql ?? state.Sql, report ?? state.Report,
             terminal ?? state.Terminal, modelCalls ?? state.ModelCalls, sqlRepairs ?? state.SqlRepairs,
-            reportRepairs ?? state.ReportRepairs);
+            reportRepairs ?? state.ReportRepairs, employees ?? state.Employees);
 
     internal static WorkflowState Terminal(WorkflowState state, string status, HarnessError? error = null,
         Clarification? clarification = null)
@@ -37,6 +38,13 @@ internal static class WorkflowExecution
 
     internal static bool IsCancelled(WorkflowState state, CancellationToken ct) =>
         ct.IsCancellationRequested || state.Context.IsExpired;
+
+    internal static WorkflowState Unexpected(WorkflowState state, string tool)
+    {
+        var error = new HarnessError("workflow_failure", "Сервис аналитики временно недоступен.", false);
+        AddStep(state.Context, tool, "error", null, error);
+        return Terminal(state, state.Context.HasStoredResults ? "incomplete" : "failed", error);
+    }
 
     internal static void AddStep(RunContext context, string tool, string status,
         string? resultId = null, HarnessError? error = null) =>

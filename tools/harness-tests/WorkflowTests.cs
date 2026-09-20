@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.Text.Json;
+using System.Net.Http;
 using ArmGov.Harness;
 
 public static class WorkflowTests
@@ -136,8 +137,110 @@ public static class WorkflowTests
         Check.True(response.Warnings.Contains("результат усечён"));
     }
 
+    // Dropping verified employee bindings or schema fields from SQL input makes this fail.
+    public static async Task SqlInputContainsVerifiedEmployeesAndHintedCatalogDefinitions()
+    {
+        var model = new ScriptedModel(sql: Sql(), report: ValidReport());
+        var operations = new ScriptedOperations
+        {
+            Resolution = new EntityResolutionResult([new VerifiedEmployee(7, "Иванов Иван", "selected_employee_1")], [])
+        };
+        await Create(model, operations).RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("selected_employee_1", model.SqlInput!.Employees.Single().ParameterName);
+        Check.Equal("public.sungero_wf_task", model.SqlInput.Catalog.Relations.Single().Name);
+        Check.True(model.SqlInput.Catalog.Relations.Single().Fields.Any(field => field.Name == "created"));
+    }
+
+    // Treating an unmatched mention like no mention allows an unsafe data call.
+    public static async Task UnmatchedEmployeeStopsBeforeSqlAndReport()
+    {
+        var model = new ScriptedModel(sql: Sql());
+        var operations = new ScriptedOperations
+        {
+            Resolution = new EntityResolutionResult([], [], ["Несуществующий сотрудник"])
+        };
+        var response = await Create(model, operations).RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("needs_clarification", response.Status);
+        Check.Equal(0, model.SqlCalls);
+        Check.Equal(0, operations.SqlCalls);
+        Check.Equal(0, model.ReportCalls);
+    }
+
+    // Executing SQL after a non-cooperative draft observes cancellation is unsafe.
+    public static async Task CancellationAfterSqlDraftStopsBeforeExecution()
+    {
+        using var cancelled = new CancellationTokenSource();
+        var model = new ScriptedModel(sql: Sql()) { AfterSql = cancelled.Cancel };
+        var operations = new ScriptedOperations();
+        var response = await Create(model, operations).RunAsync(Request(), cancelled.Token);
+
+        Check.Equal("incomplete", response.Status);
+        Check.Equal(0, operations.SqlCalls);
+    }
+
+    // Executing repaired SQL after its non-cooperative response observes cancellation is unsafe.
+    public static async Task CancellationAfterSqlRepairStopsBeforeExecution()
+    {
+        using var cancelled = new CancellationTokenSource();
+        var model = new ScriptedModel(sql: new SqlDraft("", "generic_query"), repairedSql: Sql())
+        {
+            AfterSqlRepair = cancelled.Cancel
+        };
+        var operations = new ScriptedOperations();
+        var response = await Create(model, operations).RunAsync(Request(), cancelled.Token);
+
+        Check.Equal("incomplete", response.Status);
+        Check.Equal(1, model.SqlRepairCalls);
+        Check.Equal(0, operations.SqlCalls);
+    }
+
+    // Starting report repair after a non-cooperative first report ignores cancellation.
+    public static async Task CancellationAfterReportDraftStopsBeforeRepairAndFinish()
+    {
+        using var cancelled = new CancellationTokenSource();
+        var model = new ScriptedModel(report: ValidReport()) { AfterReport = cancelled.Cancel };
+        var operations = new ScriptedOperations { Sql = Page(1) };
+        var response = await Create(model, operations).RunAsync(Request(), cancelled.Token);
+
+        Check.Equal("incomplete", response.Status);
+        Check.Equal(0, model.ReportRepairCalls);
+    }
+
+    // Letting transport faults escape bypasses the HTTP response contract.
+    public static async Task UnexpectedExceptionsMapBeforeAndAfterStoredData()
+    {
+        var before = await Create(new ScriptedModel { PlanUnexpected = new HttpRequestException("endpoint") }, new ScriptedOperations())
+            .RunAsync(Request(), CancellationToken.None);
+        var after = await Create(new ScriptedModel(sql: Sql()) { ReportUnexpected = new HttpRequestException("endpoint") },
+            new ScriptedOperations { Sql = Page(1) }).RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("failed", before.Status);
+        Check.Equal("incomplete", after.Status);
+        Check.Equal("workflow_failure", before.Error!.Code);
+        Check.Equal("workflow_failure", after.Error!.Code);
+    }
+
+    // Reporting dashboard faults as execute_sql obscures the failed trusted boundary.
+    public static async Task DashboardFailureUsesDashboardStepName()
+    {
+        var operations = new ScriptedOperations { DashboardFailure = Error("dashboard_metric_failed") };
+        var response = await Create(new ScriptedModel(dashboard: Plan(AnalysisDataRoute.DashboardMetric, "execution_discipline")), operations)
+            .RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("dashboard_metric", response.Steps.Last().Tool);
+    }
+
     private static AnalysisWorkflow Create(ScriptedModel model, ScriptedOperations operations) =>
-        new(model, operations, new ReportDraftService(model), TimeProvider.System);
+        new(model, operations, new ReportDraftService(model), Catalog(), TimeProvider.System);
+
+    private static AnalyticsCatalog Catalog()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "armgov-standalone.csproj"))) directory = directory.Parent;
+        return AnalyticsCatalog.Load(Path.Combine(directory!.FullName, "Harness", "Catalog", "catalog.json"));
+    }
 
     private static AnalysisRequest Request() => new("Покажи данные", []);
     private static AnalysisPlan Plan(AnalysisDataRoute route = AnalysisDataRoute.GeneratedSql, string? dashboard = null) =>
@@ -161,11 +264,13 @@ public static class WorkflowTests
         public EntityResolutionResult Resolution { get; set; } = new([], []);
         public int DashboardCalls { get; private set; }
         public int SqlCalls { get; private set; }
+        public HarnessException? DashboardFailure { get; init; }
         public Task<PreparationResult> PrepareAsync(AnalysisRequest request, RunContext context, CancellationToken ct) => Task.FromResult(new PreparationResult([]));
         public Task<EntityResolutionResult> ResolveAsync(AnalysisPlan plan, RunContext context, CancellationToken ct) => Task.FromResult(Resolution);
         public Task<ResultPage> ExecuteDashboardAsync(AnalysisPlan plan, RunContext context, CancellationToken ct)
         {
             DashboardCalls++;
+            if (DashboardFailure is not null) return Task.FromException<ResultPage>(DashboardFailure);
             return Task.FromResult(Store(Dashboard, plan, context));
         }
         public Task<ResultPage> ExecuteSqlAsync(AnalysisPlan plan, SqlDraft draft, RunContext context, CancellationToken ct)
@@ -192,13 +297,20 @@ public static class WorkflowTests
         { _plan = dashboard ?? Plan(); _sql = sql ?? Sql(); _repairedSql = repairedSql ?? _sql; _report = report ?? ValidReport(); }
         public HarnessException? PlanFailure { get; init; }
         public HarnessException? ReportFailure { get; init; }
+        public Exception? PlanUnexpected { get; init; }
+        public Exception? ReportUnexpected { get; init; }
+        public Action? AfterSql { get; init; }
+        public Action? AfterSqlRepair { get; init; }
+        public Action? AfterReport { get; init; }
         public int SqlCalls { get; private set; }
         public int SqlRepairCalls { get; private set; }
         public int ReportCalls { get; private set; }
-        public Task<AnalysisPlan> PlanAsync(PlanningInput input, CancellationToken ct) => PlanFailure is null ? Task.FromResult(_plan) : Task.FromException<AnalysisPlan>(PlanFailure);
-        public Task<SqlDraft> DraftSqlAsync(SqlGenerationInput input, CancellationToken ct) { SqlCalls++; return Task.FromResult(_sql); }
-        public Task<SqlDraft> RepairSqlAsync(SqlRepairInput input, CancellationToken ct) { SqlRepairCalls++; return Task.FromResult(_repairedSql); }
-        public Task<ReportDraft> DraftReportAsync(ReportGenerationInput input, CancellationToken ct) { ReportCalls++; return ReportFailure is null ? Task.FromResult(_report) : Task.FromException<ReportDraft>(ReportFailure); }
-        public Task<ReportDraft> RepairReportAsync(ReportRepairInput input, CancellationToken ct) => Task.FromResult(_report);
+        public int ReportRepairCalls { get; private set; }
+        public SqlGenerationInput? SqlInput { get; private set; }
+        public Task<AnalysisPlan> PlanAsync(PlanningInput input, CancellationToken ct) => PlanUnexpected is not null ? Task.FromException<AnalysisPlan>(PlanUnexpected) : PlanFailure is null ? Task.FromResult(_plan) : Task.FromException<AnalysisPlan>(PlanFailure);
+        public Task<SqlDraft> DraftSqlAsync(SqlGenerationInput input, CancellationToken ct) { SqlCalls++; SqlInput = input; AfterSql?.Invoke(); return Task.FromResult(_sql); }
+        public Task<SqlDraft> RepairSqlAsync(SqlRepairInput input, CancellationToken ct) { SqlRepairCalls++; AfterSqlRepair?.Invoke(); return Task.FromResult(_repairedSql); }
+        public Task<ReportDraft> DraftReportAsync(ReportGenerationInput input, CancellationToken ct) { ReportCalls++; AfterReport?.Invoke(); return ReportUnexpected is not null ? Task.FromException<ReportDraft>(ReportUnexpected) : ReportFailure is null ? Task.FromResult(_report) : Task.FromException<ReportDraft>(ReportFailure); }
+        public Task<ReportDraft> RepairReportAsync(ReportRepairInput input, CancellationToken ct) { ReportRepairCalls++; return Task.FromResult(_report); }
     }
 }

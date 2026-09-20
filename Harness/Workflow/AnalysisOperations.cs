@@ -56,6 +56,7 @@ public sealed class AnalysisOperations : IAnalysisOperations
         EnsureContextMutable(context);
 
         var candidates = new List<EmployeeCandidate>();
+        var unmatched = new List<string>();
         foreach (var mention in plan.EmployeeMentions)
         {
             if (context.ResolvedEmployees.ContainsKey(mention))
@@ -78,10 +79,15 @@ public sealed class AnalysisOperations : IAnalysisOperations
                 ct).ConfigureAwait(false);
 
             if (context.Candidates.TryGetValue(mention, out var found) && found.Length != 1)
-                candidates.AddRange(found);
+            {
+                if (found.Length == 0)
+                    unmatched.Add(mention);
+                else
+                    candidates.AddRange(found);
+            }
         }
 
-        return new EntityResolutionResult(VerifiedEmployees(context), candidates.ToArray());
+        return new EntityResolutionResult(VerifiedEmployees(context), candidates.ToArray(), unmatched.ToArray());
     }
 
     public async Task<ResultPage> ExecuteDashboardAsync(

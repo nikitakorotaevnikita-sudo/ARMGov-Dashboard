@@ -33,4 +33,5 @@ public sealed record PreparationResult(VerifiedEmployee[] Employees);
 
 public sealed record EntityResolutionResult(
     VerifiedEmployee[] Employees,
-    EmployeeCandidate[] Candidates);
+    EmployeeCandidate[] Candidates,
+    string[]? UnmatchedMentions = null);

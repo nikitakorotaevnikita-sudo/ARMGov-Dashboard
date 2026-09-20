@@ -58,6 +58,33 @@ public sealed class AnalyticsCatalog
         return metric;
     }
 
+    public CatalogProjection CreateProjection(string metricId, IEnumerable<string> relationHints)
+    {
+        var requested = new HashSet<string>(relationHints ?? Array.Empty<string>(), StringComparer.Ordinal);
+        var relations = requested
+            .Where(name => _relations.ContainsKey(name))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .Select(name =>
+            {
+                var relation = _relations[name];
+                return new CatalogRelationProjection(
+                    relation.QualifiedName,
+                    relation.Description,
+                    relation.Fields.Select(field => new CatalogFieldProjection(
+                        field.Name, field.Type, field.Description)).ToArray());
+            })
+            .ToArray();
+        var included = relations.Select(relation => relation.Name).ToHashSet(StringComparer.Ordinal);
+        var relationships = _relationships
+            .Where(link => included.Contains(RelationName(link.From)) && included.Contains(RelationName(link.To)))
+            .Select(link => new CatalogRelationshipProjection(link.From, link.To, link.Direction, link.Cardinality))
+            .ToArray();
+        var metric = _metrics.TryGetValue(metricId, out var known)
+            ? known
+            : new MetricDefinition("generic_query", "строка результата", "", "Произвольный SELECT-анализ.");
+        return new CatalogProjection(relations, relationships, metric);
+    }
+
     public JsonElement Search(string query, int take = 10)
     {
         if (string.IsNullOrWhiteSpace(query) || query.Length > 100)
@@ -209,6 +236,12 @@ public sealed class AnalyticsCatalog
                 score++;
         }
         return score;
+    }
+
+    private static string RelationName(string fieldReference)
+    {
+        var separator = fieldReference.LastIndexOf('.');
+        return separator > 0 ? fieldReference[..separator] : string.Empty;
     }
 
     private static JsonElement SchemaMismatch(string relation, string[] fields) =>

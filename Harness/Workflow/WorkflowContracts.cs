@@ -197,7 +197,8 @@ internal sealed record WorkflowState(
     AnalysisResponse? Terminal,
     int ModelCalls,
     int SqlRepairs,
-    int ReportRepairs)
+    int ReportRepairs,
+    ImmutableArray<VerifiedEmployee> Employees = default)
 {
     public bool IsTerminal => Terminal is not null;
 }

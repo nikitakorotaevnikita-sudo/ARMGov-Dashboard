@@ -20,7 +20,8 @@ internal sealed class DraftReportExecutor : Executor<WorkflowState, WorkflowStat
         try
         {
             var outcome = await _reports.CreateAsync(state.Request.Question, state.Context,
-                WorkflowLimits.MaxModelCalls - state.ModelCalls, ct).ConfigureAwait(false);
+                WorkflowLimits.MaxModelCalls - state.ModelCalls, state.Context.Cancellation).ConfigureAwait(false);
+            if (WorkflowExecution.IsCancelled(state, ct)) return WorkflowExecution.Cancelled(state);
             if (outcome.ModelCalls < 1 || outcome.ModelCalls > 2 || outcome.Repairs < 0 || outcome.Repairs > WorkflowLimits.MaxReportRepairs ||
                 state.ModelCalls + outcome.ModelCalls > WorkflowLimits.MaxModelCalls)
                 return WorkflowExecution.Cancelled(state);
@@ -38,5 +39,6 @@ internal sealed class DraftReportExecutor : Executor<WorkflowState, WorkflowStat
                 "error", null, validationError ?? exception.Error);
             return WorkflowExecution.Error(state, exception);
         }
+        catch (Exception) { return WorkflowExecution.Unexpected(state, "draft_report"); }
     }
 }

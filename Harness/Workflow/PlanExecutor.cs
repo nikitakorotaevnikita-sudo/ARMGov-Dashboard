@@ -20,7 +20,8 @@ internal sealed class PlanExecutor : Executor<WorkflowState, WorkflowState>
         try
         {
             var plan = await _model.PlanAsync(new PlanningInput(state.Request.Question, state.Context.AsOf,
-                state.Request.Selections, Metrics), ct).ConfigureAwait(false);
+                state.Request.Selections, Metrics), state.Context.Cancellation).ConfigureAwait(false);
+            if (WorkflowExecution.IsCancelled(state, ct)) return WorkflowExecution.Cancelled(state);
             var validation = WorkflowContractValidator.ValidatePlan(plan, state.Context.AsOf, DashboardMetrics);
             if (!validation.Ok)
                 throw new HarnessException(validation.Errors[0]);
@@ -29,6 +30,7 @@ internal sealed class PlanExecutor : Executor<WorkflowState, WorkflowState>
         }
         catch (OperationCanceledException) { return WorkflowExecution.Cancelled(state); }
         catch (HarnessException exception) { WorkflowExecution.AddStep(state.Context, "plan", "error", null, exception.Error); return WorkflowExecution.Error(state, exception); }
+        catch (Exception) { return WorkflowExecution.Unexpected(state, "plan"); }
     }
     private static readonly MetricSummary[] Metrics =
     [new("execution_discipline", "Тренд исполнительской дисциплины.", "execution_discipline"),

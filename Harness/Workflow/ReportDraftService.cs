@@ -38,6 +38,7 @@ public sealed class ReportDraftService
             context.Interpretation,
             ResultManifestFactory.Create(context.Results));
         var draft = await _model.DraftReportAsync(original, ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
         var firstValidation = BindAndValidate(
             draft,
             context.Results,
@@ -56,6 +57,7 @@ public sealed class ReportDraftService
         var repairedDraft = await _model.RepairReportAsync(
             new ReportRepairInput(original, draft, firstValidation.Errors),
             ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
         var repairedValidation = BindAndValidate(
             repairedDraft,
             context.Results,

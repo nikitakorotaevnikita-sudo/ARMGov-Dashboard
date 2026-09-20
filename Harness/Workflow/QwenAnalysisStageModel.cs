@@ -79,10 +79,28 @@ public sealed class QwenAnalysisStageModel : IAnalysisStageModel
         var relations = (input.Catalog.Relations ?? Array.Empty<CatalogRelationProjection>())
             .Where(relation => allowed.Contains(relation.Name))
             .ToArray();
+        var retainedRelationNames = relations
+            .Select(relation => relation.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var relationships = (input.Catalog.Relationships ?? Array.Empty<CatalogRelationshipProjection>())
+            .Where(relationship =>
+                retainedRelationNames.Contains(RelationName(relationship.From)) &&
+                retainedRelationNames.Contains(RelationName(relationship.To)))
+            .ToArray();
         return input with
         {
-            Catalog = input.Catalog with { Relations = relations }
+            Catalog = input.Catalog with
+            {
+                Relations = relations,
+                Relationships = relationships
+            }
         };
+    }
+
+    private static string RelationName(string fieldReference)
+    {
+        var separator = fieldReference.LastIndexOf('.');
+        return separator > 0 ? fieldReference[..separator] : string.Empty;
     }
 
     private static void EnsureValid(ValidationResult validation)

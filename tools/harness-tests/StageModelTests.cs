@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -64,15 +65,22 @@ public static class StageModelTests
             Catalog = baseInput.Catalog with
             {
                 Relations = baseInput.Catalog.Relations.Append(new CatalogRelationProjection(
-                    "private.payroll", "Forbidden", [])).ToArray()
+                    "private.payroll", "Forbidden", [])).ToArray(),
+                Relationships = baseInput.Catalog.Relationships.Append(
+                    new CatalogRelationshipProjection(
+                        "private.payroll.employee_id",
+                        "public.sungero_wf_task.id",
+                        "many-to-one",
+                        "N:1")).ToArray()
             }
         };
 
         await model.DraftSqlAsync(input, CancellationToken.None);
 
         var captured = (SqlGenerationInput)client.Input!;
-        Check.Equal(1, captured.Catalog.Relations.Length);
-        Check.Equal("public.sungero_wf_task", captured.Catalog.Relations[0].Name);
+        Check.Equal(2, captured.Catalog.Relations.Length);
+        Check.Equal(1, captured.Catalog.Relationships.Length);
+        Check.Equal("public.sungero_wf_assignment.task", captured.Catalog.Relationships[0].From);
     }
 
     public static async Task SqlRepairPassesRejectedSqlAndStructuredValidationErrors()
@@ -165,14 +173,18 @@ public static class StageModelTests
 
     private static SqlGenerationInput SqlInput() => new(
         "Покажи задачи",
-        Plan(),
+        Plan(["public.sungero_wf_task", "public.sungero_wf_assignment"]),
         Interpretation(),
         [new VerifiedEmployee(42, "Иванов", "selected_employee_1")],
         new CatalogProjection(
             [new CatalogRelationProjection(
                 "public.sungero_wf_task",
                 "Tasks",
-                [new CatalogFieldProjection("id", "bigint", "Task id")])],
+                [new CatalogFieldProjection("id", "bigint", "Task id")]),
+             new CatalogRelationProjection(
+                "public.sungero_wf_assignment",
+                "Assignments",
+                [new CatalogFieldProjection("task", "bigint", "Task id")])],
             [new CatalogRelationshipProjection(
                 "public.sungero_wf_assignment.task",
                 "public.sungero_wf_task.id",
@@ -191,13 +203,13 @@ public static class StageModelTests
             10,
             new Truncation(true, false, [], false))]);
 
-    private static AnalysisPlan Plan() => new(
+    private static AnalysisPlan Plan(string[]? relationHints = null) => new(
         "generic_query",
         new PeriodSpec("months", 12, null, null),
         AnalysisDataRoute.GeneratedSql,
         null,
         [],
-        ["public.sungero_wf_task"]);
+        ImmutableArray.CreateRange(relationHints ?? ["public.sungero_wf_task"]));
 
     private static Interpretation Interpretation() => new(
         "generic_query", "Tasks", "items", null, null, "created");

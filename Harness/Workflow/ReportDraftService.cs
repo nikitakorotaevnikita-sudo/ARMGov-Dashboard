@@ -9,6 +9,7 @@ namespace ArmGov.Harness;
 
 public sealed record ReportDraftOutcome(
     RenderedReport Report,
+    ReportSpec Spec,
     int ModelCalls,
     int Repairs);
 
@@ -45,6 +46,7 @@ public sealed class ReportDraftService
         if (firstValidation.Ok)
             return new ReportDraftOutcome(
                 ReportRenderer.Render(first!, context.Results, context.Interpretation),
+                first!,
                 1,
                 0);
 
@@ -64,6 +66,7 @@ public sealed class ReportDraftService
 
         return new ReportDraftOutcome(
             ReportRenderer.Render(repaired!, context.Results, context.Interpretation),
+            repaired!,
             2,
             1);
     }

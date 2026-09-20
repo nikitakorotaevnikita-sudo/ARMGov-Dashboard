@@ -99,7 +99,9 @@ public sealed class ReportDraftService
 
     private static bool HasConvertibleGraph(ReportDraft? draft)
     {
-        if (draft?.Report is not { } report || report.Interpretation is null)
+        if (draft?.Report is not { } report ||
+            string.IsNullOrWhiteSpace(report.Title) ||
+            report.Interpretation is null)
             return false;
         if (report.Blocks.Any(block => block is null) ||
             report.Facts.Any(fact => fact is null))

@@ -146,6 +146,28 @@ public static class ReportWorkflowTests
         }
     }
 
+    public static async Task NullTitleIsRepairedWithStructuredFeedback()
+    {
+        var model = new ScriptedStageModel(NullTitleDraft(), ValidDraft(Meaning));
+        var outcome = await new ReportDraftService(model).CreateAsync(
+            "Сколько поручений", ContextWithResult(12), 2, CancellationToken.None);
+
+        Check.Equal(2, outcome.ModelCalls);
+        Check.Equal(1, outcome.Repairs);
+        Check.Equal("invalid_report_structure", model.RepairInput!.Errors.Single().Code);
+    }
+
+    public static async Task SecondNullTitleTerminatesWithInvalidReportAndStructuredFeedback()
+    {
+        var model = new ScriptedStageModel(NullTitleDraft(), NullTitleDraft());
+
+        var exception = await ThrowsHarnessException(() => new ReportDraftService(model).CreateAsync(
+            "Сколько поручений", ContextWithResult(12), 2, CancellationToken.None));
+
+        Check.Equal("invalid_report", exception.Error.Code);
+        Check.Equal("invalid_report_structure", exception.ValidationErrors.Single().Code);
+    }
+
     public static async Task NoBudgetInvalidReportRetainsValidatorCodes()
     {
         var model = new ScriptedStageModel(DraftWithBlock("r404", "n"));
@@ -249,6 +271,14 @@ public static class ReportWorkflowTests
         [new BlockSpec("table", resultId, [column], null, null)],
         [],
         [],
+        null));
+
+    private static ReportDraft NullTitleDraft() => new(new ImmutableReportSpec(
+        null!,
+        ImmutableInterpretation.FromInterpretation(Meaning),
+        ImmutableArray<ImmutableBlockSpec>.Empty,
+        ImmutableArray<ImmutableFactSpec>.Empty,
+        ImmutableArray<string>.Empty,
         null));
 
     private static async Task<HarnessError> ThrowsHarness(Func<Task> action)

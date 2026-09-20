@@ -6,9 +6,14 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>armgov-standalone</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Harness.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.21.0" />
   </ItemGroup>
   <!-- Вспомогательные утилиты (tools/) — отдельные проекты, не компилируются в составе дашборда -->
   <ItemGroup>

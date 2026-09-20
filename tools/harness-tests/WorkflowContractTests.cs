@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Collections.Immutable;
 using System.Text.Json;
 using ArmGov.Harness;
 
@@ -177,6 +178,59 @@ public static class WorkflowContractTests
         Check.Equal(1, WorkflowLimits.MaxReportRepairs);
     }
 
+    public static void AnalysisPlanSnapshotsCallerCollections()
+    {
+        var employeeMentions = new[] { "Ada Lovelace" };
+        var relationHints = new[] { "public.sungero_wf_task" };
+        var plan = AnalysisPlan.Snapshot(
+            "generic_query",
+            new PeriodSpec("months", 12, null, null),
+            AnalysisDataRoute.GeneratedSql,
+            null,
+            employeeMentions,
+            relationHints);
+
+        employeeMentions[0] = "Grace Hopper";
+        relationHints[0] = "private.payroll";
+
+        Check.Equal("Ada Lovelace", plan.EmployeeMentions[0]);
+        Check.Equal("public.sungero_wf_task", plan.RelationHints[0]);
+    }
+
+    public static void ReportDraftSnapshotsCallerOwnedReportGraph()
+    {
+        var columns = new[] { "employee" };
+        var filter = new Dictionary<string, JsonElement>
+        {
+            ["department"] = JsonSerializer.SerializeToElement("Analytics")
+        };
+        var blocks = new[] { new BlockSpec("table", "r1", columns, filter, null) };
+        var inputs = new[] { new CellRef("r1", 0, "count") };
+        var facts = new[] { new FactSpec("total", "cell", inputs) };
+        var textTemplates = new[] { "{{total}}" };
+        var source = new ReportSpec(
+            "Title",
+            new Interpretation("generic_query", "Label", "items", null, null, null),
+            blocks,
+            facts,
+            textTemplates,
+            "Commentary");
+        var draft = new ReportDraft(source);
+
+        columns[0] = "changed";
+        filter["department"] = JsonSerializer.SerializeToElement("Changed");
+        blocks[0] = new BlockSpec("kpi", "changed", [], null, null);
+        inputs[0] = new CellRef("changed", 1, "changed");
+        facts[0] = new FactSpec("changed", "sum", []);
+        textTemplates[0] = "changed";
+
+        Check.Equal("employee", draft.Report.Blocks[0].Columns[0]);
+        Check.Equal("Analytics", draft.Report.Blocks[0].EqualsFilter!["department"].GetString());
+        Check.Equal("r1", draft.Report.Blocks[0].ResultId);
+        Check.Equal("r1", draft.Report.Facts[0].Inputs[0].ResultId);
+        Check.Equal("{{total}}", draft.Report.TextTemplates[0]);
+    }
+
     private static AnalysisPlan Plan(
         string metricId = "generic_query",
         PeriodSpec? period = null,
@@ -187,6 +241,10 @@ public static class WorkflowContractTests
             period ?? new PeriodSpec("months", 12, null, null),
             AnalysisDataRoute.GeneratedSql,
             null,
-            employeeMentions ?? [],
-            relationHints ?? ["public.sungero_wf_task"]);
+            employeeMentions is null
+                ? ImmutableArray<string>.Empty
+                : ImmutableArray.CreateRange(employeeMentions),
+            relationHints is null
+                ? ImmutableArray.Create("public.sungero_wf_task")
+                : ImmutableArray.CreateRange(relationHints));
 }

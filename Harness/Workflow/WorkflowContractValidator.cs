@@ -2,6 +2,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -94,25 +96,25 @@ public static class WorkflowContractValidator
     }
 
     private static void ValidateEmployeeMentions(
-        string[]? employeeMentions,
+        ImmutableArray<string> employeeMentions,
         List<HarnessError> errors)
     {
-        if (employeeMentions is null)
+        if (employeeMentions.IsDefault)
         {
             Add(errors, "invalid_employee_mentions", "Список упоминаний сотрудников обязателен.");
             return;
         }
         if (employeeMentions.Length > WorkflowLimits.MaxEmployeeMentions)
             Add(errors, "too_many_employee_mentions", "Допускается не более 10 упоминаний сотрудников.");
-        if (Array.Exists(employeeMentions, string.IsNullOrWhiteSpace))
+        if (employeeMentions.Any(string.IsNullOrWhiteSpace))
             Add(errors, "invalid_employee_mention", "Упоминание сотрудника не может быть пустым.");
     }
 
     private static void ValidateRelationHints(
-        string[]? relationHints,
+        ImmutableArray<string> relationHints,
         List<HarnessError> errors)
     {
-        if (relationHints is null)
+        if (relationHints.IsDefault)
         {
             Add(errors, "invalid_relation_hints", "Список подсказок отношений обязателен.");
             return;
@@ -140,7 +142,7 @@ public static class WorkflowContractValidator
                 {
                     Add(errors, "invalid_dashboard_route", "Для dashboard-маршрута нужна известная готовая метрика.");
                 }
-                if (plan.RelationHints is { Length: > 0 })
+                if (!plan.RelationHints.IsDefaultOrEmpty)
                 {
                     Add(errors, "invalid_dashboard_route", "Dashboard-маршрут не принимает подсказки отношений.");
                 }

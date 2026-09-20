@@ -70,13 +70,17 @@ public record ValidationResult(bool Ok, HarnessError[] Errors);
 
 public sealed class HarnessException : Exception
 {
-    public HarnessException(HarnessError error)
+    public HarnessException(HarnessError error, HarnessError[]? validationErrors = null)
         : base(error.Message)
     {
         Error = error;
+        ValidationErrors = validationErrors is null
+            ? Array.Empty<HarnessError>()
+            : (HarnessError[])validationErrors.Clone();
     }
 
     public HarnessError Error { get; }
+    public HarnessError[] ValidationErrors { get; }
 }
 
 public record ToolDefinition(

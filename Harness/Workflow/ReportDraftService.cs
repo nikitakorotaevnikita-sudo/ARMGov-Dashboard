@@ -37,11 +37,14 @@ public sealed class ReportDraftService
             context.Interpretation,
             ResultManifestFactory.Create(context.Results));
         var draft = await _model.DraftReportAsync(original, ct).ConfigureAwait(false);
-        var first = BindInterpretation(draft, context.Interpretation);
-        var firstValidation = ReportValidator.Validate(first, context.Results, context.Interpretation);
+        var firstValidation = BindAndValidate(
+            draft,
+            context.Results,
+            context.Interpretation,
+            out var first);
         if (firstValidation.Ok)
             return new ReportDraftOutcome(
-                ReportRenderer.Render(first, context.Results, context.Interpretation),
+                ReportRenderer.Render(first!, context.Results, context.Interpretation),
                 1,
                 0);
 
@@ -51,25 +54,78 @@ public sealed class ReportDraftService
         var repairedDraft = await _model.RepairReportAsync(
             new ReportRepairInput(original, draft, firstValidation.Errors),
             ct).ConfigureAwait(false);
-        var repaired = BindInterpretation(repairedDraft, context.Interpretation);
-        var repairedValidation = ReportValidator.Validate(repaired, context.Results, context.Interpretation);
+        var repairedValidation = BindAndValidate(
+            repairedDraft,
+            context.Results,
+            context.Interpretation,
+            out var repaired);
         if (!repairedValidation.Ok)
             throw Invalid(repairedValidation.Errors);
 
         return new ReportDraftOutcome(
-            ReportRenderer.Render(repaired, context.Results, context.Interpretation),
+            ReportRenderer.Render(repaired!, context.Results, context.Interpretation),
             2,
             1);
     }
 
-    private static ReportSpec BindInterpretation(ReportDraft draft, Interpretation interpretation)
+    private static ValidationResult BindAndValidate(
+        ReportDraft? draft,
+        ResultStore store,
+        Interpretation interpretation,
+        out ReportSpec? spec)
     {
-        ArgumentNullException.ThrowIfNull(draft);
-        return draft.ToReportSpec() with { Interpretation = interpretation };
+        spec = null;
+        if (!HasConvertibleGraph(draft))
+            return StructuralFailure();
+
+        try
+        {
+            spec = draft!.ToReportSpec() with { Interpretation = interpretation };
+            return ReportValidator.Validate(spec, store, interpretation);
+        }
+        catch (ArgumentException)
+        {
+            return StructuralFailure();
+        }
+        catch (InvalidOperationException)
+        {
+            return StructuralFailure();
+        }
+        catch (NullReferenceException)
+        {
+            return StructuralFailure();
+        }
     }
 
-    private static HarnessException Invalid(params HarnessError[] errors) =>
-        Invalid(string.Join(" ", errors.Select(error => Sanitize(error.Message))));
+    private static bool HasConvertibleGraph(ReportDraft? draft)
+    {
+        if (draft?.Report is not { } report || report.Interpretation is null)
+            return false;
+        if (report.Blocks.Any(block => block is null) ||
+            report.Facts.Any(fact => fact is null))
+            return false;
+        return !report.Facts.Any(fact => fact.Inputs.Any(input => input is null));
+    }
+
+    private static ValidationResult StructuralFailure() => new(
+        false,
+        [new HarnessError(
+            "invalid_report_structure",
+            "Структура черновика отчёта неполна или недопустима.",
+            false)]);
+
+    private static HarnessException Invalid(params HarnessError[] errors)
+    {
+        var details = errors
+            .Select(error => error with { Message = Sanitize(error.Message) })
+            .ToArray();
+        return new HarnessException(
+            new HarnessError(
+                "invalid_report",
+                string.Join(" ", details.Select(error => error.Message)),
+                false),
+            details);
+    }
 
     private static HarnessException Invalid(string message) =>
         new(new HarnessError("invalid_report", Sanitize(message), false));

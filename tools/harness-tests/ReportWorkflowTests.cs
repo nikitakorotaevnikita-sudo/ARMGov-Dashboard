@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -98,6 +99,79 @@ public static class ReportWorkflowTests
         Check.Equal(1, model.RepairReportCalls);
     }
 
+    public static async Task StructurallyInvalidDraftIsRepairedWithStructuredFeedback()
+    {
+        var malformed = new ReportDraft(new ImmutableReportSpec(
+            "Поручения",
+            null!,
+            ImmutableArray<ImmutableBlockSpec>.Empty,
+            ImmutableArray<ImmutableFactSpec>.Empty,
+            ImmutableArray<string>.Empty,
+            null));
+        var model = new ScriptedStageModel(malformed, ValidDraft(Meaning));
+        var service = new ReportDraftService(model);
+
+        var outcome = await service.CreateAsync(
+            "Сколько поручений", ContextWithResult(12), 2, CancellationToken.None);
+
+        Check.Equal(2, outcome.ModelCalls);
+        Check.Equal(1, outcome.Repairs);
+        Check.Equal("invalid_report_structure", model.RepairInput!.Errors.Single().Code);
+    }
+
+    public static async Task NullNestedDraftElementsAreRepairedWithStructuredFeedback()
+    {
+        var malformedDrafts = new[]
+        {
+            new ReportDraft(new ImmutableReportSpec(
+                "Поручения", ImmutableInterpretation.FromInterpretation(Meaning), [null!], ImmutableArray<ImmutableFactSpec>.Empty,
+                ImmutableArray<string>.Empty, null)),
+            new ReportDraft(new ImmutableReportSpec(
+                "Поручения", ImmutableInterpretation.FromInterpretation(Meaning), ImmutableArray<ImmutableBlockSpec>.Empty, [null!],
+                ImmutableArray<string>.Empty, null)),
+            new ReportDraft(new ImmutableReportSpec(
+                "Поручения", ImmutableInterpretation.FromInterpretation(Meaning), ImmutableArray<ImmutableBlockSpec>.Empty,
+                [new ImmutableFactSpec("total", "cell", [null!])],
+                ImmutableArray<string>.Empty, null))
+        };
+
+        foreach (var malformed in malformedDrafts)
+        {
+            var model = new ScriptedStageModel(malformed, ValidDraft(Meaning));
+            var outcome = await new ReportDraftService(model).CreateAsync(
+                "Сколько поручений", ContextWithResult(12), 2, CancellationToken.None);
+
+            Check.Equal(1, outcome.Repairs);
+            Check.Equal("invalid_report_structure", model.RepairInput!.Errors.Single().Code);
+        }
+    }
+
+    public static async Task NoBudgetInvalidReportRetainsValidatorCodes()
+    {
+        var model = new ScriptedStageModel(DraftWithBlock("r404", "n"));
+        var service = new ReportDraftService(model);
+
+        var exception = await ThrowsHarnessException(() => service.CreateAsync(
+            "Сколько поручений", ContextWithResult(12), 1, CancellationToken.None));
+
+        Check.Equal("invalid_report", exception.Error.Code);
+        Check.Equal("unknown_result", exception.ValidationErrors.Single().Code);
+    }
+
+    public static async Task InvalidRepairRetainsValidatorCodes()
+    {
+        var model = new ScriptedStageModel(
+            DraftWithBlock("r1", "missing"),
+            DraftWithText("Получено 12"));
+        var service = new ReportDraftService(model);
+
+        var exception = await ThrowsHarnessException(() => service.CreateAsync(
+            "Сколько поручений", ContextWithResult(12), 2, CancellationToken.None));
+
+        Check.Equal("invalid_report", exception.Error.Code);
+        Check.Equal("unverified_numeric_text", exception.ValidationErrors.Single().Code);
+    }
+
     private static string FirstError(string resultId, string column, RunContext context)
     {
         var spec = new ReportSpec(
@@ -169,6 +243,14 @@ public static class ReportWorkflowTests
         [text],
         null));
 
+    private static ReportDraft DraftWithBlock(string resultId, string column) => new(new ReportSpec(
+        "Поручения",
+        Meaning,
+        [new BlockSpec("table", resultId, [column], null, null)],
+        [],
+        [],
+        null));
+
     private static async Task<HarnessError> ThrowsHarness(Func<Task> action)
     {
         try
@@ -178,6 +260,20 @@ public static class ReportWorkflowTests
         catch (HarnessException exception)
         {
             return exception.Error;
+        }
+
+        throw new InvalidOperationException("Expected HarnessException.");
+    }
+
+    private static async Task<HarnessException> ThrowsHarnessException(Func<Task> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (HarnessException exception)
+        {
+            return exception;
         }
 
         throw new InvalidOperationException("Expected HarnessException.");

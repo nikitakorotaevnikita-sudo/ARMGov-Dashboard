@@ -53,6 +53,7 @@ public sealed class AnalysisOperations : IAnalysisOperations
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(context);
+        EnsureContextMutable(context);
 
         var candidates = new List<EmployeeCandidate>();
         foreach (var mention in plan.EmployeeMentions)

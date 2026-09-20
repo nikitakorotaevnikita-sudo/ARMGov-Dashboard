@@ -120,6 +120,31 @@ public static class WorkflowOperationsTests
         Check.Equal(1, result.Employees.Length);
     }
 
+    public static async Task ResolutionAfterResultIsRejectedBeforeStateMutation()
+    {
+        var executor = new CapturingQueryExecutor();
+        var resolver = new FakeEmployeeResolver(
+            [new EmployeeCandidate(101, "Иванов Иван", "А")]);
+        var operations = CreateOperations(executor, resolver);
+        var context = Context();
+        await operations.ExecuteSqlAsync(
+            Plan("generic_query", All()),
+            new SqlDraft("select count(*) n from public.sungero_wf_task", "generic_query"),
+            context,
+            CancellationToken.None);
+
+        var error = await ThrowsHarness(() => operations.ResolveAsync(
+            Plan("generic_query", All(), employeeMentions: ["Иванов"]),
+            context,
+            CancellationToken.None));
+
+        Check.Equal("context_locked", error.Code);
+        Check.Equal(0, resolver.SearchCallCount);
+        Check.Equal(0, context.Candidates.Count);
+        Check.Equal(0, context.ResolvedSelections.Count);
+        Check.Equal(1, executor.CallCount);
+    }
+
     public static async Task RelationOutsideCatalogStopsBeforeQuery()
     {
         var executor = new CapturingQueryExecutor();
@@ -189,6 +214,18 @@ public static class WorkflowOperationsTests
             (_, _, _) => Task.FromResult(Query("dashboard"))));
     }
 
+    private static AnalysisOperations CreateOperations(
+        CapturingQueryExecutor executor,
+        FakeEmployeeResolver resolver)
+    {
+        var catalog = LoadCatalog();
+        return new AnalysisOperations(new ToolDispatcher(
+            catalog,
+            resolver,
+            executor,
+            (_, _, _) => Task.FromResult(Query("dashboard"))));
+    }
+
     private static RunContext Context() =>
         new("workflow-operations", new FixedClock(FixedNow), CancellationToken.None);
 
@@ -254,10 +291,17 @@ public static class WorkflowOperationsTests
     {
         private readonly EmployeeCandidate[] _employees;
         public FakeEmployeeResolver(EmployeeCandidate[] employees) => _employees = employees;
+        public int SearchCallCount { get; private set; }
         public Task<EmployeeCandidate[]> SearchAsync(string[] tokens, CancellationToken ct) =>
-            Task.FromResult(_employees);
+            Task.FromResult(Search());
         public Task<EmployeeCandidate?> GetAsync(long id, CancellationToken ct) =>
             Task.FromResult(_employees.FirstOrDefault(item => item.Id == id));
+
+        private EmployeeCandidate[] Search()
+        {
+            SearchCallCount++;
+            return _employees;
+        }
     }
 
     private sealed class CapturingQueryExecutor : IQueryExecutor

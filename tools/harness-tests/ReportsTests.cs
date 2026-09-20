@@ -155,6 +155,15 @@ public static class ReportsTests
             Text()), store));
     }
 
+    public static void RejectsNumericLiteralsInTitleAndCommentary()
+    {
+        var store = Store(StandardColumns(), new[] { Row("Иванов", 7) });
+        var baseline = Spec(Array.Empty<BlockSpec>(), CellFact(), Text());
+
+        Check.True(!Valid(baseline with { Title = "Поручения 12" }, store));
+        Check.True(!Valid(baseline with { Commentary = "Всего 12" }, store));
+    }
+
     public static void RejectsOverflowButRendersDivisionByZeroAsNull()
     {
         var overflowStore = Store(

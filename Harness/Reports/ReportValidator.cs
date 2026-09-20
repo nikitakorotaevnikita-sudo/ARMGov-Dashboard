@@ -140,9 +140,8 @@ public static class ReportValidator
                 Add(errors, "invalid_block_kind", "Тип блока отчёта неизвестен.");
                 continue;
             }
-            if (!results.TryGetValue(block.ResultId ?? string.Empty, out var stored))
+            if (!TryFindResult(block.ResultId, results, errors, "блока", out var stored))
             {
-                Add(errors, "unknown_result", "Источник блока не найден в этом запуске.");
                 continue;
             }
             if (block.Limit is <= 0)
@@ -297,12 +296,12 @@ public static class ReportValidator
         out decimal value)
     {
         value = default;
-        if (input is null ||
-            !results.TryGetValue(input.ResultId ?? string.Empty, out var stored))
+        if (input is null)
         {
-            Add(errors, "unknown_result", "Источник факта не найден в этом запуске.");
             return false;
         }
+        if (!TryFindResult(input.ResultId, results, errors, "факта", out var stored))
+            return false;
         var columns = stored.Data.Columns
             .Select((column, index) => (column, index))
             .Where(item => string.Equals(item.column.Name, input.Column, StringComparison.Ordinal))
@@ -334,6 +333,29 @@ public static class ReportValidator
             Add(errors, "truncated_fact", "Факт нельзя вычислять по усечённым данным.");
             return false;
         }
+        return true;
+    }
+
+    private static bool TryFindResult(
+        string? resultId,
+        IReadOnlyDictionary<string, StoredResult> results,
+        List<HarnessError> errors,
+        string location,
+        out StoredResult stored)
+    {
+        stored = null!;
+        if (string.IsNullOrWhiteSpace(resultId) ||
+            resultId.StartsWith("tool:", StringComparison.OrdinalIgnoreCase))
+        {
+            Add(errors, "invalid_result_id", $"Идентификатор источника {location} должен быть сохранённым resultId.");
+            return false;
+        }
+        if (!results.TryGetValue(resultId, out var found))
+        {
+            Add(errors, "unknown_result", $"Источник {location} не найден в этом запуске.");
+            return false;
+        }
+        stored = found;
         return true;
     }
 

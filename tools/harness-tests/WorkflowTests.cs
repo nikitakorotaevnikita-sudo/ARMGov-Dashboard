@@ -64,6 +64,23 @@ public static class WorkflowTests
         Check.Equal(1, model.SqlRepairCalls);
     }
 
+    // Omitting the SQL-path error record for a failed repair hides the terminal cause.
+    public static async Task SqlRepairFailureRecordsExecuteSqlErrorAndStopsBeforeDatabase()
+    {
+        var model = new ScriptedModel(sql: new SqlDraft("", "generic_query"))
+        {
+            SqlRepairFailure = Error("provider_protocol_error")
+        };
+        var operations = new ScriptedOperations();
+        var response = await Create(model, operations).RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("failed", response.Status);
+        Check.Equal("provider_protocol_error", response.Error!.Code);
+        Check.Equal(0, operations.SqlCalls);
+        Check.Equal("execute_sql", response.Steps.Last().Tool);
+        Check.Equal("provider_protocol_error", response.Steps.Last().Error!.Code);
+    }
+
     // Continuing into acquire/report after ambiguity makes this fail.
     public static async Task AmbiguousEmployeeStopsBeforeDataAndReport()
     {
@@ -296,6 +313,7 @@ public static class WorkflowTests
         public ScriptedModel(AnalysisPlan? dashboard = null, SqlDraft? sql = null, SqlDraft? repairedSql = null, ReportDraft? report = null)
         { _plan = dashboard ?? Plan(); _sql = sql ?? Sql(); _repairedSql = repairedSql ?? _sql; _report = report ?? ValidReport(); }
         public HarnessException? PlanFailure { get; init; }
+        public HarnessException? SqlRepairFailure { get; init; }
         public HarnessException? ReportFailure { get; init; }
         public Exception? PlanUnexpected { get; init; }
         public Exception? ReportUnexpected { get; init; }
@@ -309,7 +327,7 @@ public static class WorkflowTests
         public SqlGenerationInput? SqlInput { get; private set; }
         public Task<AnalysisPlan> PlanAsync(PlanningInput input, CancellationToken ct) => PlanUnexpected is not null ? Task.FromException<AnalysisPlan>(PlanUnexpected) : PlanFailure is null ? Task.FromResult(_plan) : Task.FromException<AnalysisPlan>(PlanFailure);
         public Task<SqlDraft> DraftSqlAsync(SqlGenerationInput input, CancellationToken ct) { SqlCalls++; SqlInput = input; AfterSql?.Invoke(); return Task.FromResult(_sql); }
-        public Task<SqlDraft> RepairSqlAsync(SqlRepairInput input, CancellationToken ct) { SqlRepairCalls++; AfterSqlRepair?.Invoke(); return Task.FromResult(_repairedSql); }
+        public Task<SqlDraft> RepairSqlAsync(SqlRepairInput input, CancellationToken ct) { SqlRepairCalls++; AfterSqlRepair?.Invoke(); return SqlRepairFailure is null ? Task.FromResult(_repairedSql) : Task.FromException<SqlDraft>(SqlRepairFailure); }
         public Task<ReportDraft> DraftReportAsync(ReportGenerationInput input, CancellationToken ct) { ReportCalls++; AfterReport?.Invoke(); return ReportUnexpected is not null ? Task.FromException<ReportDraft>(ReportUnexpected) : ReportFailure is null ? Task.FromResult(_report) : Task.FromException<ReportDraft>(ReportFailure); }
         public Task<ReportDraft> RepairReportAsync(ReportRepairInput input, CancellationToken ct) { ReportRepairCalls++; return Task.FromResult(_report); }
     }

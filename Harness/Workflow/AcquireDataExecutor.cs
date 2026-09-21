@@ -74,7 +74,12 @@ internal sealed class AcquireDataExecutor : Executor<WorkflowState, WorkflowStat
             WorkflowExecution.AddStep(next.Context, "execute_sql", "error", null, valid.Errors[0]);
             return WorkflowExecution.Terminal(next, "failed", valid.Errors[0]);
         }
-        catch (HarnessException exception) { return WorkflowExecution.Error(state, exception); }
+        catch (HarnessException exception)
+        {
+            WorkflowExecution.AddStep(state.Context, "execute_sql", "error", null,
+                exception.ValidationErrors.FirstOrDefault() ?? exception.Error);
+            return WorkflowExecution.Error(state, exception);
+        }
     }
     private static Interpretation ContextInterpretation(WorkflowState state) => state.Context.Interpretation ??
         new Interpretation(state.Plan!.MetricId, state.Plan.MetricId, "", null, null, null);

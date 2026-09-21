@@ -15,6 +15,11 @@ export default tseslint.config(
       'dist/**',
       'node_modules/**',
       'tools/assets/**',
+      // tools/*.js — сборочные скрипты на CommonJS (require/module/__dirname).
+      // Остальные Node-файлы проекта уже в игноре поимённо; шаблон '*.js' ловит
+      // только корень, поэтому tools/ до сих пор линтовался как браузерный ESM
+      // и давал 6 ошибок no-undef, незаметных за ошибками CRLF.
+      'tools/**/*.js',
       '*.js',
       'public-path.js',
       'component.manifest.js',

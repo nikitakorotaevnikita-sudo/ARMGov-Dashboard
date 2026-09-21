@@ -1,0 +1,12 @@
+# Нормализация переводов строк.
+# Без этого файла core.autocrlf=true на Windows подменяет LF на CRLF при checkout,
+# и prettier (endOfLine: lf) с eslint падают на ровном месте: 21.09.2026 так
+# краснел `npm run check:full` в rx-arm на двух файлах при чистом содержимом в git.
+* text=auto eol=lf
+
+# Бинарные — не трогать.
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.7z binary
+*.zip binary

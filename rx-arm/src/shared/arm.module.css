@@ -263,11 +263,11 @@
   padding: 2px 9px;
 }
 .arme-tag.rx-arm-ok {
-  background: #eaf6e4;
+  background: var(--ok-soft);
   color: var(--green);
 }
 .arme-tag.rx-arm-bad {
-  background: #ffe7e7;
+  background: var(--bad-soft);
   color: var(--red);
 }
 .arme-none {
@@ -501,6 +501,9 @@
   font-size: 14px;
   outline: none;
   color: var(--text);
+  /* Фон обязателен: без него поле остаётся браузерным белым, а цвет текста идёт
+     от темы — в Night получался белый текст на белом фоне (находка ревью 2026-09-21). */
+  background: var(--card);
 }
 .dcp-s input:focus {
   border-color: var(--create);

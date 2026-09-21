@@ -20,13 +20,23 @@ public static class StageModelTests
             "Покажи дисциплину исполнения",
             asOf,
             [new EntitySelection("Иванов", 42)],
-            [new MetricSummary("execution_discipline", "Дисциплина", "execution_discipline")]),
+            [new MetricSummary("execution_discipline", "Дисциплина", "execution_discipline")],
+            [new PlanningRelationSummary("public.sungero_wf_task", "Поручения", "Карточки поручений")]),
             CancellationToken.None);
 
         Check.Equal(800, client.MaxTokens);
         Check.True(client.SystemPrompt.Contains("AnalysisPlan", StringComparison.Ordinal));
         Check.True(client.SystemPrompt.Contains("JSON object", StringComparison.Ordinal));
         Check.True(client.SystemPrompt.Contains("Markdown", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("\"kind\":\"all\"|\"months\"|\"range\"", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("\"route\":\"dashboardMetric\"|\"generatedSql\"", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("metrics[].metricId", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("metrics[].dashboardMetric", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("relations[].name", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("employeeMentions and relationHints are always JSON arrays", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains(
+            "{\"metricId\":\"generic_query\",\"period\":{\"kind\":\"months\",\"months\":12,\"from\":null,\"to\":null},\"route\":\"generatedSql\",\"dashboardMetric\":null,\"employeeMentions\":[],\"relationHints\":[\"public.sungero_wf_task\"]}",
+            StringComparison.Ordinal));
         var captured = (PlanningInput)client.Input!;
         Check.Equal("Покажи дисциплину исполнения", captured.Question);
         Check.Equal(asOf, captured.AsOf);
@@ -155,6 +165,7 @@ public static class StageModelTests
         var error = await ThrowsHarness(() => model.PlanAsync(new PlanningInput(
             "Question",
             DateTimeOffset.Parse("2026-09-20T12:00:00+04:00"),
+            [],
             [],
             []), CancellationToken.None));
 

@@ -17,6 +17,15 @@ public sealed record MetricDefinition(
 
 public sealed class AnalyticsCatalog
 {
+    private const string GenericMetricId = "generic_query";
+    private const string GenericMetricDefinition =
+        "Произвольный SELECT-анализ; используйте, если ни одна метрика каталога не подходит.";
+    private static readonly FrozenDictionary<string, string> DashboardMetricMappings =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["execution_discipline"] = "execution_discipline"
+        }.ToFrozenDictionary(StringComparer.Ordinal);
+
     private readonly FrozenDictionary<string, CatalogRelation> _relations;
     private readonly FrozenDictionary<string, MetricDefinition> _metrics;
     private readonly CatalogRelationship[] _relationships;
@@ -58,6 +67,30 @@ public sealed class AnalyticsCatalog
         return metric;
     }
 
+    public MetricSummary[] GetPlanningMetricSummaries()
+    {
+        var summaries = _metrics.Values
+            .Select(metric => new MetricSummary(
+                metric.Id,
+                metric.Definition,
+                DashboardMetricMappings.GetValueOrDefault(metric.Id)))
+            .ToList();
+        if (!_metrics.ContainsKey(GenericMetricId))
+            summaries.Add(new MetricSummary(GenericMetricId, GenericMetricDefinition, null));
+        return summaries
+            .OrderBy(metric => metric.MetricId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    public PlanningRelationSummary[] GetPlanningRelationSummaries() =>
+        _relations.Values
+            .OrderBy(relation => relation.QualifiedName, StringComparer.Ordinal)
+            .Select(relation => new PlanningRelationSummary(
+                relation.QualifiedName,
+                relation.Title,
+                relation.Description))
+            .ToArray();
+
     public CatalogProjection CreateProjection(string metricId, IEnumerable<string> relationHints)
     {
         var requested = new HashSet<string>(relationHints ?? Array.Empty<string>(), StringComparer.Ordinal);
@@ -81,7 +114,7 @@ public sealed class AnalyticsCatalog
             .ToArray();
         var metric = _metrics.TryGetValue(metricId, out var known)
             ? known
-            : new MetricDefinition("generic_query", "строка результата", "", "Произвольный SELECT-анализ.");
+            : new MetricDefinition(GenericMetricId, "строка результата", "", "Произвольный SELECT-анализ.");
         return new CatalogProjection(relations, relationships, metric);
     }
 
@@ -121,11 +154,11 @@ public sealed class AnalyticsCatalog
             metricList.Add(new
             {
                 kind = "metric",
-                id = "generic_query",
+                id = GenericMetricId,
                 unit = "строка результата",
                 dateField = (string?)null,
                 definition =
-                    "Произвольный SELECT-анализ; используйте, если ни одна метрика каталога не подходит."
+                    GenericMetricDefinition
             });
         }
 

@@ -29,7 +29,7 @@ public sealed class AnalysisWorkflow : IAnalysisRunner
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(RunContext.BudgetMs);
         var prepare = new PrepareExecutor(_operations, _clock, budget.Token);
-        var plan = new PlanExecutor(_model);
+        var plan = new PlanExecutor(_model, _catalog);
         var resolve = new ResolveEntitiesExecutor(_operations);
         var acquire = new AcquireDataExecutor(_model, _operations, _catalog);
         var report = new DraftReportExecutor(_reports);

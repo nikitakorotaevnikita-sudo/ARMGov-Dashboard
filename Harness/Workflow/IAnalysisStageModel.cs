@@ -21,11 +21,17 @@ public sealed record MetricSummary(
     string Definition,
     string? DashboardMetric);
 
+public sealed record PlanningRelationSummary(
+    string Name,
+    string Title,
+    string Description);
+
 public sealed record PlanningInput(
     string Question,
     DateTimeOffset AsOf,
     EntitySelection[] ConfirmedSelections,
-    MetricSummary[] Metrics);
+    MetricSummary[] Metrics,
+    PlanningRelationSummary[] Relations);
 
 public sealed record VerifiedEmployee(
     long Id,

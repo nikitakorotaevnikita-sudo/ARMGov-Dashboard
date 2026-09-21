@@ -169,6 +169,37 @@ public static class WorkflowTests
         Check.True(model.SqlInput.Catalog.Relations.Single().Fields.Any(field => field.Name == "created"));
     }
 
+    // Planning must use the complete safe catalog allowlists rather than executor-local samples.
+    public static async Task PlanningInputContainsCatalogOwnedSafeMetricAndRelationSummaries()
+    {
+        var model = new ScriptedModel(sql: Sql(), report: ValidReport());
+        await Create(model, new ScriptedOperations { Sql = Page(1) })
+            .RunAsync(Request(), CancellationToken.None);
+
+        var input = model.PlanningInput!;
+        Check.Equal(6, input.Metrics.Length);
+        Check.True(input.Metrics.Any(metric => metric.MetricId == "personal_instruction_count"));
+        Check.Equal(
+            "execution_discipline",
+            input.Metrics.Single(metric => metric.MetricId == "execution_discipline").DashboardMetric);
+        Check.True(input.Metrics.Any(metric => metric.MetricId == "generic_query"));
+
+        var json = JsonSerializer.SerializeToElement(input, HarnessJson.Options);
+        var relations = json.GetProperty("relations");
+        Check.Equal(12, relations.GetArrayLength());
+        Check.Equal(
+            "public.sungero_company_jobtitle",
+            relations[0].GetProperty("name").GetString());
+        Check.True(relations.EnumerateArray().Any(relation =>
+            relation.GetProperty("name").GetString() == "public.sungero_wf_task"));
+
+        var serialized = json.GetRawText();
+        Check.True(!serialized.Contains("\"fields\"", StringComparison.OrdinalIgnoreCase));
+        Check.True(!serialized.Contains("password", StringComparison.OrdinalIgnoreCase));
+        Check.True(!serialized.Contains("token", StringComparison.OrdinalIgnoreCase));
+        Check.True(!serialized.Contains("connectionString", StringComparison.OrdinalIgnoreCase));
+    }
+
     // Treating an unmatched mention like no mention allows an unsafe data call.
     public static async Task UnmatchedEmployeeStopsBeforeSqlAndReport()
     {
@@ -324,8 +355,17 @@ public static class WorkflowTests
         public int SqlRepairCalls { get; private set; }
         public int ReportCalls { get; private set; }
         public int ReportRepairCalls { get; private set; }
+        public PlanningInput? PlanningInput { get; private set; }
         public SqlGenerationInput? SqlInput { get; private set; }
-        public Task<AnalysisPlan> PlanAsync(PlanningInput input, CancellationToken ct) => PlanUnexpected is not null ? Task.FromException<AnalysisPlan>(PlanUnexpected) : PlanFailure is null ? Task.FromResult(_plan) : Task.FromException<AnalysisPlan>(PlanFailure);
+        public Task<AnalysisPlan> PlanAsync(PlanningInput input, CancellationToken ct)
+        {
+            PlanningInput = input;
+            return PlanUnexpected is not null
+                ? Task.FromException<AnalysisPlan>(PlanUnexpected)
+                : PlanFailure is null
+                    ? Task.FromResult(_plan)
+                    : Task.FromException<AnalysisPlan>(PlanFailure);
+        }
         public Task<SqlDraft> DraftSqlAsync(SqlGenerationInput input, CancellationToken ct) { SqlCalls++; SqlInput = input; AfterSql?.Invoke(); return Task.FromResult(_sql); }
         public Task<SqlDraft> RepairSqlAsync(SqlRepairInput input, CancellationToken ct) { SqlRepairCalls++; AfterSqlRepair?.Invoke(); return SqlRepairFailure is null ? Task.FromResult(_repairedSql) : Task.FromException<SqlDraft>(SqlRepairFailure); }
         public Task<ReportDraft> DraftReportAsync(ReportGenerationInput input, CancellationToken ct) { ReportCalls++; AfterReport?.Invoke(); return ReportUnexpected is not null ? Task.FromException<ReportDraft>(ReportUnexpected) : ReportFailure is null ? Task.FromResult(_report) : Task.FromException<ReportDraft>(ReportFailure); }

@@ -364,8 +364,80 @@ public static class WorkflowTests
         Check.Equal("dashboard_metric", response.Steps.Last().Tool);
     }
 
-    private static AnalysisWorkflow Create(ScriptedModel model, ScriptedOperations operations) =>
-        new(model, operations, new ReportDraftService(model), Catalog(), TimeProvider.System);
+    // Hardcoding step elapsed to 0 hides a delayed successful plan.
+    public static async Task DelayedPlanStepReportsPositiveElapsedMs()
+    {
+        var clock = new ControllableTimeProvider();
+        var model = new ScriptedModel(sql: Sql(), report: ValidReport())
+        {
+            BeforePlan = () => clock.Advance(TimeSpan.FromMilliseconds(40))
+        };
+        var response = await Create(model, new ScriptedOperations { Sql = Page(1) }, clock)
+            .RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("completed", response.Status);
+        var prepare = response.Steps.Single(step => step.Tool == "prepare");
+        var plan = response.Steps.Single(step => step.Tool == "plan");
+        Check.Equal(0, prepare.ElapsedMs);
+        Check.True(plan.ElapsedMs > 0);
+    }
+
+    // A handled plan fault must still record monotonic elapsed time.
+    public static async Task DelayedPlanHarnessErrorReportsPositiveElapsedMs()
+    {
+        var clock = new ControllableTimeProvider();
+        var model = new ScriptedModel
+        {
+            PlanFailure = Error("provider_down"),
+            BeforePlan = () => clock.Advance(TimeSpan.FromMilliseconds(40))
+        };
+        var response = await Create(model, new ScriptedOperations(), clock)
+            .RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("failed", response.Status);
+        var plan = response.Steps.Single(step => step.Tool == "plan");
+        Check.Equal("error", plan.Status);
+        Check.Equal("provider_down", plan.Error!.Code);
+        Check.True(plan.ElapsedMs > 0);
+    }
+
+    // Hardcoding step elapsed to 0 hides a delayed SQL draft.
+    public static async Task DelayedSqlStepReportsPositiveElapsedMs()
+    {
+        var clock = new ControllableTimeProvider();
+        var model = new ScriptedModel(sql: Sql(), report: ValidReport())
+        {
+            BeforeSql = () => clock.Advance(TimeSpan.FromMilliseconds(40))
+        };
+        var response = await Create(model, new ScriptedOperations { Sql = Page(1) }, clock)
+            .RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("completed", response.Status);
+        var sql = response.Steps.Single(step => step.Tool == "execute_sql");
+        Check.True(sql.ElapsedMs > 0);
+        Check.Equal(0, response.Steps.Single(step => step.Tool == "prepare").ElapsedMs);
+    }
+
+    // Hardcoding step elapsed to 0 hides a delayed report draft; validate may stay zero.
+    public static async Task DelayedReportStepReportsPositiveElapsedMs()
+    {
+        var clock = new ControllableTimeProvider();
+        var model = new ScriptedModel(sql: Sql(), report: ValidReport())
+        {
+            BeforeReport = () => clock.Advance(TimeSpan.FromMilliseconds(40))
+        };
+        var response = await Create(model, new ScriptedOperations { Sql = Page(1) }, clock)
+            .RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("completed", response.Status);
+        var draft = response.Steps.Single(step => step.Tool == "draft_report");
+        var validate = response.Steps.Single(step => step.Tool == "validate_report");
+        Check.True(draft.ElapsedMs > 0);
+        Check.Equal(0, validate.ElapsedMs);
+    }
+
+    private static AnalysisWorkflow Create(ScriptedModel model, ScriptedOperations operations, TimeProvider? clock = null) =>
+        new(model, operations, new ReportDraftService(model), Catalog(), clock ?? TimeProvider.System);
 
     private static AnalyticsCatalog Catalog()
     {
@@ -479,6 +551,9 @@ public static class WorkflowTests
         public HarnessException? ReportFailure { get; init; }
         public Exception? PlanUnexpected { get; init; }
         public Exception? ReportUnexpected { get; init; }
+        public Action? BeforePlan { get; init; }
+        public Action? BeforeSql { get; init; }
+        public Action? BeforeReport { get; init; }
         public Action? AfterSql { get; init; }
         public Action? AfterSqlRepair { get; init; }
         public Action? AfterReport { get; init; }
@@ -492,13 +567,21 @@ public static class WorkflowTests
         public Task<AnalysisPlan> PlanAsync(PlanningInput input, CancellationToken ct)
         {
             PlanningInput = input;
+            BeforePlan?.Invoke();
             return PlanUnexpected is not null
                 ? Task.FromException<AnalysisPlan>(PlanUnexpected)
                 : PlanFailure is null
                     ? Task.FromResult(_plan)
                     : Task.FromException<AnalysisPlan>(PlanFailure);
         }
-        public Task<SqlDraft> DraftSqlAsync(SqlGenerationInput input, CancellationToken ct) { SqlCalls++; SqlInput = input; AfterSql?.Invoke(); return Task.FromResult(_sql); }
+        public Task<SqlDraft> DraftSqlAsync(SqlGenerationInput input, CancellationToken ct)
+        {
+            SqlCalls++;
+            SqlInput = input;
+            BeforeSql?.Invoke();
+            AfterSql?.Invoke();
+            return Task.FromResult(_sql);
+        }
         public Task<SqlDraft> RepairSqlAsync(SqlRepairInput input, CancellationToken ct)
         {
             SqlRepairInput = input;
@@ -506,7 +589,26 @@ public static class WorkflowTests
             AfterSqlRepair?.Invoke();
             return SqlRepairFailure is null ? Task.FromResult(_repairedSql) : Task.FromException<SqlDraft>(SqlRepairFailure);
         }
-        public Task<ReportDraft> DraftReportAsync(ReportGenerationInput input, CancellationToken ct) { ReportCalls++; AfterReport?.Invoke(); return ReportUnexpected is not null ? Task.FromException<ReportDraft>(ReportUnexpected) : ReportFailure is null ? Task.FromResult(_report) : Task.FromException<ReportDraft>(ReportFailure); }
+        public Task<ReportDraft> DraftReportAsync(ReportGenerationInput input, CancellationToken ct)
+        {
+            ReportCalls++;
+            BeforeReport?.Invoke();
+            AfterReport?.Invoke();
+            return ReportUnexpected is not null
+                ? Task.FromException<ReportDraft>(ReportUnexpected)
+                : ReportFailure is null
+                    ? Task.FromResult(_report)
+                    : Task.FromException<ReportDraft>(ReportFailure);
+        }
         public Task<ReportDraft> RepairReportAsync(ReportRepairInput input, CancellationToken ct) { ReportRepairCalls++; return Task.FromResult(_report); }
+    }
+
+    private sealed class ControllableTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch + TimeSpan.FromTicks(_timestamp);
+        public override long GetTimestamp() => _timestamp;
+        public void Advance(TimeSpan delta) => _timestamp += delta.Ticks;
     }
 }

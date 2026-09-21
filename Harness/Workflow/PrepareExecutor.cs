@@ -20,16 +20,17 @@ internal sealed class PrepareExecutor : Executor<AnalysisRequest, WorkflowState>
     {
         var run = new RunContext(Guid.NewGuid().ToString("N"), _clock, _runCancellation);
         var state = new WorkflowState(request, run, null, null, null, null, 0, 0, 0);
+        if (WorkflowExecution.IsCancelled(state, ct)) return WorkflowExecution.Cancelled(state);
+        var startedAt = WorkflowExecution.Start(run);
         try
         {
-            if (WorkflowExecution.IsCancelled(state, ct)) return WorkflowExecution.Cancelled(state);
             await _operations.PrepareAsync(request, run, _runCancellation).ConfigureAwait(false);
             if (WorkflowExecution.IsCancelled(state, ct)) return WorkflowExecution.Cancelled(state);
-            WorkflowExecution.AddStep(run, "prepare", "ok");
+            WorkflowExecution.AddStep(run, startedAt, "prepare", "ok");
             return state;
         }
         catch (OperationCanceledException) { return WorkflowExecution.Cancelled(state); }
-        catch (HarnessException exception) { WorkflowExecution.AddStep(run, "prepare", "error", null, exception.Error); return WorkflowExecution.Terminal(state, "failed", exception.Error); }
-        catch (Exception) { return WorkflowExecution.Unexpected(state, "prepare"); }
+        catch (HarnessException exception) { WorkflowExecution.AddStep(run, startedAt, "prepare", "error", null, exception.Error); return WorkflowExecution.Terminal(state, "failed", exception.Error); }
+        catch (Exception) { return WorkflowExecution.Unexpected(state, "prepare", startedAt); }
     }
 }

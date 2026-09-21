@@ -64,8 +64,15 @@ public sealed class RunContext
 
     public bool CanCallModel => ModelCalls < MaxModelCalls && !IsExpired;
 
-    public long ElapsedMs =>
-        (long)_clock.GetElapsedTime(_startedAt, _clock.GetTimestamp()).TotalMilliseconds;
+    public long ElapsedMs => ElapsedMsSince(_startedAt);
+
+    public long Timestamp() => _clock.GetTimestamp();
+
+    public long ElapsedMsSince(long startedAt)
+    {
+        var elapsed = (long)_clock.GetElapsedTime(startedAt, _clock.GetTimestamp()).TotalMilliseconds;
+        return elapsed < 0 ? 0 : elapsed;
+    }
 
     public CancellationToken LinkedToken(CancellationToken outer) =>
         CancellationTokenSource.CreateLinkedTokenSource(Cancellation, outer).Token;

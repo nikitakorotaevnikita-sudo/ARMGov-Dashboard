@@ -39,16 +39,19 @@ internal static class WorkflowExecution
     internal static bool IsCancelled(WorkflowState state, CancellationToken ct) =>
         ct.IsCancellationRequested || state.Context.IsExpired;
 
-    internal static WorkflowState Unexpected(WorkflowState state, string tool)
+    internal static long Start(RunContext context) => context.Timestamp();
+
+    internal static WorkflowState Unexpected(WorkflowState state, string tool, long startedAt)
     {
         var error = new HarnessError("workflow_failure", "Сервис аналитики временно недоступен.", false);
-        AddStep(state.Context, tool, "error", null, error);
+        AddStep(state.Context, startedAt, tool, "error", null, error);
         return Terminal(state, state.Context.HasStoredResults ? "incomplete" : "failed", error);
     }
 
-    internal static void AddStep(RunContext context, string tool, string status,
+    internal static void AddStep(RunContext context, long startedAt, string tool, string status,
         string? resultId = null, HarnessError? error = null) =>
-        context.Steps.Add(new AgentStep(context.Steps.Count + 1, tool, status, 0, resultId, error));
+        context.Steps.Add(new AgentStep(
+            context.Steps.Count + 1, tool, status, context.ElapsedMsSince(startedAt), resultId, error));
 
     internal static void AddWarning(RunContext context, string warning)
     {

@@ -157,6 +157,58 @@ public static class QwenJsonClientTests
         Check.Equal("provider_protocol_error", error.Error.Code);
     }
 
+    public static async Task MapsHttpRequestExceptionToRetryableTransportError()
+    {
+        const string leak = "No connection to https://example.test/v1/chat/completions token=test-token HttpRequestException";
+        var error = await ThrowsHarness(() => Client(new CaptureHandler((_, _, _) =>
+                throw new HttpRequestException(leak)))
+            .CompleteAsync<JsonReply>("system", new { id = 1 }, 10, CancellationToken.None));
+
+        Check.Equal("provider_transport_error", error.Error.Code);
+        Check.Equal(true, error.Error.Retryable);
+        AssertSanitizedTransport(error.Error.Message, leak);
+    }
+
+    public static async Task MapsResponseStreamIoExceptionToRetryableTransportError()
+    {
+        const string leak = "LEAK-IO https://example.test/v1/chat/completions token=test-token IOException";
+        var error = await ThrowsHarness(() => Client(new CaptureHandler((_, _, _) =>
+                Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StreamContent(new ThrowingReadStream(leak))
+                })))
+            .CompleteAsync<JsonReply>("system", new { id = 1 }, 10, CancellationToken.None));
+
+        Check.Equal("provider_transport_error", error.Error.Code);
+        Check.Equal(true, error.Error.Retryable);
+        AssertSanitizedTransport(error.Error.Message, leak);
+    }
+
+    public static async Task Http429WithoutRetryAfterStaysHttpError()
+    {
+        var error = await ThrowsHarness(() => Client(new CaptureHandler((_, _, _) => Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("slow down", Encoding.UTF8, "text/plain")
+                })))
+            .CompleteAsync<JsonReply>("system", new { id = 1 }, 10, CancellationToken.None));
+
+        Check.Equal("provider_http_error", error.Error.Code);
+        Check.Equal(true, error.Error.Retryable);
+        Check.True(error.Error.Message.Contains("429", StringComparison.Ordinal));
+        Check.True(!error.Error.Message.Contains("provider_transport_error", StringComparison.Ordinal));
+    }
+
+    public static async Task MalformedJsonStaysProtocolErrorNotTransport()
+    {
+        var error = await ThrowsHarness(() => Client(RespondingWith("{not-json"))
+            .CompleteAsync<JsonReply>("system", new { id = 1 }, 10, CancellationToken.None));
+
+        Check.Equal("provider_protocol_error", error.Error.Code);
+        Check.True(!string.Equals(error.Error.Code, "provider_transport_error", StringComparison.Ordinal));
+        Check.True(!error.Error.Message.Contains("JsonException", StringComparison.Ordinal));
+    }
+
     public static async Task RejectsCapturedMalformedPlanningJson()
     {
         const string captured = """
@@ -257,6 +309,44 @@ public static class QwenJsonClientTests
         }
 
         throw new InvalidOperationException("Expected OperationCanceledException.");
+    }
+
+    private static void AssertSanitizedTransport(string message, string leak)
+    {
+        Check.True(!string.IsNullOrWhiteSpace(message));
+        Check.True(!message.Contains(leak, StringComparison.Ordinal));
+        Check.True(!message.Contains("https://example.test", StringComparison.OrdinalIgnoreCase));
+        Check.True(!message.Contains("test-token", StringComparison.Ordinal));
+        Check.True(!message.Contains("HttpRequestException", StringComparison.Ordinal));
+        Check.True(!message.Contains("IOException", StringComparison.Ordinal));
+        Check.True(!message.Contains("System.Net", StringComparison.Ordinal));
+        Check.True(!message.Contains("System.IO", StringComparison.Ordinal));
+        Check.True(!message.Contains("Bearer", StringComparison.Ordinal));
+    }
+
+    private sealed class ThrowingReadStream : Stream
+    {
+        private readonly string _message;
+        public ThrowingReadStream(string message) => _message = message;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => 0;
+            set => throw new NotSupportedException();
+        }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new IOException(_message);
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            throw new IOException(_message);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            throw new IOException(_message);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed record JsonReply(string Value);

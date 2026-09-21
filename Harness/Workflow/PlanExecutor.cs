@@ -25,6 +25,7 @@ internal sealed class PlanExecutor : Executor<WorkflowState, WorkflowState>
         if (state.IsTerminal) return state;
         if (WorkflowExecution.IsCancelled(state, ct)) return WorkflowExecution.Cancelled(state);
         if (state.ModelCalls >= WorkflowLimits.MaxModelCalls) return WorkflowExecution.Cancelled(state);
+        var startedAt = WorkflowExecution.Start(state.Context);
         try
         {
             var plan = await _model.PlanAsync(new PlanningInput(state.Request.Question, state.Context.AsOf,
@@ -33,11 +34,11 @@ internal sealed class PlanExecutor : Executor<WorkflowState, WorkflowState>
             var validation = WorkflowContractValidator.ValidatePlan(plan, state.Context.AsOf, _metrics, _relations);
             if (!validation.Ok)
                 throw new HarnessException(validation.Errors[0]);
-            WorkflowExecution.AddStep(state.Context, "plan", "ok");
+            WorkflowExecution.AddStep(state.Context, startedAt, "plan", "ok");
             return WorkflowExecution.Next(state, plan: plan, modelCalls: state.ModelCalls + 1);
         }
         catch (OperationCanceledException) { return WorkflowExecution.Cancelled(state); }
-        catch (HarnessException exception) { WorkflowExecution.AddStep(state.Context, "plan", "error", null, exception.Error); return WorkflowExecution.Error(state, exception); }
-        catch (Exception) { return WorkflowExecution.Unexpected(state, "plan"); }
+        catch (HarnessException exception) { WorkflowExecution.AddStep(state.Context, startedAt, "plan", "error", null, exception.Error); return WorkflowExecution.Error(state, exception); }
+        catch (Exception) { return WorkflowExecution.Unexpected(state, "plan", startedAt); }
     }
 }

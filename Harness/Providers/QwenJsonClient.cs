@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -53,31 +54,50 @@ public sealed class QwenJsonClient : IQwenJsonClient
             chat_template_kwargs = new { enable_thinking = false }
         }, HarnessJson.Options);
 
-        using var response = await SendWithRetryAsync(body, ct).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-            throw await HttpErrorAsync(response, ct).ConfigureAwait(false);
-
-        var content = await ReadContentAsync(response, ct).ConfigureAwait(false);
         try
         {
-            var json = JsonObjectExtractor.Extract(content);
-            var value = JsonSerializer.Deserialize<T>(json, HarnessJson.Options);
-            return value ?? throw new HarnessException(new HarnessError(
-                "provider_protocol_error",
-                $"Qwen returned null for {typeof(T).Name}.",
-                true));
+            using var response = await SendWithRetryAsync(body, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                throw await HttpErrorAsync(response, ct).ConfigureAwait(false);
+
+            var content = await ReadContentAsync(response, ct).ConfigureAwait(false);
+            try
+            {
+                var json = JsonObjectExtractor.Extract(content);
+                var value = JsonSerializer.Deserialize<T>(json, HarnessJson.Options);
+                return value ?? throw new HarnessException(new HarnessError(
+                    "provider_protocol_error",
+                    $"Qwen returned null for {typeof(T).Name}.",
+                    true));
+            }
+            catch (HarnessException)
+            {
+                throw;
+            }
+            catch (JsonException)
+            {
+                throw ProtocolError("Qwen returned malformed JSON.");
+            }
+            catch (NotSupportedException)
+            {
+                throw ProtocolError("Qwen returned an unsupported JSON payload.");
+            }
         }
         catch (HarnessException)
         {
             throw;
         }
-        catch (JsonException)
+        catch (OperationCanceledException)
         {
-            throw ProtocolError("Qwen returned malformed JSON.");
+            throw;
         }
-        catch (NotSupportedException)
+        catch (HttpRequestException)
         {
-            throw ProtocolError("Qwen returned an unsupported JSON payload.");
+            throw TransportError();
+        }
+        catch (IOException)
+        {
+            throw TransportError();
         }
     }
 
@@ -159,6 +179,10 @@ public sealed class QwenJsonClient : IQwenJsonClient
         {
             throw ProtocolError("Qwen returned malformed JSON.");
         }
+        catch (IOException)
+        {
+            throw TransportError();
+        }
     }
 
     private async Task<HarnessException> HttpErrorAsync(
@@ -227,4 +251,7 @@ public sealed class QwenJsonClient : IQwenJsonClient
 
     private static HarnessException ProtocolError(string message) =>
         new(new HarnessError("provider_protocol_error", message, true));
+
+    private static HarnessException TransportError() =>
+        new(new HarnessError("provider_transport_error", "Qwen request failed.", true));
 }

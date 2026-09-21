@@ -18,6 +18,7 @@ internal sealed class AcquireDataExecutor : Executor<WorkflowState, WorkflowStat
     {
         if (state.IsTerminal) return state;
         if (WorkflowExecution.IsCancelled(state, ct)) return WorkflowExecution.Cancelled(state);
+        var startedAt = WorkflowExecution.Start(state.Context);
         try
         {
             ResultPage page;
@@ -26,7 +27,7 @@ internal sealed class AcquireDataExecutor : Executor<WorkflowState, WorkflowStat
             {
                 page = await _operations.ExecuteDashboardAsync(state.Plan, state.Context, state.Context.Cancellation).ConfigureAwait(false);
                 if (WorkflowExecution.IsCancelled(state, ct)) return WorkflowExecution.Cancelled(state);
-                WorkflowExecution.AddStep(state.Context, "dashboard_metric", "ok", page.ResultId);
+                WorkflowExecution.AddStep(state.Context, startedAt, "dashboard_metric", "ok", page.ResultId);
             }
             else
             {
@@ -43,7 +44,7 @@ internal sealed class AcquireDataExecutor : Executor<WorkflowState, WorkflowStat
                 var repaired = false;
                 if (!valid.Ok)
                 {
-                    next = await RepairSqlAsync(next, input, draft, valid.Errors).ConfigureAwait(false);
+                    next = await RepairSqlAsync(next, input, draft, valid.Errors, startedAt).ConfigureAwait(false);
                     repaired = true;
                 }
                 if (next.IsTerminal) return next;
@@ -54,7 +55,7 @@ internal sealed class AcquireDataExecutor : Executor<WorkflowState, WorkflowStat
                         next.Plan!, next.Sql!, next.Context, next.Context.Cancellation).ConfigureAwait(false);
                     if (!preflight.Ok)
                     {
-                        next = await RepairSqlAsync(next, input, next.Sql!, preflight.Errors).ConfigureAwait(false);
+                        next = await RepairSqlAsync(next, input, next.Sql!, preflight.Errors, startedAt).ConfigureAwait(false);
                         repaired = true;
                     }
                 }
@@ -65,7 +66,7 @@ internal sealed class AcquireDataExecutor : Executor<WorkflowState, WorkflowStat
                     var preflight = await _operations.PreflightSqlAsync(
                         next.Plan!, next.Sql!, next.Context, next.Context.Cancellation).ConfigureAwait(false);
                     if (!preflight.Ok)
-                        next = await RepairSqlAsync(next, input, next.Sql!, preflight.Errors).ConfigureAwait(false);
+                        next = await RepairSqlAsync(next, input, next.Sql!, preflight.Errors, startedAt).ConfigureAwait(false);
                 }
                 if (next.IsTerminal) return next;
                 if (WorkflowExecution.IsCancelled(next, ct)) return WorkflowExecution.Cancelled(next);
@@ -73,21 +74,21 @@ internal sealed class AcquireDataExecutor : Executor<WorkflowState, WorkflowStat
                     return next;
                 page = await _operations.ExecuteSqlAsync(next.Plan!, next.Sql!, next.Context, next.Context.Cancellation).ConfigureAwait(false);
                 if (WorkflowExecution.IsCancelled(next, ct)) return WorkflowExecution.Cancelled(next);
-                WorkflowExecution.AddStep(next.Context, "execute_sql", "ok", page.ResultId);
+                WorkflowExecution.AddStep(next.Context, startedAt, "execute_sql", "ok", page.ResultId);
             }
             foreach (var warning in page.Warnings) WorkflowExecution.AddWarning(next.Context, warning);
             if (page.StoredRowCount == 0) return WorkflowExecution.Terminal(next, "no_data");
             return next;
         }
         catch (OperationCanceledException) { return WorkflowExecution.Cancelled(state); }
-        catch (HarnessException exception) { WorkflowExecution.AddStep(state.Context, state.Plan?.Route == AnalysisDataRoute.DashboardMetric ? "dashboard_metric" : "execute_sql", "error", null, exception.Error); return WorkflowExecution.Error(state, exception); }
-        catch (Exception) { return WorkflowExecution.Unexpected(state, state.Plan?.Route == AnalysisDataRoute.DashboardMetric ? "dashboard_metric" : "execute_sql"); }
+        catch (HarnessException exception) { WorkflowExecution.AddStep(state.Context, startedAt, state.Plan?.Route == AnalysisDataRoute.DashboardMetric ? "dashboard_metric" : "execute_sql", "error", null, exception.Error); return WorkflowExecution.Error(state, exception); }
+        catch (Exception) { return WorkflowExecution.Unexpected(state, state.Plan?.Route == AnalysisDataRoute.DashboardMetric ? "dashboard_metric" : "execute_sql", startedAt); }
     }
-    private async Task<WorkflowState> RepairSqlAsync(WorkflowState state, SqlGenerationInput input, SqlDraft rejected, HarnessError[] errors)
+    private async Task<WorkflowState> RepairSqlAsync(WorkflowState state, SqlGenerationInput input, SqlDraft rejected, HarnessError[] errors, long startedAt)
     {
         if (state.SqlRepairs >= WorkflowLimits.MaxSqlRepairs || state.ModelCalls >= WorkflowLimits.MaxModelCalls)
         {
-            WorkflowExecution.AddStep(state.Context, "execute_sql", "error", null, errors[0]);
+            WorkflowExecution.AddStep(state.Context, startedAt, "execute_sql", "error", null, errors[0]);
             return WorkflowExecution.Terminal(state, "failed", errors[0]);
         }
         try
@@ -98,12 +99,12 @@ internal sealed class AcquireDataExecutor : Executor<WorkflowState, WorkflowStat
             var valid = WorkflowContractValidator.ValidateSqlDraft(repaired, state.Plan!);
             if (valid.Ok)
                 return next;
-            WorkflowExecution.AddStep(next.Context, "execute_sql", "error", null, valid.Errors[0]);
+            WorkflowExecution.AddStep(next.Context, startedAt, "execute_sql", "error", null, valid.Errors[0]);
             return WorkflowExecution.Terminal(next, "failed", valid.Errors[0]);
         }
         catch (HarnessException exception)
         {
-            WorkflowExecution.AddStep(state.Context, "execute_sql", "error", null,
+            WorkflowExecution.AddStep(state.Context, startedAt, "execute_sql", "error", null,
                 exception.ValidationErrors.FirstOrDefault() ?? exception.Error);
             return WorkflowExecution.Error(state, exception);
         }

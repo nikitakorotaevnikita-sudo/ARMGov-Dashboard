@@ -80,6 +80,69 @@ public static class WorkflowOperationsTests
         Check.Equal(0, executor.CallCount);
     }
 
+    public static async Task PreflightRejectsMissingPeriodBindingWithoutQuery()
+    {
+        var executor = new CapturingQueryExecutor();
+        var operations = CreateOperations(executor);
+
+        var result = await operations.PreflightSqlAsync(
+            Plan("generic_query", Months(12)),
+            new SqlDraft("select count(*) n from public.sungero_wf_task", "generic_query"),
+            Context(),
+            CancellationToken.None);
+
+        Check.True(!result.Ok);
+        Check.Equal("missing_period_binding", result.Errors[0].Code);
+        Check.Equal(0, executor.CallCount);
+    }
+
+    public static async Task PreflightAcceptsPeriodBindingsWithoutQuery()
+    {
+        var executor = new CapturingQueryExecutor();
+        var operations = CreateOperations(executor);
+
+        var result = await operations.PreflightSqlAsync(
+            Plan("generic_query", Months(12)),
+            new SqlDraft("""
+                select count(*) n from public.sungero_wf_task
+                where created >= @from and created < @to
+                """, "generic_query"),
+            Context(),
+            CancellationToken.None);
+
+        Check.True(result.Ok);
+        Check.Equal(0, executor.CallCount);
+    }
+
+    public static async Task PreflightRejectsMissingSelectionBindingWithoutQuery()
+    {
+        var executor = new CapturingQueryExecutor();
+        var operations = CreateOperations(
+            executor,
+            new EmployeeCandidate(101, "Иванов Иван", "А"),
+            new EmployeeCandidate(202, "Босов Александр", "Б"));
+        var context = Context();
+        await operations.PrepareAsync(new AnalysisRequest("Сравни",
+        [
+            new EntitySelection("Иванов", 101),
+            new EntitySelection("Босов", 202)
+        ]), context, CancellationToken.None);
+
+        var result = await operations.PreflightSqlAsync(
+            Plan("personal_instruction_count", Months(12)),
+            new SqlDraft("""
+                select count(*) n from public.sungero_wf_task
+                where performer_id = @selected_employee_1
+                  and created >= @from and created < @to
+                """, "personal_instruction_count"),
+            context,
+            CancellationToken.None);
+
+        Check.True(!result.Ok);
+        Check.Equal("missing_selection_binding", result.Errors[0].Code);
+        Check.Equal(0, executor.CallCount);
+    }
+
     public static async Task AmbiguousEmployeeResolutionReturnsCandidatesWithoutQuery()
     {
         var executor = new CapturingQueryExecutor();

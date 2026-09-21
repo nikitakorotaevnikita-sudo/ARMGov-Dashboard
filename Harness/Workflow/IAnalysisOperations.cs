@@ -27,6 +27,12 @@ public interface IAnalysisOperations
         SqlDraft draft,
         RunContext context,
         CancellationToken ct);
+
+    Task<ValidationResult> PreflightSqlAsync(
+        AnalysisPlan plan,
+        SqlDraft draft,
+        RunContext context,
+        CancellationToken ct);
 }
 
 public sealed record PreparationResult(VerifiedEmployee[] Employees);

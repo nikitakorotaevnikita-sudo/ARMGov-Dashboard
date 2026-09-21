@@ -45,6 +45,34 @@ public sealed class ToolDispatcher
             throw new HarnessException(validation.Errors[0]);
     }
 
+    internal ValidationResult CheckSqlBindings(string sql, RunContext context)
+    {
+        var errors = new List<HarnessError>();
+        if (context.Interpretation is { } interpretation &&
+            (interpretation.From is not null || interpretation.To is not null) &&
+            (!SqlGuard.ReferencesParameter(sql, "from") ||
+             !SqlGuard.ReferencesParameter(sql, "to")))
+        {
+            errors.Add(new HarnessError(
+                "missing_period_binding",
+                "SQL с периодом должен ссылаться на @from и @to.",
+                true));
+        }
+
+        foreach (var selection in context.ResolvedSelections)
+        {
+            if (!SqlGuard.ReferencesParameter(sql, selection.ParameterName))
+            {
+                errors.Add(new HarnessError(
+                    "missing_selection_binding",
+                    $"SQL должен фильтровать выбранного сотрудника через @{selection.ParameterName}.",
+                    true));
+            }
+        }
+
+        return new ValidationResult(errors.Count == 0, errors.ToArray());
+    }
+
     public async Task<object> ExecuteAsync(
         ModelAction action,
         RunContext context,
@@ -198,28 +226,13 @@ public sealed class ToolDispatcher
                 true));
         }
 
-        if (context.Interpretation.From is not null || context.Interpretation.To is not null)
-        {
-            if (!SqlGuard.ReferencesParameter(sql, "from") ||
-                !SqlGuard.ReferencesParameter(sql, "to"))
-            {
-                throw new HarnessException(new HarnessError(
-                    "missing_period_binding",
-                    "SQL с периодом должен ссылаться на @from и @to.",
-                    true));
-            }
-        }
+        var bindings = CheckSqlBindings(sql, context);
+        if (!bindings.Ok)
+            throw new HarnessException(bindings.Errors[0], bindings.Errors);
 
         var parameters = ReadParameters(action.Arguments);
         foreach (var selection in context.ResolvedSelections)
         {
-            if (!SqlGuard.ReferencesParameter(sql, selection.ParameterName))
-            {
-                throw new HarnessException(new HarnessError(
-                    "missing_selection_binding",
-                    $"SQL должен фильтровать выбранного сотрудника через @{selection.ParameterName}.",
-                    true));
-            }
             parameters[selection.ParameterName] =
                 JsonSerializer.SerializeToElement(selection.Employee.Id, HarnessJson.Options);
         }

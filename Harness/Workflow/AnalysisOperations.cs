@@ -143,6 +143,27 @@ public sealed class AnalysisOperations : IAnalysisOperations
             ct).ConfigureAwait(false));
     }
 
+    public async Task<ValidationResult> PreflightSqlAsync(
+        AnalysisPlan plan,
+        SqlDraft draft,
+        RunContext context,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(draft);
+        ArgumentNullException.ThrowIfNull(context);
+        if (plan.Route != AnalysisDataRoute.GeneratedSql)
+        {
+            throw new HarnessException(new HarnessError(
+                "invalid_generated_sql_route",
+                "План не использует generated SQL.",
+                false));
+        }
+
+        await ApplyContextAsync(plan, context, ct).ConfigureAwait(false);
+        return _dispatcher.CheckSqlBindings(draft.Sql, context);
+    }
+
     private async Task ApplyContextAsync(
         AnalysisPlan plan,
         RunContext context,

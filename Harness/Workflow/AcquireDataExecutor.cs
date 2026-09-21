@@ -40,10 +40,37 @@ internal sealed class AcquireDataExecutor : Executor<WorkflowState, WorkflowStat
                 if (WorkflowExecution.IsCancelled(state, ct)) return WorkflowExecution.Cancelled(state);
                 next = WorkflowExecution.Next(state, sql: draft, modelCalls: state.ModelCalls + 1);
                 var valid = WorkflowContractValidator.ValidateSqlDraft(draft, state.Plan);
+                var repaired = false;
                 if (!valid.Ok)
+                {
                     next = await RepairSqlAsync(next, input, draft, valid.Errors).ConfigureAwait(false);
+                    repaired = true;
+                }
                 if (next.IsTerminal) return next;
                 if (WorkflowExecution.IsCancelled(next, ct)) return WorkflowExecution.Cancelled(next);
+                if (!repaired)
+                {
+                    var preflight = await _operations.PreflightSqlAsync(
+                        next.Plan!, next.Sql!, next.Context, next.Context.Cancellation).ConfigureAwait(false);
+                    if (!preflight.Ok)
+                    {
+                        next = await RepairSqlAsync(next, input, next.Sql!, preflight.Errors).ConfigureAwait(false);
+                        repaired = true;
+                    }
+                }
+                if (next.IsTerminal) return next;
+                if (WorkflowExecution.IsCancelled(next, ct)) return WorkflowExecution.Cancelled(next);
+                if (repaired)
+                {
+                    var preflight = await _operations.PreflightSqlAsync(
+                        next.Plan!, next.Sql!, next.Context, next.Context.Cancellation).ConfigureAwait(false);
+                    if (!preflight.Ok)
+                        next = await RepairSqlAsync(next, input, next.Sql!, preflight.Errors).ConfigureAwait(false);
+                }
+                if (next.IsTerminal) return next;
+                if (WorkflowExecution.IsCancelled(next, ct)) return WorkflowExecution.Cancelled(next);
+                if (next.Context.HasStoredResults)
+                    return next;
                 page = await _operations.ExecuteSqlAsync(next.Plan!, next.Sql!, next.Context, next.Context.Cancellation).ConfigureAwait(false);
                 if (WorkflowExecution.IsCancelled(next, ct)) return WorkflowExecution.Cancelled(next);
                 WorkflowExecution.AddStep(next.Context, "execute_sql", "ok", page.ResultId);

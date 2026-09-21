@@ -37,6 +37,88 @@ public static class WorkflowTests
         Check.Equal(1, operations.SqlCalls);
     }
 
+    // Binding failures must repair before ExecuteSqlAsync, using the dispatcher error code.
+    public static async Task MissingPeriodBindingIsRepairedOnceBeforeExecution()
+    {
+        var model = new ScriptedModel(RangePlan(), UnboundSql(), BoundSql(), ValidReport());
+        var operations = new ScriptedOperations { Sql = Page(1) };
+        var response = await Create(model, operations).RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("completed", response.Status);
+        Check.Equal(1, model.SqlRepairCalls);
+        Check.Equal("missing_period_binding", model.SqlRepairInput!.Errors.Single().Code);
+        Check.Equal(1, operations.SqlCalls);
+        Check.Equal(2, operations.PreflightCalls);
+    }
+
+    // A still-unbound repair must not call ExecuteSqlAsync or spend a second repair.
+    public static async Task SecondUnboundSqlFailsBeforeDataExecution()
+    {
+        var model = new ScriptedModel(RangePlan(), UnboundSql(), UnboundSql());
+        var operations = new ScriptedOperations();
+        var response = await Create(model, operations).RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("failed", response.Status);
+        Check.Equal("missing_period_binding", response.Error!.Code);
+        Check.Equal(1, model.SqlRepairCalls);
+        Check.Equal(0, operations.SqlCalls);
+    }
+
+    // Missing a confirmed employee parameter is the same one-repair binding path.
+    public static async Task MissingSelectionBindingIsRepairedOnceBeforeExecution()
+    {
+        var model = new ScriptedModel(
+            RangePlan(),
+            new SqlDraft("select 1 from public.sungero_wf_task where created >= @from and created < @to and performer_id = @selected_employee_1", "generic_query"),
+            new SqlDraft("select 1 from public.sungero_wf_task where created >= @from and created < @to and performer_id in (@selected_employee_1, @selected_employee_2)", "generic_query"),
+            ValidReport());
+        var operations = new ScriptedOperations
+        {
+            Resolution = new EntityResolutionResult(
+            [
+                new VerifiedEmployee(7, "Иванов Иван", "selected_employee_1"),
+                new VerifiedEmployee(8, "Босов Александр", "selected_employee_2")
+            ], []),
+            Sql = Page(1)
+        };
+        var response = await Create(model, operations).RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("completed", response.Status);
+        Check.Equal("missing_selection_binding", model.SqlRepairInput!.Errors.Single().Code);
+        Check.Equal(1, model.SqlRepairCalls);
+        Check.Equal(1, operations.SqlCalls);
+    }
+
+    // Cancellation after a successful binding repair must not reach ExecuteSqlAsync.
+    public static async Task CancellationAfterBindingRepairStopsBeforeExecution()
+    {
+        using var cancelled = new CancellationTokenSource();
+        var model = new ScriptedModel(RangePlan(), UnboundSql(), BoundSql())
+        {
+            AfterSqlRepair = cancelled.Cancel
+        };
+        var operations = new ScriptedOperations();
+        var response = await Create(model, operations).RunAsync(Request(), cancelled.Token);
+
+        Check.Equal("incomplete", response.Status);
+        Check.Equal(1, model.SqlRepairCalls);
+        Check.Equal(0, operations.SqlCalls);
+    }
+
+    // DTO validation and binding preflight share a single repair budget.
+    public static async Task DtoAndBindingFailuresShareOneSqlRepair()
+    {
+        var model = new ScriptedModel(RangePlan(), new SqlDraft("", "generic_query"), UnboundSql());
+        var operations = new ScriptedOperations();
+        var response = await Create(model, operations).RunAsync(Request(), CancellationToken.None);
+
+        Check.Equal("failed", response.Status);
+        Check.Equal(1, model.SqlRepairCalls);
+        Check.Equal("invalid_sql", model.SqlRepairInput!.Errors[0].Code);
+        Check.Equal(0, operations.SqlCalls);
+        Check.True(response.Error!.Code is "invalid_sql" or "missing_period_binding");
+    }
+
     // Skipping the generated-SQL route or invoking it more than once makes this fail.
     public static async Task ValidSqlPlanExecutesOnceAndCompletes()
     {
@@ -157,7 +239,9 @@ public static class WorkflowTests
     // Dropping verified employee bindings or schema fields from SQL input makes this fail.
     public static async Task SqlInputContainsVerifiedEmployeesAndHintedCatalogDefinitions()
     {
-        var model = new ScriptedModel(sql: Sql(), report: ValidReport());
+        var model = new ScriptedModel(
+            sql: new SqlDraft("select 1 from public.sungero_wf_task where performer_id = @selected_employee_1", "generic_query"),
+            report: ValidReport());
         var operations = new ScriptedOperations
         {
             Resolution = new EntityResolutionResult([new VerifiedEmployee(7, "Иванов Иван", "selected_employee_1")], [])
@@ -295,7 +379,17 @@ public static class WorkflowTests
         AnalysisPlan.Snapshot(route == AnalysisDataRoute.DashboardMetric ? "execution_discipline" : "generic_query",
             new PeriodSpec("all", null, null, null), route, dashboard, [],
             route == AnalysisDataRoute.DashboardMetric ? [] : ["public.sungero_wf_task"]);
+    private static AnalysisPlan RangePlan() =>
+        AnalysisPlan.Snapshot("generic_query",
+            new PeriodSpec("range", null,
+                DateTimeOffset.Parse("1990-01-01T00:00:00+00:00"),
+                DateTimeOffset.Parse("1990-02-01T00:00:00+00:00")),
+            AnalysisDataRoute.GeneratedSql, null, [], ["public.sungero_wf_task"]);
     private static SqlDraft Sql() => new("select 1 from public.sungero_wf_task", "generic_query");
+    private static SqlDraft UnboundSql() => new("select 1 from public.sungero_wf_task", "generic_query");
+    private static SqlDraft BoundSql() => new(
+        "select 1 from public.sungero_wf_task where created >= @from and created < @to",
+        "generic_query");
     private static ReportDraft ValidReport() => new(new ReportSpec("Данные",
         new Interpretation("generic_query", "Данные", "шт", null, null, null),
         [new BlockSpec("table", "r1", ["n"], null, null)], [], [], null));
@@ -312,9 +406,15 @@ public static class WorkflowTests
         public EntityResolutionResult Resolution { get; set; } = new([], []);
         public int DashboardCalls { get; private set; }
         public int SqlCalls { get; private set; }
+        public int PreflightCalls { get; private set; }
         public HarnessException? DashboardFailure { get; init; }
         public Task<PreparationResult> PrepareAsync(AnalysisRequest request, RunContext context, CancellationToken ct) => Task.FromResult(new PreparationResult([]));
-        public Task<EntityResolutionResult> ResolveAsync(AnalysisPlan plan, RunContext context, CancellationToken ct) => Task.FromResult(Resolution);
+        public Task<EntityResolutionResult> ResolveAsync(AnalysisPlan plan, RunContext context, CancellationToken ct)
+        {
+            foreach (var employee in Resolution.Employees)
+                context.RegisterResolved(employee.Name, new EmployeeCandidate(employee.Id, employee.Name, ""));
+            return Task.FromResult(Resolution);
+        }
         public Task<ResultPage> ExecuteDashboardAsync(AnalysisPlan plan, RunContext context, CancellationToken ct)
         {
             DashboardCalls++;
@@ -325,6 +425,37 @@ public static class WorkflowTests
         {
             SqlCalls++;
             return Task.FromResult(Store(Sql, plan, context));
+        }
+        public Task<ValidationResult> PreflightSqlAsync(AnalysisPlan plan, SqlDraft draft, RunContext context, CancellationToken ct)
+        {
+            PreflightCalls++;
+            var errors = new List<HarnessError>();
+            var needsPeriod = string.Equals(plan.Period.Kind, "range", StringComparison.Ordinal)
+                || string.Equals(plan.Period.Kind, "months", StringComparison.Ordinal)
+                || plan.Period.From is not null
+                || plan.Period.To is not null
+                || context.Interpretation?.From is not null
+                || context.Interpretation?.To is not null;
+            if (needsPeriod &&
+                (!SqlGuard.ReferencesParameter(draft.Sql, "from") ||
+                 !SqlGuard.ReferencesParameter(draft.Sql, "to")))
+            {
+                errors.Add(new HarnessError(
+                    "missing_period_binding",
+                    "SQL с периодом должен ссылаться на @from и @to.",
+                    true));
+            }
+            foreach (var selection in context.ResolvedSelections)
+            {
+                if (!SqlGuard.ReferencesParameter(draft.Sql, selection.ParameterName))
+                {
+                    errors.Add(new HarnessError(
+                        "missing_selection_binding",
+                        $"SQL должен фильтровать выбранного сотрудника через @{selection.ParameterName}.",
+                        true));
+                }
+            }
+            return Task.FromResult(new ValidationResult(errors.Count == 0, errors.ToArray()));
         }
         private static ResultPage Store(ResultPage page, AnalysisPlan plan, RunContext context)
         {
@@ -357,6 +488,7 @@ public static class WorkflowTests
         public int ReportRepairCalls { get; private set; }
         public PlanningInput? PlanningInput { get; private set; }
         public SqlGenerationInput? SqlInput { get; private set; }
+        public SqlRepairInput? SqlRepairInput { get; private set; }
         public Task<AnalysisPlan> PlanAsync(PlanningInput input, CancellationToken ct)
         {
             PlanningInput = input;
@@ -367,7 +499,13 @@ public static class WorkflowTests
                     : Task.FromException<AnalysisPlan>(PlanFailure);
         }
         public Task<SqlDraft> DraftSqlAsync(SqlGenerationInput input, CancellationToken ct) { SqlCalls++; SqlInput = input; AfterSql?.Invoke(); return Task.FromResult(_sql); }
-        public Task<SqlDraft> RepairSqlAsync(SqlRepairInput input, CancellationToken ct) { SqlRepairCalls++; AfterSqlRepair?.Invoke(); return SqlRepairFailure is null ? Task.FromResult(_repairedSql) : Task.FromException<SqlDraft>(SqlRepairFailure); }
+        public Task<SqlDraft> RepairSqlAsync(SqlRepairInput input, CancellationToken ct)
+        {
+            SqlRepairInput = input;
+            SqlRepairCalls++;
+            AfterSqlRepair?.Invoke();
+            return SqlRepairFailure is null ? Task.FromResult(_repairedSql) : Task.FromException<SqlDraft>(SqlRepairFailure);
+        }
         public Task<ReportDraft> DraftReportAsync(ReportGenerationInput input, CancellationToken ct) { ReportCalls++; AfterReport?.Invoke(); return ReportUnexpected is not null ? Task.FromException<ReportDraft>(ReportUnexpected) : ReportFailure is null ? Task.FromResult(_report) : Task.FromException<ReportDraft>(ReportFailure); }
         public Task<ReportDraft> RepairReportAsync(ReportRepairInput input, CancellationToken ct) { ReportRepairCalls++; return Task.FromResult(_report); }
     }

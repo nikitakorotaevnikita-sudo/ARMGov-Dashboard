@@ -284,20 +284,31 @@ public static class HostingTests
         var previousToken = ReadPath(config, "Llm", "Token");
         try
         {
-            HarnessHost.TestModelProviderFactory = () => new CountingProvider();
             HarnessHost.TestEmployeeResolverFactory = () => new FakeEmployeeResolver([]);
             HarnessHost.TestQueryExecutorFactory = () => new FakeQueryExecutor([]);
             WritePath(config, "configured-token", "Llm", "Token");
+            WritePath(config, "Qwen/Qwen3.8-27B", "Llm", "Model");
 
             WriteAnalyticsEngine(config, "workflow");
-            WritePath(config, "GigaChat-Looking-Name", "Llm", "Model");
             var workflow = CreateRunner(CaptureSnapshot());
             Check.True(workflow is AnalysisWorkflow);
+            Check.True(WorkflowClient(workflow) is QwenJsonClient);
+            Check.Equal("Qwen/Qwen3.8-27B", ReadPrivateString(WorkflowClient(workflow), "_model"));
 
             WriteAnalyticsEngine(config, "legacy");
-            WritePath(config, "Qwen-Looking-Name", "Llm", "Model");
             var legacy = CreateRunner(CaptureSnapshot());
             Check.True(legacy is AnalysisAgent);
+            Check.True(AgentProvider(legacy) is QwenProvider);
+            Check.True(AgentProvider(legacy) is not GigaChatProvider);
+            Check.Equal("Qwen/Qwen3.8-27B", ReadPrivateString(AgentProvider(legacy), "_model"));
+
+            WritePath(config, "GigaChat-Looking-Name", "Llm", "Model");
+            foreach (var engine in new[] { "workflow", "legacy" })
+            {
+                WriteAnalyticsEngine(config, engine);
+                var error = CreateRunnerError(CaptureSnapshot());
+                Check.Equal("unsupported_analytics_model", error.Code);
+            }
         }
         finally
         {
@@ -335,6 +346,105 @@ public static class HostingTests
         finally
         {
             WriteAnalyticsEngine(config, previousEngine);
+            WritePath(config, previousToken, "Llm", "Token");
+            ResetHarnessHooks();
+        }
+    }
+
+    public static async Task GigaChatAnalyticsSnapshotFailsClosedBeforeCallingModel()
+    {
+        await AssertUnsupportedAnalyticsModelAsync("GigaChat-2");
+    }
+
+    public static async Task UnknownAnalyticsModelFailsClosedBeforeCallingModel()
+    {
+        await AssertUnsupportedAnalyticsModelAsync("Some-Other-Model");
+    }
+
+    public static void GigaChatUrlAndPresetFailClosedWithoutQwenFallback()
+    {
+        var config = CurrentConfig;
+        var previousEngine = ReadAnalyticsEngine(config);
+        var previousUrl = ReadPath(config, "Llm", "Url");
+        var previousModel = ReadPath(config, "Llm", "Model");
+        var previousToken = ReadPath(config, "Llm", "Token");
+        var previousActive = ReadPath(config, "Llm", "Active");
+        try
+        {
+            HarnessHost.TestModelProviderFactory = () => new CountingProvider();
+            HarnessHost.TestEmployeeResolverFactory = () => new FakeEmployeeResolver([]);
+            HarnessHost.TestQueryExecutorFactory = () => new FakeQueryExecutor([]);
+            WritePath(config, "configured-token", "Llm", "Token");
+            WritePath(config, "Qwen/Qwen3.8-27B", "Llm", "Model");
+
+            WritePath(config, "https://gigachat.devices.sberbank.ru/api/v1/chat/completions", "Llm", "Url");
+            foreach (var engine in new[] { "workflow", "legacy" })
+            {
+                WriteAnalyticsEngine(config, engine);
+                var error = CreateRunnerError(CaptureSnapshot());
+                Check.Equal("unsupported_analytics_model", error.Code);
+            }
+
+            WritePath(config, previousUrl, "Llm", "Url");
+            WritePath(config, "gigachat", "Llm", "Active");
+            foreach (var engine in new[] { "workflow", "legacy" })
+            {
+                WriteAnalyticsEngine(config, engine);
+                var error = CreateRunnerError(CaptureSnapshot());
+                Check.Equal("unsupported_analytics_model", error.Code);
+            }
+
+            Check.Equal(0, CountingProvider.Calls);
+        }
+        finally
+        {
+            WriteAnalyticsEngine(config, previousEngine);
+            WritePath(config, previousUrl, "Llm", "Url");
+            WritePath(config, previousModel, "Llm", "Model");
+            WritePath(config, previousToken, "Llm", "Token");
+            WritePath(config, previousActive, "Llm", "Active");
+            ResetHarnessHooks();
+        }
+    }
+
+    private static async Task AssertUnsupportedAnalyticsModelAsync(string model)
+    {
+        var config = CurrentConfig;
+        var previousEngine = ReadAnalyticsEngine(config);
+        var previousUrl = ReadPath(config, "Llm", "Url");
+        var previousModel = ReadPath(config, "Llm", "Model");
+        var previousToken = ReadPath(config, "Llm", "Token");
+        try
+        {
+            foreach (var engine in new[] { "workflow", "legacy" })
+            {
+                var (status, body) = await InvokeAsync(
+                    HttpMethod.Post.Method,
+                    """{"question":"Сравни","selections":[]}""",
+                    configureHooks: () =>
+                    {
+                        WriteAnalyticsEngine(config, engine);
+                        WritePath(config, "http://127.0.0.1:1/v1/chat/completions", "Llm", "Url");
+                        WritePath(config, model, "Llm", "Model");
+                        WritePath(config, "configured-token", "Llm", "Token");
+                        HarnessHost.TestModelProviderFactory = () => new CountingProvider();
+                        HarnessHost.TestEmployeeResolverFactory = () => new FakeEmployeeResolver([]);
+                        HarnessHost.TestQueryExecutorFactory = () => new FakeQueryExecutor([]);
+                    });
+
+                Check.Equal(200, status);
+                Check.Equal("failed", body.GetProperty("status").GetString());
+                Check.Equal(
+                    "unsupported_analytics_model",
+                    body.GetProperty("error").GetProperty("code").GetString());
+                Check.Equal(0, CountingProvider.Calls);
+            }
+        }
+        finally
+        {
+            WriteAnalyticsEngine(config, previousEngine);
+            WritePath(config, previousUrl, "Llm", "Url");
+            WritePath(config, previousModel, "Llm", "Model");
             WritePath(config, previousToken, "Llm", "Token");
             ResetHarnessHooks();
         }
@@ -411,8 +521,58 @@ public static class HostingTests
             "CreateAnalysisRunner",
             BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("CreateAnalysisRunner is missing.");
-        return method.Invoke(null, [snapshot]) as IAnalysisRunner
-            ?? throw new InvalidOperationException("CreateAnalysisRunner returned no runner.");
+        try
+        {
+            return method.Invoke(null, [snapshot]) as IAnalysisRunner
+                ?? throw new InvalidOperationException("CreateAnalysisRunner returned no runner.");
+        }
+        catch (TargetInvocationException ex)
+        {
+            throw ex.InnerException ?? ex;
+        }
+    }
+
+    private static HarnessError CreateRunnerError(object snapshot)
+    {
+        try
+        {
+            CreateRunner(snapshot);
+        }
+        catch (HarnessException ex)
+        {
+            return ex.Error;
+        }
+
+        throw new InvalidOperationException("Expected CreateAnalysisRunner to fail closed.");
+    }
+
+    private static object AgentProvider(IAnalysisRunner runner)
+    {
+        var field = typeof(AnalysisAgent).GetField("_provider", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("AnalysisAgent._provider is missing.");
+        return field.GetValue(runner)
+            ?? throw new InvalidOperationException("AnalysisAgent provider is missing.");
+    }
+
+    private static object WorkflowClient(IAnalysisRunner runner)
+    {
+        var modelField = typeof(AnalysisWorkflow).GetField("_model", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("AnalysisWorkflow._model is missing.");
+        var model = modelField.GetValue(runner)
+            ?? throw new InvalidOperationException("AnalysisWorkflow model is missing.");
+        Check.True(model is QwenAnalysisStageModel);
+        var clientField = typeof(QwenAnalysisStageModel).GetField("_client", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("QwenAnalysisStageModel._client is missing.");
+        return clientField.GetValue(model)
+            ?? throw new InvalidOperationException("Qwen analysis client is missing.");
+    }
+
+    private static string ReadPrivateString(object instance, string name)
+    {
+        var field = instance.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException($"{instance.GetType().Name}.{name} is missing.");
+        return field.GetValue(instance) as string
+            ?? throw new InvalidOperationException($"{instance.GetType().Name}.{name} is not a string.");
     }
 
     private static async Task<(int Status, JsonElement Body)> InvokeAsync(

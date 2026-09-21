@@ -48,8 +48,12 @@ connection string:
 - `legacy` — прежний `AnalysisAgent` для быстрого отката;
 - любое другое значение — `failed` / `invalid_analytics_engine` до обращения к модели.
 
-Имя модели не участвует в выборе runner. Целевой workflow всегда использует
-`Qwen/Qwen3.8-27B` через контролируемый Ario HTTP-адаптер. Пакет
+Имя модели не участвует в выборе runner. Оба engine (`workflow` и `legacy`) работают
+только с `Qwen/Qwen3.8-27B` через Ario HTTP-адаптер. Снимок GigaChat, другого
+провайдера или неизвестной модели завершает запрос `failed` /
+`unsupported_analytics_model` до OAuth/HTTP и до запуска runner. Тихого отката на
+GigaChat или на другую модель нет. Пресеты GigaChat в бэк-офисе остаются для чата
+дашборда, не для `/api/ai/analysis`. Пакет
 `Microsoft.Agents.AI.Workflows` закреплён на `1.21.0` в `packages.lock.json`.
 
 Стадии workflow: `prepare`, `plan`, `resolve_entities`, `dashboard_metric` или `execute_sql`,
@@ -57,8 +61,8 @@ connection string:
 сервер управляет переходами, разрешает сущности, связывает период и ID сотрудников, выполняет
 не более одного запроса данных и проверяет ссылки отчёта на реальные `resultId`.
 
-Legacy runner сохраняет прежние Qwen/GigaChat provider adapters только для rollback
-совместимости. Они не являются частью целевой workflow-архитектуры.
+Legacy runner — тот же Qwen endpoint/модель, что и workflow, на прежнем
+`AnalysisAgent`. Это откат архитектуры, не fallback на GigaChat.
 
 Граница данных не изменилась: `SqlGuard` + `SqlScopePolicy`, `BEGIN READ ONLY`,
 `statement_timeout`, каталог разрешённых отношений, максимум 200 строк и evidence binding через
@@ -121,7 +125,8 @@ dotnet run --project tools/harness-tests -c Release -- db
 
 Стабильные имена: `prepare`, `plan`, `resolve_entities`, `dashboard_metric` / `execute_sql`,
 `draft_report`, `validate_report`. Типичные коды ошибок: `unknown_result`, `missing_context`,
-`invalid_report`, `provider_protocol_error`, `invalid_analytics_engine`.
+`invalid_report`, `provider_protocol_error`, `invalid_analytics_engine`,
+`unsupported_analytics_model`.
 
 ## Лимиты и partial states
 

@@ -90,6 +90,7 @@ partial class Program
 
     static IAnalysisRunner CreateAnalysisRunner(HarnessRunSnapshot snapshot)
     {
+        EnsureSupportedAnalyticsModel(snapshot.Llm);
         var catalog = AnalyticsCatalog.Load(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
         var employees = TestEmployeeResolverFactory?.Invoke()
             ?? new EmployeeResolver(snapshot.ConnectionString);
@@ -129,25 +130,22 @@ partial class Program
 
     static IModelProvider CreateModelProvider(HarnessLlmSnapshot llm)
     {
-        if (llm.IsGigaChat)
-        {
-            var tokenProvider = new GigaChatTokenProvider(
-                Http,
-                llm.Token,
-                string.IsNullOrWhiteSpace(llm.Scope) ? "GIGACHAT_API_CORP" : llm.Scope,
-                TimeProvider.System);
-            return new GigaChatProvider(
-                Http,
-                tokenProvider,
-                llm.Model,
-                new Uri(llm.Url));
-        }
-
         return new QwenProvider(
             Http,
             llm.Token,
             llm.Model,
             new Uri(llm.Url));
+    }
+
+    static void EnsureSupportedAnalyticsModel(HarnessLlmSnapshot llm)
+    {
+        if (string.Equals(llm.Model, LlmQwenModel, StringComparison.Ordinal) && !llm.IsGigaChat)
+            return;
+
+        throw new HarnessException(new HarnessError(
+            "unsupported_analytics_model",
+            "Аналитика /api/ai/analysis работает только с Qwen/Qwen3.8-27B.",
+            false));
     }
 
     static async Task<QueryResult> DashboardMetricHarnessAsync(

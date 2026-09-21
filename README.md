@@ -92,11 +92,13 @@ sequenceDiagram
 сохранённого `resultId`.
 
 Runner выбирается явным `Analytics.Engine`: `workflow` — штатный режим, `legacy` — быстрый
-откат на прежний `AnalysisAgent`. Неизвестное значение завершает запрос ошибкой
-`invalid_analytics_engine`; имя модели на выбор runner не влияет. Провайдерный адаптер целевого
-workflow использует Ario `/v1/chat/completions`, Bearer token, температуру `0.2` и
-`enable_thinking=false`. Пакет `Microsoft.Agents.AI.Workflows` зафиксирован в
-`packages.lock.json`.
+откат на прежний `AnalysisAgent` с тем же `Qwen/Qwen3.8-27B`. Неизвестное значение
+завершает запрос ошибкой `invalid_analytics_engine`; имя модели на выбор runner не влияет.
+GigaChat или другая модель в снимке аналитики — `unsupported_analytics_model` до вызова
+провайдера; тихого отката нет. Пресеты GigaChat в бэк-офисе остаются для чата дашборда.
+Провайдерный адаптер анализа использует Ario `/v1/chat/completions`, Bearer token,
+температуру `0.2` и `enable_thinking=false`. Пакет `Microsoft.Agents.AI.Workflows`
+зафиксирован в `packages.lock.json`.
 
 ### Legacy ИИ-харнесс: свободный цикл действий
 

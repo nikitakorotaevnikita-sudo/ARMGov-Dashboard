@@ -66,7 +66,9 @@ partial class Program
         public string ActiveProfile { get; set; } = "Руководитель";
         public List<Profile> Profiles { get; set; } = DefaultProfiles();
         public bool AnalyticsEnabled { get; set; } = true;
+        public AnalyticsCfg Analytics { get; set; } = new();
     }
+    public class AnalyticsCfg { public string Engine { get; set; } = "workflow"; }
     public class DbCfg { public string Host { get; set; } = "192.168.52.18"; public string Port { get; set; } = "5432"; public string Database { get; set; } = "Polud"; public string Username { get; set; } = "admin"; public string Password { get; set; } = ""; }
     public const string LlmQwenId = "qwen";
     public const string LlmGigaId = "gigachat";

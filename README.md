@@ -82,7 +82,23 @@ sequenceDiagram
   S-->>U: { text, … } → рендер на клиенте (mdLite)
 ```
 
-### ИИ-харнесс: как агент сам добывает данные
+### Управляемая аналитика на Qwen
+
+`POST /api/ai/analysis` по умолчанию запускает детерминированный workflow на
+`Qwen/Qwen3.8-27B`: `prepare` → `plan` → `resolve_entities` → `dashboard_metric` или
+`execute_sql` → `draft_report` → `validate_report`. Сервер задаёт порядок шагов, связывает
+сотрудников с проверенными ID, применяет период и пропускает SQL через существующие
+`SqlGuard`, `SqlScopePolicy` и `ReadOnlyExecutor`. Числа и графики отчёта принимаются только из
+сохранённого `resultId`.
+
+Runner выбирается явным `Analytics.Engine`: `workflow` — штатный режим, `legacy` — быстрый
+откат на прежний `AnalysisAgent`. Неизвестное значение завершает запрос ошибкой
+`invalid_analytics_engine`; имя модели на выбор runner не влияет. Провайдерный адаптер целевого
+workflow использует Ario `/v1/chat/completions`, Bearer token, температуру `0.2` и
+`enable_thinking=false`. Пакет `Microsoft.Agents.AI.Workflows` зафиксирован в
+`packages.lock.json`.
+
+### Legacy ИИ-харнесс: свободный цикл действий
 
 Обычный чат (схема выше) работает по принципу «весь контекст сразу»: сервер кладёт в промпт
 готовый JSON метрик, модель только интерпретирует числа. Это надёжно, но отвечает лишь на то,
@@ -524,6 +540,7 @@ flowchart TD
 {
   "Prefix": "http://localhost:5080/",
   "RxBase": "http://<rx-host>/Client/#/",
+  "Analytics": { "Engine": "workflow" },
   "Db":  { "Host": "<host>", "Port": "5432", "Database": "<db>", "Username": "<user>", "Password": "<pass>" },
   "Llm": { "Url": "https://<llm>/v1/chat/completions", "Model": "<model>", "Token": "<token>" }
 }

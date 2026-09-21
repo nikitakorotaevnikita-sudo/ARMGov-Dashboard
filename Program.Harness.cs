@@ -91,7 +91,6 @@ partial class Program
     static IAnalysisRunner CreateAnalysisRunner(HarnessRunSnapshot snapshot)
     {
         var catalog = AnalyticsCatalog.Load(Path.Combine(AppContext.BaseDirectory, "catalog.json"));
-        var provider = TestModelProviderFactory?.Invoke() ?? CreateModelProvider(snapshot.Llm);
         var employees = TestEmployeeResolverFactory?.Invoke()
             ?? new EmployeeResolver(snapshot.ConnectionString);
         var executor = TestQueryExecutorFactory?.Invoke()
@@ -101,7 +100,31 @@ partial class Program
             employees,
             executor,
             (name, args, ct) => DashboardMetricHarnessAsync(name, args, snapshot, ct));
-        return new AnalysisAgent(provider, dispatcher, TimeProvider.System);
+
+        return snapshot.Engine.Trim().ToLowerInvariant() switch
+        {
+            "workflow" => CreateAnalysisWorkflow(snapshot.Llm, catalog, dispatcher),
+            "legacy" => new AnalysisAgent(
+                TestModelProviderFactory?.Invoke() ?? CreateModelProvider(snapshot.Llm),
+                dispatcher,
+                TimeProvider.System),
+            _ => throw new HarnessException(new HarnessError(
+                "invalid_analytics_engine",
+                "Analytics.Engine должен быть workflow или legacy.",
+                false))
+        };
+    }
+
+    static IAnalysisRunner CreateAnalysisWorkflow(
+        HarnessLlmSnapshot llm,
+        AnalyticsCatalog catalog,
+        ToolDispatcher dispatcher)
+    {
+        var client = new QwenJsonClient(Http, llm.Token, llm.Model, new Uri(llm.Url));
+        var model = new QwenAnalysisStageModel(client);
+        var operations = new AnalysisOperations(dispatcher);
+        var reports = new ReportDraftService(model);
+        return new AnalysisWorkflow(model, operations, reports, catalog, TimeProvider.System);
     }
 
     static IModelProvider CreateModelProvider(HarnessLlmSnapshot llm)
@@ -159,6 +182,7 @@ partial class Program
 
     internal sealed record HarnessRunSnapshot
     {
+        public string Engine { get; init; } = "workflow";
         public string ConnectionString { get; init; } = "";
         public string NoticeNotIn { get; init; } = "";
         public string NoticeList { get; init; } = "";
@@ -166,6 +190,7 @@ partial class Program
 
         public static HarnessRunSnapshot Capture() => new()
         {
+            Engine = Conf.Analytics?.Engine ?? "workflow",
             ConnectionString = Cs,
             NoticeNotIn = Program.NoticeNotIn,
             NoticeList = Program.NoticeList,

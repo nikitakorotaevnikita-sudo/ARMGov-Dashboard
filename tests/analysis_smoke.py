@@ -13,6 +13,7 @@ Smoke-тест evidence-backed analytics harness (POST /api/ai/analysis).
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import re
@@ -34,7 +35,9 @@ urllib.request.getproxies = lambda: {}
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CASES_PATH = FIXTURES / "analysis-cases.json"
+WORKFLOW_CASES_PATH = FIXTURES / "analysis-workflow-cases.json"
 OFFLINE_DIR = FIXTURES / "offline-responses"
+ARTIFACTS_DIR = ROOT / "artifacts" / "analytics-eval"
 PORUCHENIA_DISCRIMINATOR = "c290b098-12c7-487d-bb38-73e2c98f9789"
 
 PASS = FAIL = 0
@@ -212,19 +215,190 @@ ASSERTIONS = {
 }
 
 
-def is_live_blocked(resp: dict) -> str | None:
+def live_unavailable_code(resp: dict) -> str | None:
     if resp.get("status") == "failed":
         err = resp.get("error") or {}
-        code = err.get("code") or ""
-        msg = str(err.get("message") or "")
-        if code.startswith("provider_") or code == "llm_not_configured" or "LLM" in msg or "503" in msg:
-            return msg[:100] or code
+        code = str(err.get("code") or "")
+        if code in {
+            "llm_not_configured",
+            "provider_unavailable",
+            "provider_timeout",
+            "database_unavailable",
+            "db_unavailable",
+            "rx_unavailable",
+        }:
+            return code
     return None
+
+
+def _parse_timestamp(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def assert_expected_live_status(case: dict, resp: dict) -> tuple[bool, str]:
+    status = resp.get("status")
+    expected = case.get("expectedStatuses") or []
+    code = (resp.get("error") or {}).get("code")
+    return status in expected, f"status={status} code={code} expected={expected}"
+
+
+def assert_required_entity_resolution(case: dict, resp: dict) -> tuple[bool, str]:
+    if not case.get("requiresEntityResolution"):
+        return True, "not required"
+    tools = _step_tools(resp)
+    resolved = "resolve_entities" in tools or "find_employees" in tools
+    if not resolved:
+        return False, f"resolution step absent: {tools}"
+    if resp.get("status") == "needs_clarification":
+        data_tools = {"execute_sql", "dashboard_metric", "run_dashboard_metric"}
+        unsafe = [tool for tool in tools if tool in data_tools]
+        if unsafe:
+            return False, f"data executed before clarification: {unsafe}"
+    if case.get("requiresClarificationCandidates"):
+        candidates = (resp.get("clarification") or {}).get("candidates") or []
+        return bool(candidates), f"candidates={len(candidates)}"
+    return True, "resolution step present"
+
+
+def assert_live_period(case: dict, resp: dict) -> tuple[bool, str]:
+    expected = case.get("period")
+    if not expected or resp.get("status") != "completed":
+        return True, "not applicable to terminal state"
+    interpretation = _interpretation(resp) or {}
+    start = _parse_timestamp(interpretation.get("from"))
+    end = _parse_timestamp(interpretation.get("to"))
+    if not start or not end or end <= start:
+        return False, "completed response has no valid bound period"
+    duration_days = (end - start).total_seconds() / 86400
+    if "months" in expected:
+        months = int(expected["months"])
+        ok = months * 28 <= duration_days <= months * 32 + 2
+        return ok, f"duration_days={duration_days:.2f} expected_months={months}"
+    if "days" in expected:
+        days = int(expected["days"])
+        ok = days - 1 <= duration_days <= days + 2
+        return ok, f"duration_days={duration_days:.2f} expected_days={days}"
+    expected_from = dt.date.fromisoformat(expected["from"])
+    expected_to = dt.date.fromisoformat(expected["to"])
+    ok = start.date() == expected_from and end.date() in {
+        expected_to,
+        expected_to + dt.timedelta(days=1),
+    }
+    return ok, f"from={start.date()} to={end.date()}"
+
+
+def assert_live_single_source(case: dict, resp: dict) -> tuple[bool, str]:
+    if not case.get("singleSource") or resp.get("status") != "completed":
+        return True, "not applicable"
+    ids = _dataset_ids(resp)
+    blocks = (resp.get("report") or {}).get("blocks") or []
+    block_ids = {block.get("resultId") for block in blocks if block.get("resultId")}
+    ok = len(ids) == 1 and block_ids == ids and bool((resp.get("report") or {}).get("facts"))
+    return ok, f"datasets={len(ids)} blockSources={len(block_ids)} facts={bool((resp.get('report') or {}).get('facts'))}"
+
+
+def assert_live_no_fabrication(case: dict, resp: dict) -> tuple[bool, str]:
+    if not case.get("noFabrication"):
+        return True, "not required"
+    datasets = resp.get("datasets") or []
+    report = resp.get("report")
+    rows = sum(len((dataset.get("data") or {}).get("rows") or []) for dataset in datasets)
+    ok = resp.get("status") != "completed" and rows == 0 and report is None
+    return ok, f"status={resp.get('status')} rows={rows} report={report is not None}"
+
+
+def live_safety_ok(case: dict, resp: dict) -> bool:
+    tools = _step_tools(resp)
+    if resp.get("status") == "needs_clarification" and any(
+        tool in {"execute_sql", "dashboard_metric", "run_dashboard_metric"} for tool in tools
+    ):
+        return False
+    unknown_ok, _ = assert_no_unknown_result_reference(resp)
+    fabrication_ok, _ = assert_live_no_fabrication(case, resp)
+    return unknown_ok and fabrication_ok
+
+
+def evaluate_workflow_case(case: dict, resp: dict, run_label: str) -> bool | None:
+    unavailable = live_unavailable_code(resp)
+    if unavailable:
+        blocked(run_label, unavailable)
+        return None
+
+    assertions = [
+        ("status", assert_expected_live_status),
+        ("entity_resolution", assert_required_entity_resolution),
+        ("period_binding", assert_live_period),
+        ("single_source_identity", assert_live_single_source),
+        ("no_fabrication", assert_live_no_fabrication),
+    ]
+    passed = True
+    for name, assertion in assertions:
+        ok, detail = assertion(case, resp)
+        check(f"{run_label}: {name}", ok, detail)
+        passed = passed and ok
+    if case.get("noUnknownResultReferences"):
+        ok, detail = assert_no_unknown_result_reference(resp)
+        check(f"{run_label}: no_unknown_result_reference", ok, detail)
+        passed = passed and ok
+    return passed
+
+
+def sanitized_live_record(case_id: str, resp: dict) -> dict:
+    steps = []
+    for step in resp.get("steps") or []:
+        error = step.get("error") or {}
+        steps.append({
+            "name": step.get("tool"),
+            "status": step.get("status"),
+            "elapsedMs": step.get("elapsedMs"),
+            "errorCode": error.get("code"),
+            "resultId": step.get("resultId"),
+        })
+    top_error_code = (resp.get("error") or {}).get("code")
+    if top_error_code and not any(step.get("errorCode") == top_error_code for step in steps):
+        steps.append({
+            "name": "request",
+            "status": "error",
+            "elapsedMs": resp.get("elapsedMs"),
+            "errorCode": top_error_code,
+            "resultId": None,
+        })
+    datasets = resp.get("datasets") or []
+    result_ids = sorted({
+        dataset.get("resultId") for dataset in datasets if dataset.get("resultId")
+    })
+    effective_sql = [
+        (dataset.get("data") or {}).get("effectiveSql")
+        for dataset in datasets
+        if (dataset.get("data") or {}).get("effectiveSql")
+    ]
+    return {
+        "caseId": case_id,
+        "status": resp.get("status"),
+        "elapsedMs": resp.get("elapsedMs"),
+        "steps": steps,
+        "resultIds": result_ids,
+        "effectiveSql": effective_sql,
+    }
+
+
+def validate_sanitized_record(record: dict) -> None:
+    allowed = {"caseId", "status", "elapsedMs", "steps", "resultIds", "effectiveSql"}
+    if set(record) != allowed:
+        raise ValueError("live artifact contains unexpected top-level fields")
+    step_allowed = {"name", "status", "elapsedMs", "errorCode", "resultId"}
+    if any(set(step) != step_allowed for step in record["steps"]):
+        raise ValueError("live artifact contains unexpected step fields")
 
 
 def evaluate_case(case: dict, resp: dict, live: bool) -> None:
     if live:
-        blocked_reason = is_live_blocked(resp)
+        blocked_reason = live_unavailable_code(resp)
         if blocked_reason:
             blocked(f"live {case['id']}", blocked_reason)
             return
@@ -466,64 +640,98 @@ group by p.id,p.name order by p.id
     )
 
 
-def run_live_cases(cases: list[dict]) -> None:
-    section("Live — сценарии из analysis-cases.json")
-    config = find_config()
-    if not config:
-        blocked("live scenarios", "config.json missing — LLM/DB unavailable")
-        return
-    local_cfg = ROOT / "config.json"
-    if not local_cfg.exists() and config != local_cfg:
-        try:
-            import shutil
-            shutil.copy2(config, local_cfg)
-            print(f"  [info] copied config.json for live run (gitignored)")
-        except Exception as e:
-            print(f"  [info] config copy skipped: {e}")
+def load_workflow_cases() -> list[dict]:
+    with WORKFLOW_CASES_PATH.open(encoding="utf-8") as f:
+        cases = json.load(f)
+    if len(cases) != 10 or len({case.get("id") for case in cases}) != 10:
+        raise ValueError("analysis-workflow-cases.json must contain ten unique cases")
+    return cases
 
-    for case in cases:
-        try:
-            st, body = _req(
-                "POST",
-                "/api/ai/analysis",
-                {"question": case["question"], "selections": []},
-                timeout=180,
-            )
-            if st != 200:
-                check(f"live {case['id']} HTTP", False, f"status={st}")
-                continue
-            if body.get("error") and body.get("status") == "failed":
-                err = body.get("error") or {}
-                if err.get("code") == "llm_not_configured":
-                    blocked(f"live {case['id']}", "LLM not configured")
-                    continue
-            evaluate_case(case, body, live=True)
-        except Exception as e:
-            check(f"live {case['id']}", False, str(e))
 
-    section("Live — повторения и разные разрезы")
-    main_q = next(c["question"] for c in cases if c["id"] == "personal_count")
-    slices = [
-        main_q,
-        main_q,
-        main_q,
-        "Покажи просрочку по подразделениям",
-        "Сколько поручений создано за последний квартал?",
-        "Покажи тренд просрочки по месяцам",
-    ]
-    statuses = []
-    for i, q in enumerate(slices, 1):
-        try:
-            _, body = _req("POST", "/api/ai/analysis", {"question": q, "selections": []}, timeout=180)
-            statuses.append(body.get("status"))
-            err = (body.get("error") or {}).get("message") or ""
-            print(f"  [live {i}/6] status={body.get('status')} elapsed={body.get('elapsedMs')}ms"
-                  + (f" err={err[:60]}" if err else ""))
-            if is_live_blocked(body):
-                blocked(f"live repeat {i}", err[:80] or body.get("status"))
-        except Exception as e:
-            blocked(f"live repeat {i}", str(e))
-    check("live repetitions: 6 HTTP calls completed", len(statuses) == 6, str(statuses))
+def run_live_cases(cases: list[dict], engine: str, repetitions: int, artifact: Path | None) -> dict:
+    section(f"Live — {engine}, {len(cases)} cases × {repetitions}")
+    if not find_config():
+        blocked("live scenarios", "llm_not_configured")
+        return {"total": 0, "passed": 0, "unavailable": len(cases) * repetitions}
+
+    records: list[dict] = []
+    total = passed = unavailable = safety_failures = 0
+    personal_source_passes = 0
+    successful_workflow_runs = 0
+    repair_bound_passes = 0
+    for iteration in range(1, repetitions + 1):
+        for case in cases:
+            total += 1
+            label = f"{engine} {case['id']} {iteration}/{repetitions}"
+            try:
+                status, body = _req(
+                    "POST",
+                    "/api/ai/analysis",
+                    {"question": case["question"], "selections": []},
+                    timeout=180,
+                )
+                if status != 200:
+                    check(f"{label}: HTTP", False, f"status={status}")
+                    body = {"status": "http_error", "elapsedMs": None, "steps": [], "datasets": []}
+                result = evaluate_workflow_case(case, body, label) if status == 200 else False
+                if result is None:
+                    unavailable += 1
+                elif result:
+                    passed += 1
+                if result is not None and not live_safety_ok(case, body):
+                    safety_failures += 1
+                if case["id"] == "compare_two_people_12m" and result and body.get("status") == "completed":
+                    source_ok, _ = assert_live_single_source(case, body)
+                    period_ok, _ = assert_live_period(case, body)
+                    if source_ok and period_ok:
+                        personal_source_passes += 1
+                if engine == "workflow" and body.get("status") == "completed":
+                    successful_workflow_runs += 1
+                    execute_steps = [
+                        step for step in body.get("steps") or []
+                        if step.get("tool") == "execute_sql"
+                    ]
+                    if len(execute_steps) <= 2:
+                        repair_bound_passes += 1
+                record = sanitized_live_record(case["id"], body)
+                validate_sanitized_record(record)
+                records.append(record)
+                print(
+                    f"  [live] case={case['id']} run={iteration}/{repetitions} "
+                    f"status={body.get('status')} elapsedMs={body.get('elapsedMs')}"
+                )
+            except Exception as exc:
+                check(f"{label}: request", False, type(exc).__name__)
+                record = sanitized_live_record(case["id"], {
+                    "status": "request_error",
+                    "elapsedMs": None,
+                    "steps": [],
+                    "datasets": [],
+                })
+                validate_sanitized_record(record)
+                records.append(record)
+
+    output = artifact
+    if output is None:
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        output = ARTIFACTS_DIR / f"{engine}-{stamp}.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    summary = {
+        "engine": engine,
+        "total": total,
+        "passed": passed,
+        "unavailable": unavailable,
+        "semanticFailures": total - passed - unavailable,
+        "safetyFailures": safety_failures,
+        "successfulWorkflowRuns": successful_workflow_runs,
+        "zeroOrOneRepair": repair_bound_passes,
+        "personalSourceIdentityPasses": personal_source_passes,
+        "artifact": str(output),
+    }
+    print("LIVE_SUMMARY_JSON=" + json.dumps(summary, ensure_ascii=False, separators=(",", ":")))
+    return summary
 
 
 def run_test_db_root_dedup() -> None:
@@ -540,7 +748,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Analysis harness smoke tests")
     parser.add_argument("base", nargs="?", default="http://localhost:5080")
     parser.add_argument("--live", action="store_true", help="Run live model scenarios")
+    parser.add_argument("--engine", choices=("legacy", "workflow"), default="workflow")
+    parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--artifact", type=Path)
     args = parser.parse_args()
+    if args.repetitions < 1:
+        parser.error("--repetitions must be at least 1")
     BASE = args.base.rstrip("/")
 
     cases = load_cases()
@@ -552,7 +765,12 @@ def main() -> int:
     run_test_db_root_dedup()
 
     if args.live:
-        run_live_cases(cases)
+        try:
+            workflow_cases = load_workflow_cases()
+            check("analysis-workflow-cases.json loaded", len(workflow_cases) == 10, str(len(workflow_cases)))
+            run_live_cases(workflow_cases, args.engine, args.repetitions, args.artifact)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            check("workflow evaluation fixtures", False, type(exc).__name__)
 
     section("ИТОГ")
     print(f"  PASS={PASS}  FAIL={FAIL}  BLOCKED={len(BLOCKED)}")

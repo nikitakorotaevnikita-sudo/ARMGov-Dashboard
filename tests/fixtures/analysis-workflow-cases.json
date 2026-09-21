@@ -1,0 +1,81 @@
+[
+  {
+    "id": "compare_two_people_12m",
+    "question": "Сравни количество поручений у Ивана Иванова и Босова Александра за 12 месяцев",
+    "expectedStatuses": ["completed", "needs_clarification", "no_data"],
+    "requiresEntityResolution": true,
+    "period": {"months": 12},
+    "singleSource": true,
+    "noUnknownResultReferences": true
+  },
+  {
+    "id": "one_person_6m",
+    "question": "Сколько поручений было у Ивана Иванова за последние 6 месяцев",
+    "expectedStatuses": ["completed", "needs_clarification", "no_data"],
+    "requiresEntityResolution": true,
+    "period": {"months": 6},
+    "noUnknownResultReferences": true
+  },
+  {
+    "id": "completed_two_people",
+    "question": "Сравни выполненные задания Ивана Иванова и Босова Александра за год",
+    "expectedStatuses": ["completed", "needs_clarification", "no_data"],
+    "requiresEntityResolution": true,
+    "period": {"months": 12},
+    "singleSource": true,
+    "noUnknownResultReferences": true
+  },
+  {
+    "id": "employee_overdue_3m",
+    "question": "Покажи просроченные задания Ивана Иванова за 3 месяца",
+    "expectedStatuses": ["completed", "needs_clarification", "no_data"],
+    "requiresEntityResolution": true,
+    "period": {"months": 3},
+    "noUnknownResultReferences": true
+  },
+  {
+    "id": "discipline_year",
+    "question": "Покажи исполнительскую дисциплину по месяцам за год",
+    "expectedStatuses": ["completed", "no_data"],
+    "period": {"months": 12},
+    "noUnknownResultReferences": true
+  },
+  {
+    "id": "department_overdue",
+    "question": "Покажи просрочку по подразделениям",
+    "expectedStatuses": ["completed", "no_data"],
+    "noUnknownResultReferences": true
+  },
+  {
+    "id": "ambiguous_name",
+    "question": "Покажи поручения Иванова за год",
+    "expectedStatuses": ["needs_clarification"],
+    "requiresEntityResolution": true,
+    "period": {"months": 12},
+    "requiresClarificationCandidates": true,
+    "noUnknownResultReferences": true
+  },
+  {
+    "id": "unknown_employee",
+    "question": "Покажи поручения Несуществующего Сотрудника за год",
+    "expectedStatuses": ["needs_clarification"],
+    "requiresEntityResolution": true,
+    "period": {"months": 12},
+    "noUnknownResultReferences": true
+  },
+  {
+    "id": "empty_range",
+    "question": "Покажи поручения за период с 1 января 1990 по 1 февраля 1990",
+    "expectedStatuses": ["no_data"],
+    "period": {"from": "1990-01-01", "to": "1990-02-01"},
+    "noFabrication": true,
+    "noUnknownResultReferences": true
+  },
+  {
+    "id": "generic_top_performers",
+    "question": "Кто получил больше всего заданий за последние 30 дней",
+    "expectedStatuses": ["completed", "no_data"],
+    "period": {"days": 30},
+    "noUnknownResultReferences": true
+  }
+]

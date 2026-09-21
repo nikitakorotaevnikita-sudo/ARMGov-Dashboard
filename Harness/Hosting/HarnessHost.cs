@@ -57,6 +57,16 @@ public static class HarnessHost
         set => Program.Conf.AnalyticsEnabled = value;
     }
 
+    public static string AnalyticsEngine
+    {
+        get => Program.Conf.Analytics?.Engine ?? "workflow";
+        set
+        {
+            Program.Conf.Analytics ??= new Program.AnalyticsCfg();
+            Program.Conf.Analytics.Engine = value;
+        }
+    }
+
     public static IReadOnlyCollection<string> StaticAllowlist => Program.StaticFileAllowlist;
 
     public static string CaptureLlmModel() => Program.HarnessRunSnapshot.Capture().Llm.Model;

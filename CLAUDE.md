@@ -45,7 +45,7 @@ dotnet build -c Release && bin\Release\net10.0\armgov-standalone.exe
 - **Стенд живой, но метрики отравлены брошенными записями.** 81 тыс. задач, последняя создана 06.08.2026 (2023 — 1571, 2024 — 1580, 2025 — 63853, 2026 — 14054). Проверено 10.08.2026.
   Активные просроченные задания по годам: 2023 — 392 (в среднем 1067 дней просрочки), 2024 — 722 (837 дней), 2025 — 537 (370 дней), 2026 — 952 (94 дня). То есть **43% «просрочки» — записи 2023–2024, которые никогда не закроют.**
   Отсюда и просрочки в 1100+ дней, и здоровье «Поручений» 5/100. Это **дефект метрик, а не возраст стенда**: живые проблемы смешаны с мёртвыми записями, и картина выглядит катастрофой независимо от реального состояния. Не говорить заказчику «у нас старый стенд» — это неверно; говорить про отсечку брошенных записей. Усиливает эпик 1 и эпик 7 роадмапа. Для демо ограничивать период.
-- LLM: по умолчанию Ario `Qwen/Qwen3.8-27B`; в бэк-офисе можно переключить на `GigaChat-2`. Ключи — в `config.json` (пресеты `qwen` / `gigachat`). Вызовы только серверные.
+- LLM: целевой `Analytics.Engine=workflow` использует Ario `Qwen/Qwen3.8-27B`. `Analytics.Engine=legacy` оставляет прежний `AnalysisAgent` и provider presets (`qwen` / `gigachat`) только как rollback compatibility. Неизвестный engine обязан вернуть `invalid_analytics_engine`; имя модели не выбирает runner. Ключи — только в `config.json`. Вызовы только серверные.
 - RX для ссылок в карточки: `172.16.96.98`.
 
 ---
@@ -58,11 +58,21 @@ python tests/analysis_smoke.py http://localhost:5080
 node tests/charts.test.js
 node tests/analysis.test.js
 dotnet run --project tools/harness-tests -c Release -- all
+dotnet restore --locked-mode
+dotnet publish -c Release -r win-x64 --self-contained true --no-restore -o .\artifacts\workflow-publish
 ```
 
 `smoke.py` — регрессия дашборда и legacy SQL-харнесса (scope policy намеренно отклоняет `pg_settings`/`information_schema` вне каталога). `analysis_smoke.py` — wire + semantic cases для `POST /api/ai/analysis` (offline без `--live`; live отдельно). Контракт: [docs/technical/analytics-harness-v2.md](docs/technical/analytics-harness-v2.md).
 
 `charts.test.js` / `analysis.test.js` — чистые функции визуализации и рендера verified report.
+
+Live gate выполняется отдельно после явного переключения `Analytics.Engine` и перезапуска
+Release-сервера: для `legacy`, затем для `workflow` запустить
+`python tests/analysis_smoke.py http://localhost:5080 --live --engine <engine> --repetitions 3`.
+Каждый прогон обязан выполнить все 10 кейсов трижды. Артефакты в `artifacts/analytics-eval/`
+содержат только case/status/timing, безопасные поля шагов, `resultId` и effective SQL; строки,
+headers, provider payload и секреты туда не пишутся. Exit `1` — semantic failure, exit `2` —
+только provider/RX unavailable.
 
 **После правки `charts.js` в выходной папке (`bin\Release\net10.0\charts.js`) проверяй не только новый экран «Аналитика по запросу», а хотя бы один из пяти старых** — `esc()` теперь живёт там же и нужна `renderNav` при самом первом рендере страницы, так что устаревший файл ломает весь SPA, а не только новый вид.
 
@@ -102,8 +112,8 @@ Ad-hoc SQL к стенду: `dotnet run --project tools/dbq -- "<SQL>"` (бер�
   выставят в локальную сеть для показа коллегам, у удалённых зрителей тумблер не даст ответа —
   это осознанное безопасное поведение, а не баг, чинить не нужно.
 - **По той же причине страница «📈 Аналитика по запросу» недоступна при сетевом показе.** Она
-  всегда обращается к `/api/ai/sql` (тот же агентский цикл, что и «Глубокий анализ» в чате, только
-  ответ рисуется графиком), а не к отдельному публичному эндпоинту — значит, тот же
+  обращается к `/api/ai/analysis` (управляемый workflow с verified report), а не к публичному
+  эндпоинту — значит, тот же
   `IsLocalCall`-периметр закрывает и её у удалённых зрителей. Отдельного тумблера тут нет: страница
   либо работает целиком, либо у неё нет доступных данных вовсе.
 

@@ -123,6 +123,11 @@ public static class StageModelTests
         Check.Equal(1600, client.MaxTokens);
         Check.True(client.SystemPrompt.Contains("{{factId}}", StringComparison.Ordinal));
         Check.True(client.SystemPrompt.Contains("literal numbers", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("\"kind\":\"table\"|\"bars\"|\"line\"|\"shares\"|\"kpi\"", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("\"operation\":\"cell\"|\"sum\"|\"difference\"|\"ratio\"", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains(
+            "{\"report\":{\"title\":\"Исполнительская дисциплина\",\"interpretation\":{\"metricId\":\"execution_discipline\",\"label\":\"Дисциплина\",\"unit\":\"процент\",\"from\":null,\"to\":null,\"dateField\":null},\"blocks\":[{\"kind\":\"line\",\"resultId\":\"r1\",\"columns\":[\"month\",\"value\"],\"equalsFilter\":null,\"limit\":null}],\"facts\":[{\"id\":\"total\",\"operation\":\"cell\",\"inputs\":[{\"resultId\":\"r1\",\"row\":0,\"column\":\"value\"}]}],\"textTemplates\":[\"Итог {{total}}\"],\"commentary\":null}}",
+            StringComparison.Ordinal));
         var json = JsonSerializer.Serialize(client.Input, HarnessJson.Options);
         Check.True(json.Contains("r7", StringComparison.Ordinal));
         Check.True(json.Contains("employee", StringComparison.Ordinal));
@@ -146,6 +151,9 @@ public static class StageModelTests
         await model.RepairReportAsync(input, CancellationToken.None);
 
         Check.Equal(1600, client.MaxTokens);
+        Check.True(client.SystemPrompt.Contains(
+            "{\"report\":{\"title\":\"Исполнительская дисциплина\",\"interpretation\":{\"metricId\":\"execution_discipline\",\"label\":\"Дисциплина\",\"unit\":\"процент\",\"from\":null,\"to\":null,\"dateField\":null},\"blocks\":[{\"kind\":\"line\",\"resultId\":\"r1\",\"columns\":[\"month\",\"value\"],\"equalsFilter\":null,\"limit\":null}],\"facts\":[{\"id\":\"total\",\"operation\":\"cell\",\"inputs\":[{\"resultId\":\"r1\",\"row\":0,\"column\":\"value\"}]}],\"textTemplates\":[\"Итог {{total}}\"],\"commentary\":null}}",
+            StringComparison.Ordinal));
         var json = JsonSerializer.Serialize(client.Input, HarnessJson.Options);
         Check.True(json.Contains("Bad 99", StringComparison.Ordinal));
         Check.True(json.Contains("unverified_numeric_text", StringComparison.Ordinal));

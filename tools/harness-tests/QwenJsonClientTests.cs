@@ -169,6 +169,35 @@ public static class QwenJsonClientTests
         Check.Equal("provider_protocol_error", error.Error.Code);
     }
 
+    public static async Task RejectsCapturedMalformedReportJson()
+    {
+        const string captured = """
+            {"report":{"title":"Discipline","interpretation":"monthly executive discipline","blocks":[{"type":"line","resultId":"r1","columns":["c1","c2","c3","c4","c5","c6","c7","c8","c9"]}],"facts":[{"id":"f1","label":"total","value":1,"unit":"percent","source":{"resultId":"r1","column":"c1"}},{"id":"f2","label":"avg","value":1,"unit":"percent","source":{"resultId":"r1","column":"c2"}},{"id":"f3","label":"max","value":1,"unit":"percent","source":{"resultId":"r1","column":"c3"}},{"id":"f4","label":"min","value":1,"unit":"percent","source":{"resultId":"r1","column":"c4"}},{"id":"f5","label":"count","value":1,"unit":"percent","source":{"resultId":"r1","column":"c5"}}],"textTemplates":["t1","t2","t3","t4"],"commentary":"note"}}
+            """;
+
+        var error = await ThrowsHarness(() => Client(RespondingWith(captured))
+            .CompleteAsync<ReportDraft>("system", new { question = "q" }, 1600, CancellationToken.None));
+
+        Check.Equal("provider_protocol_error", error.Error.Code);
+    }
+
+    public static async Task DeserializesPinnedReportDraftExample()
+    {
+        const string example = """
+            {"report":{"title":"Исполнительская дисциплина","interpretation":{"metricId":"execution_discipline","label":"Дисциплина","unit":"процент","from":null,"to":null,"dateField":null},"blocks":[{"kind":"line","resultId":"r1","columns":["month","value"],"equalsFilter":null,"limit":null}],"facts":[{"id":"total","operation":"cell","inputs":[{"resultId":"r1","row":0,"column":"value"}]}],"textTemplates":["Итог {{total}}"],"commentary":null}}
+            """;
+
+        var draft = await Client(RespondingWith(example))
+            .CompleteAsync<ReportDraft>("system", new { question = "q" }, 1600, CancellationToken.None);
+
+        Check.Equal("r1", draft.Report.Blocks[0].ResultId);
+        Check.Equal("line", draft.Report.Blocks[0].Kind);
+        Check.Equal("total", draft.Report.Facts[0].Id);
+        Check.Equal("cell", draft.Report.Facts[0].Operation);
+        Check.Equal(0, draft.Report.Facts[0].Inputs[0].Row);
+        Check.Equal("value", draft.Report.Facts[0].Inputs[0].Column);
+    }
+
     private static QwenJsonClient Client(CaptureHandler handler) =>
         new(new HttpClient(handler), "test-token", "Qwen/Qwen3.8-27B",
             new Uri("https://example.test/v1/chat/completions"));

@@ -12,7 +12,7 @@ public static class SqlScopePolicy
     {
         "count", "sum", "avg", "min", "max", "coalesce", "nullif", "date_trunc",
         "extract", "round", "percentile_cont", "row_number", "rank", "dense_rank",
-        "lag", "lead", "lower", "upper", "trim", "length"
+        "lag", "lead", "lower", "upper", "trim", "length", "now"
     };
     private static readonly HashSet<string> FunctionLikeKeywords = new(StringComparer.OrdinalIgnoreCase)
     {

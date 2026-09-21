@@ -59,6 +59,9 @@ public static class StageModelTests
         Check.True(client.SystemPrompt.Contains("@from", StringComparison.Ordinal));
         Check.True(client.SystemPrompt.Contains("@to", StringComparison.Ordinal));
         Check.True(client.SystemPrompt.Contains("@selected_employee_N", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("now()", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("current_timestamp()", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("clock_timestamp()", StringComparison.Ordinal));
         var json = JsonSerializer.Serialize(client.Input, HarnessJson.Options);
         Check.True(json.Contains("public.sungero_wf_task", StringComparison.Ordinal));
         Check.True(!json.Contains("private.payroll", StringComparison.Ordinal));
@@ -106,6 +109,8 @@ public static class StageModelTests
         await model.RepairSqlAsync(input, CancellationToken.None);
 
         Check.Equal(1400, client.MaxTokens);
+        Check.True(client.SystemPrompt.Contains("now()", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains("current_timestamp()", StringComparison.Ordinal));
         var json = JsonSerializer.Serialize(client.Input, HarnessJson.Options);
         Check.True(json.Contains("select bad", StringComparison.Ordinal));
         Check.True(json.Contains("missing_period_binding", StringComparison.Ordinal));

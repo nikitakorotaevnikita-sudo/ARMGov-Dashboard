@@ -104,6 +104,45 @@ public static class SqlTests
             "select * from public.generate_series(1, 2)", allowed).Ok);
     }
 
+    // Captured live department_overdue draft; now() is required for overdue as-of when period is all.
+    public static void ScopeAllowsCapturedNowOverdueSelect()
+    {
+        var sql =
+            "SELECT\n" +
+            "  a.performer AS employee_id,\n" +
+            "  COUNT(a.id) AS overdue_count\n" +
+            "FROM public.sungero_wf_assignment a\n" +
+            "WHERE a.status = 'InProcess'\n" +
+            "  AND a.deadline IS NOT NULL\n" +
+            "  AND a.deadline < NOW()\n" +
+            "GROUP BY a.performer\n" +
+            "ORDER BY overdue_count DESC";
+        var result = SqlScopePolicy.Check(sql, Allowed());
+        if (!result.Ok)
+            throw new InvalidOperationException(
+                $"{result.Errors[0].Code}: {result.Errors[0].Message}");
+        Check.True(result.Ok);
+    }
+
+    public static void ScopeStillRejectsOtherClockAndUnsafeFunctions()
+    {
+        var allowed = Allowed();
+        var currentTimestamp = SqlScopePolicy.Check(
+            "select current_timestamp() from public.sungero_wf_task", allowed);
+        Check.True(!currentTimestamp.Ok);
+        Check.Equal("unsupported_sql", currentTimestamp.Errors[0].Code);
+        Check.True(!SqlScopePolicy.Check(
+            "select clock_timestamp() from public.sungero_wf_task", allowed).Ok);
+        Check.True(!SqlScopePolicy.Check(
+            "select pg_sleep(1) from public.sungero_wf_task", allowed).Ok);
+        Check.True(!SqlScopePolicy.Check(
+            "select 1; delete from public.sungero_wf_task", allowed).Ok);
+        Check.True(!SqlScopePolicy.Check(
+            "drop table public.sungero_wf_task", allowed).Ok);
+        Check.True(!SqlScopePolicy.Check(
+            "select * from public.generate_series(1, 2)", allowed).Ok);
+    }
+
     public static void ScopeChecksCtesNestedQueriesAndUnionBranches()
     {
         var allowed = Allowed();

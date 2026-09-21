@@ -4,6 +4,7 @@
     "question": "Сравни количество поручений у Ивана Иванова и Босова Александра за 12 месяцев",
     "expectedStatuses": ["completed", "needs_clarification", "no_data"],
     "requiresEntityResolution": true,
+    "expectedEmployeeNames": ["Иванов Иван", "Босов Александр"],
     "period": {"months": 12},
     "singleSource": true,
     "noUnknownResultReferences": true
@@ -13,6 +14,7 @@
     "question": "Сколько поручений было у Ивана Иванова за последние 6 месяцев",
     "expectedStatuses": ["completed", "needs_clarification", "no_data"],
     "requiresEntityResolution": true,
+    "expectedEmployeeNames": ["Иванов Иван"],
     "period": {"months": 6},
     "noUnknownResultReferences": true
   },
@@ -21,6 +23,7 @@
     "question": "Сравни выполненные задания Ивана Иванова и Босова Александра за год",
     "expectedStatuses": ["completed", "needs_clarification", "no_data"],
     "requiresEntityResolution": true,
+    "expectedEmployeeNames": ["Иванов Иван", "Босов Александр"],
     "period": {"months": 12},
     "singleSource": true,
     "noUnknownResultReferences": true
@@ -30,6 +33,7 @@
     "question": "Покажи просроченные задания Ивана Иванова за 3 месяца",
     "expectedStatuses": ["completed", "needs_clarification", "no_data"],
     "requiresEntityResolution": true,
+    "expectedEmployeeNames": ["Иванов Иван"],
     "period": {"months": 3},
     "noUnknownResultReferences": true
   },

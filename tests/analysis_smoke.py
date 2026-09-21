@@ -24,6 +24,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from analysis_eval_followup import follow_up_request
+
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -673,7 +675,32 @@ def run_live_cases(cases: list[dict], engine: str, repetitions: int, artifact: P
                 if status != 200:
                     check(f"{label}: HTTP", False, f"status={status}")
                     body = {"status": "http_error", "elapsedMs": None, "steps": [], "datasets": []}
-                result = evaluate_workflow_case(case, body, label) if status == 200 else False
+                    result = False
+                else:
+                    follow_body, follow_error = follow_up_request(case, body)
+                    if follow_error:
+                        check(f"{label}: verified_selections", False, follow_error)
+                        result = False
+                    elif follow_body:
+                        status, body = _req(
+                            "POST",
+                            "/api/ai/analysis",
+                            follow_body,
+                            timeout=180,
+                        )
+                        if status != 200:
+                            check(f"{label}: follow-up HTTP", False, f"status={status}")
+                            body = {
+                                "status": "http_error",
+                                "elapsedMs": None,
+                                "steps": [],
+                                "datasets": [],
+                            }
+                            result = False
+                        else:
+                            result = evaluate_workflow_case(case, body, label)
+                    else:
+                        result = evaluate_workflow_case(case, body, label)
                 if result is None:
                     unavailable += 1
                 elif result:

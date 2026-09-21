@@ -332,6 +332,9 @@
   color: var(--text);
   line-height: 1.35;
 }
+.armr-t.rx-arm-over {
+  color: var(--red);
+}
 .armr-n {
   display: block;
   font-size: 12px;
@@ -382,8 +385,6 @@
 }
 .armtl th {
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
   color: var(--hint);
   font-weight: 700;
   text-align: right;

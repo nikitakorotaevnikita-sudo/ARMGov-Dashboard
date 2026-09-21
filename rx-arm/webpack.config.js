@@ -108,7 +108,7 @@ module.exports = (env, argv) => {
         {
           test: /\.css$/,
           exclude: /\.module\.css$/,
-          use: [cssLoader, 'css-loader'],
+          use: [cssLoader, 'css-loader', path.resolve(__dirname, 'tools/font-inject-loader.js')],
         },
         {
           test: /\.(png|jpg|jpeg|gif)$/,

@@ -434,6 +434,9 @@ body {
   color: var(--text);
   line-height: 1.35;
 }
+.armr-t.rx-arm-over {
+  color: var(--red);
+}
 .armr-n {
   display: block;
   font-size: 12px;
@@ -485,8 +488,6 @@ body {
 }
 .armtl th {
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
   color: var(--hint);
   font-weight: 700;
   text-align: right;
@@ -754,18 +755,6 @@ body {
 .rx-arm-root[data-theme='Night'] .arme-tag.rx-arm-bad {
   background: #4a2a2a;
   color: #ff8a8a;
-}
-
-.rx-arm-footer-link button {
-  background: none;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  color: var(--link);
-  cursor: pointer;
-}
-.rx-arm-footer-link button:hover {
-  text-decoration: underline;
 }
 
 @media (max-width: 1100px) {

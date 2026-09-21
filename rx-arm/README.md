@@ -80,9 +80,10 @@ eslint `check-file`).
 Глифы шапок виджетов — цветные SVG из UI kit Directum RX (набор «Обложка»),
 `src/shared/rx-icons/`, в бандл как data-URI. Системные
 `settings, search, x, check, arrow-narrow-right` — сабсет Tabler Icons 3.11.0 (MIT) в
-`shared/styles/tabler-icons.css`. Новый глиф Tabler = пересобрать сабсет и дописать
-`.rx-arm-ti-<name>:before`. Новый глиф RX = экспорт из Figma «Обложка» →
-`tools/extract_picked_icons.py` → `src/shared/rx-icons/`.
+`shared/styles/tabler-icons.css` (плейсхолдер `@@FONT@@` подставляет
+`tools/font-inject-loader.js` из `tools/assets/tabler_sub2.b64`). Новый глиф Tabler =
+пересобрать сабсет и дописать `.rx-arm-ti-<name>:before`. Новый глиф RX = экспорт из
+Figma «Обложка» → `tools/extract_picked_icons.py` → `src/shared/rx-icons/`.
 
 Классы UI через CSS Modules (`cx('arme-c')`); корень `.rx-arm-root` держит токены темы
 (`data-theme` / `--theme_*`).

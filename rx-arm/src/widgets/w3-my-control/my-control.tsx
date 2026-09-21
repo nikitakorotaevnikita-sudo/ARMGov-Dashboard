@@ -35,7 +35,7 @@ export const MyControl: React.FC<MyControlProps> = ({ data }) => {
       {shown.map(o => (
         <div key={o.id} className={cx('armr')}>
           <span className={cx('armr-m')}>
-            <span className={cx('armr-t')}>{o.title}</span>
+            <span className={cx('armr-t', o.status === 'overdue' && 'rx-arm-over')}>{o.title}</span>
             <span className={cx('armr-n')}>{o.note}</span>
           </span>
           <span className={cx(...dueTone(o.status).split(/\s+/))}>{o.due}</span>
@@ -49,7 +49,9 @@ export const MyControl: React.FC<MyControlProps> = ({ data }) => {
       {rest > 0 ? (
         <div className={cx('rx-arm-footer-link')}>
           <Ti name='arrow-narrow-right' />
-          <button type='button'>Показать все — ещё {rest}</button>
+          <a href='#' onClick={e => e.preventDefault()}>
+            Показать все — ещё {rest}
+          </a>
         </div>
       ) : null}
     </Card>

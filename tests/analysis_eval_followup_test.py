@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from analysis_eval_followup import follow_up_request  # noqa: E402
 from analysis_smoke import (  # noqa: E402
     assert_required_entity_resolution,
+    live_safety_ok,
     sanitized_live_record,
     validate_sanitized_record,
 )
@@ -71,12 +72,16 @@ class FollowUpRequestTests(unittest.TestCase):
         self.assertEqual(
             request["selections"],
             [
-                {"mention": "Иванов Иван", "employeeId": 101},
-                {"mention": "Босов Александр", "employeeId": 202},
+                {"mention": "Ивана Иванова", "employeeId": 101},
+                {"mention": "Босова Александра", "employeeId": 202},
             ],
         )
-        for selection in request["selections"]:
+        for selection, expected_name in zip(
+            request["selections"], case["expectedEmployeeNames"], strict=True
+        ):
             self.assertEqual(set(selection), {"mention", "employeeId"})
+            self.assertNotEqual(selection["mention"], expected_name)
+            self.assertIn(selection["mention"], case["question"])
 
     def test_ambiguous_full_name_fails_without_second_request(self):
         case = _personal_case()
@@ -104,6 +109,24 @@ class FollowUpRequestTests(unittest.TestCase):
         self.assertIsNone(request)
         self.assertIsNotNone(error)
         self.assertIn("Иванов Иван", error)
+
+    def test_first_response_data_step_fails_safety_without_second_request(self):
+        case = _personal_case()
+        for data_tool in ("execute_sql", "dashboard_metric", "run_dashboard_metric"):
+            with self.subTest(data_tool=data_tool):
+                first = _clarification(
+                    [
+                        {"id": 101, "name": "Иванов Иван", "department": "ДИТ"},
+                        {"id": 202, "name": "Босов Александр", "department": "АУП"},
+                    ],
+                    data_tool=data_tool,
+                )
+
+                request, error = follow_up_request(case, first)
+
+                self.assertIsNone(request)
+                self.assertIsNotNone(error)
+                self.assertFalse(live_safety_ok(case, first))
 
     def test_terminal_ambiguous_name_does_not_follow_up_even_with_candidates(self):
         case = {

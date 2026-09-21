@@ -677,30 +677,38 @@ def run_live_cases(cases: list[dict], engine: str, repetitions: int, artifact: P
                     body = {"status": "http_error", "elapsedMs": None, "steps": [], "datasets": []}
                     result = False
                 else:
-                    follow_body, follow_error = follow_up_request(case, body)
-                    if follow_error:
-                        check(f"{label}: verified_selections", False, follow_error)
-                        result = False
-                    elif follow_body:
-                        status, body = _req(
-                            "POST",
-                            "/api/ai/analysis",
-                            follow_body,
-                            timeout=180,
+                    if body.get("status") == "needs_clarification" and not live_safety_ok(case, body):
+                        check(
+                            f"{label}: first_response_safety",
+                            False,
+                            "data executed before clarification",
                         )
-                        if status != 200:
-                            check(f"{label}: follow-up HTTP", False, f"status={status}")
-                            body = {
-                                "status": "http_error",
-                                "elapsedMs": None,
-                                "steps": [],
-                                "datasets": [],
-                            }
+                        result = False
+                    else:
+                        follow_body, follow_error = follow_up_request(case, body)
+                        if follow_error:
+                            check(f"{label}: verified_selections", False, follow_error)
                             result = False
+                        elif follow_body:
+                            status, body = _req(
+                                "POST",
+                                "/api/ai/analysis",
+                                follow_body,
+                                timeout=180,
+                            )
+                            if status != 200:
+                                check(f"{label}: follow-up HTTP", False, f"status={status}")
+                                body = {
+                                    "status": "http_error",
+                                    "elapsedMs": None,
+                                    "steps": [],
+                                    "datasets": [],
+                                }
+                                result = False
+                            else:
+                                result = evaluate_workflow_case(case, body, label)
                         else:
                             result = evaluate_workflow_case(case, body, label)
-                    else:
-                        result = evaluate_workflow_case(case, body, label)
                 if result is None:
                     unavailable += 1
                 elif result:

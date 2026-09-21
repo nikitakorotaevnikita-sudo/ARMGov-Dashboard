@@ -8,8 +8,15 @@ public static class WorkflowContractTests
 {
     private static readonly DateTimeOffset AsOf =
         DateTimeOffset.Parse("2026-09-20T12:00:00+04:00");
-    private static readonly IReadOnlySet<string> DashboardMetrics =
-        new HashSet<string>(StringComparer.Ordinal) { "execution_discipline" };
+    private static readonly MetricSummary[] Metrics =
+    [
+        new("generic_query", "Query", null),
+        new("execution_discipline", "Discipline", "execution_discipline")
+    ];
+    private static readonly PlanningRelationSummary[] Relations =
+    [
+        new("public.sungero_wf_task", "Tasks", "Task cards")
+    ];
 
     public static void DashboardRouteRequiresKnownDashboardMetric()
     {
@@ -21,7 +28,7 @@ public static class WorkflowContractTests
             [],
             []);
 
-        var validation = WorkflowContractValidator.ValidatePlan(plan, AsOf, DashboardMetrics);
+        var validation = Validate(plan);
 
         Check.True(!validation.Ok);
         Check.Equal("invalid_dashboard_route", validation.Errors[0].Code);
@@ -37,22 +44,64 @@ public static class WorkflowContractTests
             [],
             ["public.sungero_wf_task"]);
 
-        Check.True(!WorkflowContractValidator.ValidatePlan(plan, AsOf, DashboardMetrics).Ok);
+        Check.True(!Validate(plan).Ok);
     }
 
     public static void EmptyMetricIsRejected()
     {
-        var validation = WorkflowContractValidator.ValidatePlan(
-            Plan(metricId: " "), AsOf, DashboardMetrics);
+        var validation = Validate(Plan(metricId: " "));
 
         Check.True(!validation.Ok);
         Check.Equal("invalid_metric_id", validation.Errors[0].Code);
     }
 
+    public static void MetricIdOutsideServerSummariesIsRejected()
+    {
+        var validation = Validate(Plan(metricId: "invented_metric"));
+
+        Check.True(!validation.Ok);
+        Check.Equal("invalid_metric_id", validation.Errors[0].Code);
+    }
+
+    public static void GenericQueryOutsideServerSummariesIsRejected()
+    {
+        var validation = Validate(
+            Plan(metricId: "generic_query"),
+            [new MetricSummary("execution_discipline", "Discipline", "execution_discipline")]);
+
+        Check.True(!validation.Ok);
+        Check.Equal("invalid_metric_id", validation.Errors[0].Code);
+    }
+
+    public static void RelationHintOutsideServerSummariesIsRejected()
+    {
+        var validation = Validate(Plan(relationHints: ["public.not_in_catalog"]));
+
+        Check.True(!validation.Ok);
+        Check.Equal("invalid_relation_hint", validation.Errors[0].Code);
+    }
+
+    public static void EmptyRelationHintsRemainAllowed()
+    {
+        Check.True(Validate(Plan(relationHints: [])).Ok);
+    }
+
+    public static void DashboardRouteAcceptsCatalogMappedExecutionDiscipline()
+    {
+        var plan = new AnalysisPlan(
+            "execution_discipline",
+            new PeriodSpec("months", 12, null, null),
+            AnalysisDataRoute.DashboardMetric,
+            "execution_discipline",
+            [],
+            []);
+
+        Check.True(Validate(plan).Ok);
+    }
+
     public static void ZeroMonthsReturnsValidationError()
     {
-        var validation = WorkflowContractValidator.ValidatePlan(
-            Plan(period: new PeriodSpec("months", 0, null, null)), AsOf, DashboardMetrics);
+        var validation = Validate(Plan(period: new PeriodSpec("months", 0, null, null)));
 
         Check.True(!validation.Ok);
         Check.Equal("invalid_period", validation.Errors[0].Code);
@@ -60,10 +109,8 @@ public static class WorkflowContractTests
 
     public static void ReversedRangeReturnsValidationError()
     {
-        var validation = WorkflowContractValidator.ValidatePlan(
-            Plan(period: new PeriodSpec("range", null, AsOf, AsOf.AddDays(-1))),
-            AsOf,
-            DashboardMetrics);
+        var validation = Validate(
+            Plan(period: new PeriodSpec("range", null, AsOf, AsOf.AddDays(-1))));
 
         Check.True(!validation.Ok);
         Check.Equal("invalid_period", validation.Errors[0].Code);
@@ -71,10 +118,8 @@ public static class WorkflowContractTests
 
     public static void MoreThanTenEmployeeMentionsAreRejected()
     {
-        var validation = WorkflowContractValidator.ValidatePlan(
-            Plan(employeeMentions: Enumerable.Range(1, 11).Select(id => $"Employee {id}").ToArray()),
-            AsOf,
-            DashboardMetrics);
+        var validation = Validate(
+            Plan(employeeMentions: Enumerable.Range(1, 11).Select(id => $"Employee {id}").ToArray()));
 
         Check.True(!validation.Ok);
         Check.Equal("too_many_employee_mentions", validation.Errors[0].Code);
@@ -82,10 +127,8 @@ public static class WorkflowContractTests
 
     public static void MoreThanTwelveRelationHintsAreRejected()
     {
-        var validation = WorkflowContractValidator.ValidatePlan(
-            Plan(relationHints: Enumerable.Range(1, 13).Select(id => $"public.table_{id}").ToArray()),
-            AsOf,
-            DashboardMetrics);
+        var validation = Validate(
+            Plan(relationHints: Enumerable.Range(1, 13).Select(id => $"public.table_{id}").ToArray()));
 
         Check.True(!validation.Ok);
         Check.Equal("too_many_relation_hints", validation.Errors[0].Code);
@@ -93,8 +136,7 @@ public static class WorkflowContractTests
 
     public static void RelationHintMustUseSchemaTableSyntax()
     {
-        var validation = WorkflowContractValidator.ValidatePlan(
-            Plan(relationHints: ["sungero_wf_task"]), AsOf, DashboardMetrics);
+        var validation = Validate(Plan(relationHints: ["sungero_wf_task"]));
 
         Check.True(!validation.Ok);
         Check.Equal("invalid_relation_hint", validation.Errors[0].Code);
@@ -230,6 +272,16 @@ public static class WorkflowContractTests
         Check.Equal("r1", draft.Report.Facts[0].Inputs[0].ResultId);
         Check.Equal("{{total}}", draft.Report.TextTemplates[0]);
     }
+
+    private static ValidationResult Validate(
+        AnalysisPlan plan,
+        MetricSummary[]? metrics = null,
+        PlanningRelationSummary[]? relations = null) =>
+        WorkflowContractValidator.ValidatePlan(
+            plan,
+            AsOf,
+            metrics ?? Metrics,
+            relations ?? Relations);
 
     private static AnalysisPlan Plan(
         string metricId = "generic_query",

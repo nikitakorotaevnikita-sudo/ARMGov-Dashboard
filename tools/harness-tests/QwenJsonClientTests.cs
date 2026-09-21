@@ -157,6 +157,18 @@ public static class QwenJsonClientTests
         Check.Equal("provider_protocol_error", error.Error.Code);
     }
 
+    public static async Task RejectsCapturedMalformedPlanningJson()
+    {
+        const string captured = """
+            {"metricId":"generic_query","period":"12m","route":"generic_query","dashboardMetric":null,"employeeMentions":[],"relationHints":["compare","count","assignments"]}
+            """;
+
+        var error = await ThrowsHarness(() => Client(RespondingWith(captured))
+            .CompleteAsync<AnalysisPlan>("system", new { question = "q" }, 800, CancellationToken.None));
+
+        Check.Equal("provider_protocol_error", error.Error.Code);
+    }
+
     private static QwenJsonClient Client(CaptureHandler handler) =>
         new(new HttpClient(handler), "test-token", "Qwen/Qwen3.8-27B",
             new Uri("https://example.test/v1/chat/completions"));

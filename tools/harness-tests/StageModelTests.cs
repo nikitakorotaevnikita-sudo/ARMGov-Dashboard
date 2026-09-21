@@ -20,7 +20,8 @@ public static class StageModelTests
             "Покажи дисциплину исполнения",
             asOf,
             [new EntitySelection("Иванов", 42)],
-            [new MetricSummary("execution_discipline", "Дисциплина", "execution_discipline")],
+            [new MetricSummary("execution_discipline", "Дисциплина", "execution_discipline"),
+             new MetricSummary("generic_query", "Произвольный SELECT-анализ", null)],
             [new PlanningRelationSummary("public.sungero_wf_task", "Поручения", "Карточки поручений")]),
             CancellationToken.None);
 
@@ -166,10 +167,42 @@ public static class StageModelTests
             "Question",
             DateTimeOffset.Parse("2026-09-20T12:00:00+04:00"),
             [],
-            [],
+            [new MetricSummary("generic_query", "Query", null)],
             []), CancellationToken.None));
 
         Check.Equal("invalid_period", error.Error.Code);
+    }
+
+    public static async Task UnknownMetricIdIsRejectedImmediately()
+    {
+        var client = new RecordingQwenJsonClient(new AnalysisPlan(
+            "invented_metric",
+            new PeriodSpec("months", 12, null, null),
+            AnalysisDataRoute.GeneratedSql,
+            null,
+            [],
+            ["public.sungero_wf_task"]));
+        var model = new QwenAnalysisStageModel(client);
+
+        var error = await ThrowsHarness(() => model.PlanAsync(PlanningInputWithAllowlists(), CancellationToken.None));
+
+        Check.Equal("invalid_metric_id", error.Error.Code);
+    }
+
+    public static async Task UnknownRelationHintIsRejectedImmediately()
+    {
+        var client = new RecordingQwenJsonClient(new AnalysisPlan(
+            "generic_query",
+            new PeriodSpec("months", 12, null, null),
+            AnalysisDataRoute.GeneratedSql,
+            null,
+            [],
+            ["public.not_in_catalog"]));
+        var model = new QwenAnalysisStageModel(client);
+
+        var error = await ThrowsHarness(() => model.PlanAsync(PlanningInputWithAllowlists(), CancellationToken.None));
+
+        Check.Equal("invalid_relation_hint", error.Error.Code);
     }
 
     public static async Task InvalidSqlDraftIsRejectedImmediately()
@@ -181,6 +214,14 @@ public static class StageModelTests
 
         Check.Equal("invalid_sql", error.Error.Code);
     }
+
+    private static PlanningInput PlanningInputWithAllowlists() => new(
+        "Question",
+        DateTimeOffset.Parse("2026-09-20T12:00:00+04:00"),
+        [],
+        [new MetricSummary("generic_query", "Query", null),
+         new MetricSummary("execution_discipline", "Discipline", "execution_discipline")],
+        [new PlanningRelationSummary("public.sungero_wf_task", "Tasks", "Task cards")]);
 
     private static SqlGenerationInput SqlInput() => new(
         "Покажи задачи",

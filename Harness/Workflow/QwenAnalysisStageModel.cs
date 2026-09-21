@@ -23,7 +23,8 @@ public sealed class QwenAnalysisStageModel : IAnalysisStageModel
         EnsureValid(WorkflowContractValidator.ValidatePlan(
             plan,
             input.AsOf,
-            DashboardMetrics(input.Metrics)));
+            input.Metrics,
+            input.Relations));
         return plan;
     }
 
@@ -60,17 +61,6 @@ public sealed class QwenAnalysisStageModel : IAnalysisStageModel
         ArgumentNullException.ThrowIfNull(input);
         return _client.CompleteAsync<ReportDraft>(
             WorkflowPrompts.ReportRepair, input, 1600, ct);
-    }
-
-    private static IReadOnlySet<string> DashboardMetrics(MetricSummary[] metrics)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var metric in metrics ?? Array.Empty<MetricSummary>())
-        {
-            if (!string.IsNullOrWhiteSpace(metric?.DashboardMetric))
-                names.Add(metric.DashboardMetric);
-        }
-        return names;
     }
 
     private static SqlGenerationInput ProjectSqlInput(SqlGenerationInput input)

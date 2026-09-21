@@ -18,18 +18,38 @@ public static class WorkflowContractValidator
     public static ValidationResult ValidatePlan(
         AnalysisPlan plan,
         DateTimeOffset asOf,
-        IReadOnlySet<string> dashboardMetrics)
+        MetricSummary[] metrics,
+        PlanningRelationSummary[] relations)
     {
         var errors = new List<HarnessError>();
         if (plan is null)
             return Invalid("invalid_plan", "План аналитики обязателен.");
 
+        var metricIds = new HashSet<string>(StringComparer.Ordinal);
+        var dashboardMetrics = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var metric in metrics ?? Array.Empty<MetricSummary>())
+        {
+            if (!string.IsNullOrWhiteSpace(metric?.MetricId))
+                metricIds.Add(metric.MetricId);
+            if (!string.IsNullOrWhiteSpace(metric?.DashboardMetric))
+                dashboardMetrics.Add(metric.DashboardMetric);
+        }
+
+        var relationNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var relation in relations ?? Array.Empty<PlanningRelationSummary>())
+        {
+            if (!string.IsNullOrWhiteSpace(relation?.Name))
+                relationNames.Add(relation.Name);
+        }
+
         if (string.IsNullOrWhiteSpace(plan.MetricId))
             Add(errors, "invalid_metric_id", "Идентификатор метрики обязателен.");
+        else if (!metricIds.Contains(plan.MetricId))
+            Add(errors, "invalid_metric_id", "Идентификатор метрики должен совпадать с metrics[].metricId.");
 
         ValidatePeriod(plan.Period, asOf, errors);
         ValidateEmployeeMentions(plan.EmployeeMentions, errors);
-        ValidateRelationHints(plan.RelationHints, errors);
+        ValidateRelationHints(plan.RelationHints, relationNames, errors);
         ValidateRoute(plan, dashboardMetrics, errors);
 
         return new ValidationResult(errors.Count == 0, errors.ToArray());
@@ -112,6 +132,7 @@ public static class WorkflowContractValidator
 
     private static void ValidateRelationHints(
         ImmutableArray<string> relationHints,
+        IReadOnlySet<string> allowedRelations,
         List<HarnessError> errors)
     {
         if (relationHints.IsDefault)
@@ -125,6 +146,8 @@ public static class WorkflowContractValidator
         {
             if (string.IsNullOrWhiteSpace(hint) || !RelationHintPattern.IsMatch(hint))
                 Add(errors, "invalid_relation_hint", "Подсказка отношения должна иметь вид schema.table.");
+            else if (!allowedRelations.Contains(hint))
+                Add(errors, "invalid_relation_hint", "Подсказка отношения должна совпадать с relations[].name.");
         }
     }
 

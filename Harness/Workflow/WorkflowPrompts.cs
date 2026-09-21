@@ -31,11 +31,12 @@ public static class WorkflowPrompts
         report must contain exactly title, interpretation, blocks, facts, textTemplates, and commentary.
         Copy interpretation from the input interpretation object. Its schema is "metricId":string, "label":string, "unit":string, "from":string|null, "to":string|null, "dateField":string|null. interpretation is never a sentence.
         The blocks schema is "kind":"table"|"bars"|"line"|"shares"|"kpi", "resultId":string, "columns":string[], "equalsFilter":object|null, "limit":integer|null. Use kind, not type. resultId must equal a supplied results[].resultId.
+        blocks[].kind and blocks[].columns must match a supplied results[] entry: use that result's resultId and column names; do not invent a line when the first column is not a date-typed result column.
         The facts schema is "id":string, "operation":"cell"|"sum"|"difference"|"ratio", "inputs":[{"resultId":string,"row":integer,"column":string}]. Do not add label, value, unit, or source. Do not put computed numbers in facts.
         blocks, facts, and textTemplates are always JSON arrays, including when empty.
         The input fields are question, interpretation, and results. Use only supplied resultId values, columns, row data, rowCount, and truncation metadata.
         Server validation is authoritative. Do not put literal numbers in title, commentary, or textTemplates; every numeric statement must use a {{factId}} placeholder backed by a fact.
-        Valid example: {"report":{"title":"Исполнительская дисциплина","interpretation":{"metricId":"execution_discipline","label":"Дисциплина","unit":"процент","from":null,"to":null,"dateField":null},"blocks":[{"kind":"line","resultId":"r1","columns":["month","value"],"equalsFilter":null,"limit":null}],"facts":[{"id":"total","operation":"cell","inputs":[{"resultId":"r1","row":0,"column":"value"}]}],"textTemplates":["Итог {{total}}"],"commentary":null}}
+        Valid example: {"report":{"title":"Исполнительская дисциплина","interpretation":{"metricId":"execution_discipline","label":"Дисциплина","unit":"процент","from":null,"to":null,"dateField":null},"blocks":[{"kind":"table","resultId":"r1","columns":["employee","count"],"equalsFilter":null,"limit":null}],"facts":[{"id":"total","operation":"cell","inputs":[{"resultId":"r1","row":0,"column":"count"}]}],"textTemplates":["Итог {{total}}"],"commentary":null}}
         Do not request or infer credentials, connection strings, provider messages, or infrastructure details.
         """;
 
@@ -45,11 +46,12 @@ public static class WorkflowPrompts
         report must contain exactly title, interpretation, blocks, facts, textTemplates, and commentary.
         Copy interpretation from the original input interpretation object. Its schema is "metricId":string, "label":string, "unit":string, "from":string|null, "to":string|null, "dateField":string|null. interpretation is never a sentence.
         The blocks schema is "kind":"table"|"bars"|"line"|"shares"|"kpi", "resultId":string, "columns":string[], "equalsFilter":object|null, "limit":integer|null. Use kind, not type. resultId must equal a supplied results[].resultId.
+        blocks[].kind and blocks[].columns must match a supplied results[] entry: use that result's resultId and column names; do not invent a line when the first column is not a date-typed result column.
         The facts schema is "id":string, "operation":"cell"|"sum"|"difference"|"ratio", "inputs":[{"resultId":string,"row":integer,"column":string}]. Do not add label, value, unit, or source. Do not put computed numbers in facts.
         blocks, facts, and textTemplates are always JSON arrays, including when empty.
         The input fields are original, rejected, and errors. Correct the rejected report using only original result manifests and structured server validation errors.
         Server validation is authoritative. Do not put literal numbers in title, commentary, or textTemplates; every numeric statement must use a {{factId}} placeholder backed by a fact.
-        Valid example: {"report":{"title":"Исполнительская дисциплина","interpretation":{"metricId":"execution_discipline","label":"Дисциплина","unit":"процент","from":null,"to":null,"dateField":null},"blocks":[{"kind":"line","resultId":"r1","columns":["month","value"],"equalsFilter":null,"limit":null}],"facts":[{"id":"total","operation":"cell","inputs":[{"resultId":"r1","row":0,"column":"value"}]}],"textTemplates":["Итог {{total}}"],"commentary":null}}
+        Valid example: {"report":{"title":"Исполнительская дисциплина","interpretation":{"metricId":"execution_discipline","label":"Дисциплина","unit":"процент","from":null,"to":null,"dateField":null},"blocks":[{"kind":"table","resultId":"r1","columns":["employee","count"],"equalsFilter":null,"limit":null}],"facts":[{"id":"total","operation":"cell","inputs":[{"resultId":"r1","row":0,"column":"count"}]}],"textTemplates":["Итог {{total}}"],"commentary":null}}
         Do not request or infer credentials, connection strings, provider messages, or infrastructure details.
         """;
 }

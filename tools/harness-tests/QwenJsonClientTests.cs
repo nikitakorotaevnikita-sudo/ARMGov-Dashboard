@@ -184,18 +184,20 @@ public static class QwenJsonClientTests
     public static async Task DeserializesPinnedReportDraftExample()
     {
         const string example = """
-            {"report":{"title":"Исполнительская дисциплина","interpretation":{"metricId":"execution_discipline","label":"Дисциплина","unit":"процент","from":null,"to":null,"dateField":null},"blocks":[{"kind":"line","resultId":"r1","columns":["month","value"],"equalsFilter":null,"limit":null}],"facts":[{"id":"total","operation":"cell","inputs":[{"resultId":"r1","row":0,"column":"value"}]}],"textTemplates":["Итог {{total}}"],"commentary":null}}
+            {"report":{"title":"Исполнительская дисциплина","interpretation":{"metricId":"execution_discipline","label":"Дисциплина","unit":"процент","from":null,"to":null,"dateField":null},"blocks":[{"kind":"table","resultId":"r1","columns":["employee","count"],"equalsFilter":null,"limit":null}],"facts":[{"id":"total","operation":"cell","inputs":[{"resultId":"r1","row":0,"column":"count"}]}],"textTemplates":["Итог {{total}}"],"commentary":null}}
             """;
 
         var draft = await Client(RespondingWith(example))
             .CompleteAsync<ReportDraft>("system", new { question = "q" }, 1600, CancellationToken.None);
 
         Check.Equal("r1", draft.Report.Blocks[0].ResultId);
-        Check.Equal("line", draft.Report.Blocks[0].Kind);
+        Check.Equal("table", draft.Report.Blocks[0].Kind);
+        Check.Equal("employee", draft.Report.Blocks[0].Columns[0]);
+        Check.Equal("count", draft.Report.Blocks[0].Columns[1]);
         Check.Equal("total", draft.Report.Facts[0].Id);
         Check.Equal("cell", draft.Report.Facts[0].Operation);
         Check.Equal(0, draft.Report.Facts[0].Inputs[0].Row);
-        Check.Equal("value", draft.Report.Facts[0].Inputs[0].Column);
+        Check.Equal("count", draft.Report.Facts[0].Inputs[0].Column);
     }
 
     private static QwenJsonClient Client(CaptureHandler handler) =>

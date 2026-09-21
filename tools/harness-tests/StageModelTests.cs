@@ -126,7 +126,11 @@ public static class StageModelTests
         Check.True(client.SystemPrompt.Contains("\"kind\":\"table\"|\"bars\"|\"line\"|\"shares\"|\"kpi\"", StringComparison.Ordinal));
         Check.True(client.SystemPrompt.Contains("\"operation\":\"cell\"|\"sum\"|\"difference\"|\"ratio\"", StringComparison.Ordinal));
         Check.True(client.SystemPrompt.Contains(
-            "{\"report\":{\"title\":\"Исполнительская дисциплина\",\"interpretation\":{\"metricId\":\"execution_discipline\",\"label\":\"Дисциплина\",\"unit\":\"процент\",\"from\":null,\"to\":null,\"dateField\":null},\"blocks\":[{\"kind\":\"line\",\"resultId\":\"r1\",\"columns\":[\"month\",\"value\"],\"equalsFilter\":null,\"limit\":null}],\"facts\":[{\"id\":\"total\",\"operation\":\"cell\",\"inputs\":[{\"resultId\":\"r1\",\"row\":0,\"column\":\"value\"}]}],\"textTemplates\":[\"Итог {{total}}\"],\"commentary\":null}}",
+            "blocks[].kind and blocks[].columns must match a supplied results[] entry: use that result's resultId and column names; do not invent a line when the first column is not a date-typed result column.",
+            StringComparison.Ordinal));
+        Check.True(!client.SystemPrompt.Contains("\"columns\":[\"month\",\"value\"]", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains(
+            "{\"report\":{\"title\":\"Исполнительская дисциплина\",\"interpretation\":{\"metricId\":\"execution_discipline\",\"label\":\"Дисциплина\",\"unit\":\"процент\",\"from\":null,\"to\":null,\"dateField\":null},\"blocks\":[{\"kind\":\"table\",\"resultId\":\"r1\",\"columns\":[\"employee\",\"count\"],\"equalsFilter\":null,\"limit\":null}],\"facts\":[{\"id\":\"total\",\"operation\":\"cell\",\"inputs\":[{\"resultId\":\"r1\",\"row\":0,\"column\":\"count\"}]}],\"textTemplates\":[\"Итог {{total}}\"],\"commentary\":null}}",
             StringComparison.Ordinal));
         var json = JsonSerializer.Serialize(client.Input, HarnessJson.Options);
         Check.True(json.Contains("r7", StringComparison.Ordinal));
@@ -152,7 +156,11 @@ public static class StageModelTests
 
         Check.Equal(1600, client.MaxTokens);
         Check.True(client.SystemPrompt.Contains(
-            "{\"report\":{\"title\":\"Исполнительская дисциплина\",\"interpretation\":{\"metricId\":\"execution_discipline\",\"label\":\"Дисциплина\",\"unit\":\"процент\",\"from\":null,\"to\":null,\"dateField\":null},\"blocks\":[{\"kind\":\"line\",\"resultId\":\"r1\",\"columns\":[\"month\",\"value\"],\"equalsFilter\":null,\"limit\":null}],\"facts\":[{\"id\":\"total\",\"operation\":\"cell\",\"inputs\":[{\"resultId\":\"r1\",\"row\":0,\"column\":\"value\"}]}],\"textTemplates\":[\"Итог {{total}}\"],\"commentary\":null}}",
+            "blocks[].kind and blocks[].columns must match a supplied results[] entry: use that result's resultId and column names; do not invent a line when the first column is not a date-typed result column.",
+            StringComparison.Ordinal));
+        Check.True(!client.SystemPrompt.Contains("\"columns\":[\"month\",\"value\"]", StringComparison.Ordinal));
+        Check.True(client.SystemPrompt.Contains(
+            "{\"report\":{\"title\":\"Исполнительская дисциплина\",\"interpretation\":{\"metricId\":\"execution_discipline\",\"label\":\"Дисциплина\",\"unit\":\"процент\",\"from\":null,\"to\":null,\"dateField\":null},\"blocks\":[{\"kind\":\"table\",\"resultId\":\"r1\",\"columns\":[\"employee\",\"count\"],\"equalsFilter\":null,\"limit\":null}],\"facts\":[{\"id\":\"total\",\"operation\":\"cell\",\"inputs\":[{\"resultId\":\"r1\",\"row\":0,\"column\":\"count\"}]}],\"textTemplates\":[\"Итог {{total}}\"],\"commentary\":null}}",
             StringComparison.Ordinal));
         var json = JsonSerializer.Serialize(client.Input, HarnessJson.Options);
         Check.True(json.Contains("Bad 99", StringComparison.Ordinal));

@@ -170,22 +170,50 @@ check('проценты в обрезанных долях считаются о
       manySharesHtml.indexOf('6.5%') >= 0 && manySharesHtml.indexOf('7.3%') < 0,
       manySharesHtml.slice(0, 300));
 
-// Финальное ревью, п.4: длинные подписи категорий не обрезаются в SVG и
-// накладываются друг на друга. svgBars не трогаем (пять экранов на нём) —
-// обрезаем до передачи в него. В svgGroupedBars, который можно менять,
-// обрезаем и кладём полное имя в <title> (видно при наведении).
+// Подписи категорий: ФИО на соседних столбиках больше не режем по 13 символам
+// и не рисуем в один ряд — иначе «Иванов Иван» наезжает на «Захаров Андрей».
+function catYs(html){
+  var ys=[], re=/data-role="cat"[^>]*\sy="([0-9.]+)"/g, m;
+  while((m=re.exec(html))) ys.push(Number(m[1]));
+  return ys;
+}
+function catTexts(html){
+  var out=[], re=/data-role="cat"[^>]*>([^<]+)/g, m;
+  while((m=re.exec(html))) out.push(m[1]);
+  return out;
+}
+function uniq(a){ return a.filter(function(v,i){ return a.indexOf(v)===i; }); }
+var fio = ds([['имя', 'text'], ['просрочено', 'number']],
+             [['Иванов Иван', 100], ['Захаров Андрей', 57], ['Андронцева Наталья', 52],
+              ['Мокрушин Иван', 44], ['Концева Вера', 25]]);
+var fioHtml = renderView(fio, 'bars');
+check('короткие ФИО на столбиках видны целиком, без обрезки по 13 символам',
+      fioHtml.indexOf('Иванов Иван') >= 0 && fioHtml.indexOf('Захаров Андрей') >= 0 &&
+      fioHtml.indexOf('Мокрушин Иван') >= 0 && fioHtml.indexOf('Концева Вера') >= 0,
+      fioHtml.slice(-500));
+check('соседние длинные подписи столбиков разносятся на два ряда',
+      uniq(catYs(fioHtml)).length >= 2 && catYs(fioHtml).length === 5,
+      JSON.stringify(catYs(fioHtml)));
+var shortBars = ds([['НОР', 'text'], ['просрочено', 'number']],
+                   [['ДИТ', 10], ['ДФ', 20], ['Минфин', 7]]);
+check('короткие подписи столбиков остаются в одном ряду',
+      uniq(catYs(renderView(shortBars, 'bars'))).length === 1,
+      JSON.stringify(catYs(renderView(shortBars, 'bars'))));
+
 var longName = 'Департамент информационных технологий';
 var longOne = ds([['НОР', 'text'], ['просрочено', 'number']], [[longName, 10], ['ДФ', 20]]);
 var longOneHtml = renderView(longOne, 'bars');
-check('длинная подпись в столбиках (svgBars) обрезана многоточием',
-      longOneHtml.indexOf(longName) < 0 && longOneHtml.indexOf('…') >= 0,
-      longOneHtml.slice(-300));
+check('очень длинная подпись в столбиках обрезана, полное имя — в title',
+      catTexts(longOneHtml).some(function(t){ return t.indexOf('…') >= 0 && t !== longName; }) &&
+      longOneHtml.indexOf('<title>' + longName + '</title>') >= 0,
+      JSON.stringify(catTexts(longOneHtml)) + ' ' + longOneHtml.slice(-400));
 var longTwo = ds([['НОР', 'text'], ['в работе', 'number'], ['просрочено', 'number']],
                  [[longName, 10, 5], ['ДФ', 20, 7]]);
 var longTwoHtml = renderView(longTwo, 'bars');
-check('длинная подпись в сгруппированных столбиках обрезана, полное имя — в <title>',
+check('длинная подпись в сгруппированных столбиках обрезана, полное имя — в title',
       longTwoHtml.indexOf('<title>' + longName + '</title>') >= 0 &&
-      longTwoHtml.indexOf('>Департамент …<') >= 0,
+      longTwoHtml.indexOf('…') >= 0 &&
+      uniq(catYs(longTwoHtml)).length >= 2,
       longTwoHtml.slice(-400));
 
 // Финальное ревью, п.6: заголовки колонок — латиница на экране губернатора

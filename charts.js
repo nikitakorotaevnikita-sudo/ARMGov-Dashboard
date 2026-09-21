@@ -69,12 +69,15 @@ function svgSpark(data,h){
 }
 function svgBars(data,h,color){
   h=h||180; if(!data||!data.length)return '<div class="sub">нет данных</div>';
-  var pt=18,pb=34,pl=8,pr=8,ch=h-pt-pb,n=data.length,W=Math.max(n*64,280);
+  var pt=18,pl=8,pr=8,n=data.length,W=Math.max(n*64,280);
   var mx=Math.max(1,Math.max.apply(null,data.map(function(d){return d.value;})));
   var bw=(W-pl-pr)/n,bw2=Math.min(bw-16,46);
+  var axis=catAxis(data.map(function(d){return d.label;}),bw,h);
+  var pb=axis.pb,ch=h-pt-pb;
   var body=data.map(function(d,i){
     var cx=pl+i*bw+bw/2,x=cx-bw2/2,bh=d.value/mx*ch,y=pt+ch-bh;
-    return rect(x,y,bw2,bh,color||'var(--accent)',3)+txt(cx,y-5,d.value,'middle',11,'var(--text)')+txt(cx,h-14,d.label,'middle',10,'var(--subtle)');
+    return rect(x,y,bw2,bh,color||'var(--accent)',3)+txt(cx,y-5,d.value,'middle',11,'var(--text)')+
+           catLabel(cx,axis.y(i),d.label,axis.maxPx);
   }).join('');
   return '<svg viewBox="0 0 '+W+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="xMidYMid meet" style="max-width:100%;display:block">'+rect(pl,pt+ch,W-pl-pr,1,'var(--border)')+body+'</svg>';
 }
@@ -87,22 +90,33 @@ var CHART_TOP_N = 20;
 // Палитра серий — только токены из tokens.css, новых цветов не вводим.
 var CHART_PAL = ['var(--accent)','var(--green)','var(--amber)','var(--red)','var(--blue)','var(--subtle)'];
 
-// Длинные подписи категорий (реальные названия подразделений) не переносятся
-// в SVG и накладываются друг на друга — в renderShares это решено через
-// text-overflow в HTML, а в SVG-видах подписи рисуются как есть. Обрезаем до
-// показа; полное имя не теряется — где рисуем <text> сами (svgGroupedBars),
-// кладём его в <title> (видно при наведении).
-var LABEL_MAX = 13;
-function truncLabel(s){
-  s=String(s==null?'':s);
-  return s.length>LABEL_MAX ? s.slice(0,LABEL_MAX-1)+'…' : s;
+// Подписи категорий в SVG не переносятся. Фиксированная обрезка по 13 символам
+// не спасает ФИО: «Иванов Иван» проходит порог и наезжает на соседа. Считаем
+// ширину по числу знаков, соседние длинные подписи разносятся на два ряда,
+// в ряд кладём только то, что реально влезает; полное имя — в <title>.
+var CAT_FS = 10;
+var CAT_EM = 0.78;
+function estTextW(s,sz){ return String(s==null?'':s).length*(sz||CAT_FS)*CAT_EM; }
+function fitLabel(s,maxPx,sz){
+  s=String(s==null?'':s); sz=sz||CAT_FS;
+  if(!(maxPx>0)||estTextW(s,sz)<=maxPx) return s;
+  var n=Math.max(1,Math.floor(maxPx/(sz*CAT_EM))-1);
+  return s.slice(0,n)+'…';
 }
-// Как txt(), но для подписей категорий: показывает обрезанный текст и несёт
-// полное имя в <title> для наведения, если оно вообще было обрезано.
-function txtLabel(x,y,full,a,sz,f){
-  var short=truncLabel(full);
-  return '<text x="'+x+'" y="'+y+'" text-anchor="'+(a||'middle')+'" font-size="'+(sz||11)+'" fill="'+(f||'var(--muted)')+'" font-family="var(--font)">'+
-    esc(short)+(short!==String(full)?'<title>'+esc(full)+'</title>':'')+'</text>';
+function catAxis(labels,slot,h){
+  var overlap=labels.some(function(lb){return estTextW(lb,CAT_FS)>slot-6;});
+  var stagger=overlap&&labels.length>1;
+  return {
+    pb:stagger?52:34,
+    maxPx:stagger?slot*2-12:slot-8,
+    y:function(i){return stagger?(i%2?h-12:h-28):h-14;}
+  };
+}
+function catLabel(x,y,full,maxPx){
+  var short=fitLabel(full,maxPx,CAT_FS);
+  return '<text data-role="cat" x="'+x+'" y="'+y+'" text-anchor="middle" font-size="'+CAT_FS+
+    '" fill="var(--subtle)" font-family="var(--font)">'+esc(short)+
+    (short!==String(full)?'<title>'+esc(full)+'</title>':'')+'</text>';
 }
 
 function viewTitle(v){
@@ -213,11 +227,10 @@ function renderBars(ds){
 
   if(R.nums.length===1){
     var mi=R.nums[0];
-    // svgBars не трогаем (на нём пять существующих экранов) — обрезаем подпись
-    // до передачи в него. Полное имя тут негде показать: примитив рисует текст
-    // без <title>, а менять его ради нового вида рискованно для работающего.
+    // Полные подписи — внутрь svgBars: там соседние имена разводятся по рядам
+    // и обрезаются по ширине слота, а не по фиксированным 13 символам.
     return svgBars(rows.map(function(r){
-      return {label:truncLabel(String(r[li])),value:Number(r[mi])||0};}),260)+note;
+      return {label:String(r[li]),value:Number(r[mi])||0};}),260)+note;
   }
   var labels=rows.map(function(r){return String(r[li]);});
   var series=R.nums.map(function(ci){
@@ -231,10 +244,11 @@ function renderBars(ds){
 // «просрочено») частями целого не являются, и стопка соврала бы про сумму.
 function svgGroupedBars(labels,series,h){
   h=h||260; if(!labels.length||!series.length)return '<div class="sub">нет данных</div>';
-  var pt=18,pb=34,pl=8,pr=8,ch=h-pt-pb,n=labels.length,k=series.length;
+  var pt=18,pl=8,pr=8,n=labels.length,k=series.length;
   var W=Math.max(n*(26*k+34),300);
   var mx=1; series.forEach(function(se){se.values.forEach(function(v){if(v>mx)mx=v;});});
   var gw=(W-pl-pr)/n, bw=Math.max(6,Math.min((gw-16)/k,26));
+  var axis=catAxis(labels,gw,h), pb=axis.pb, ch=h-pt-pb;
   var body=labels.map(function(lb,i){
     var x0=pl+i*gw+(gw-bw*k)/2, s='';
     series.forEach(function(se,j){
@@ -242,7 +256,7 @@ function svgGroupedBars(labels,series,h){
       s+=rect(x+1,y,bw-2,bh,CHART_PAL[j%CHART_PAL.length],2)+
          txt(x+bw/2,y-4,v,'middle',10,'var(--text)');
     });
-    return s+txtLabel(pl+i*gw+gw/2,h-14,lb,'middle',10,'var(--subtle)');
+    return s+catLabel(pl+i*gw+gw/2,axis.y(i),lb,axis.maxPx);
   }).join('');
   var leg=series.map(function(se,j){
     return '<span class="muted" style="font-size:12px"><span style="display:inline-block;width:10px;'+

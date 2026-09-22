@@ -135,8 +135,8 @@ sequenceDiagram
       DB-->>A: справка по таблице
     else action = sql
       A->>V: SqlCheck → effective
-      V->>DB: BEGIN READ ONLY; statement_timeout 10s
-      DB-->>A: ≤200 строк
+      V->>DB: BEGIN READ ONLY, statement_timeout 10s
+      DB-->>A: не больше 200 строк
     else action = answer
       A-->>U: { reply, steps, elapsedMs, truncated }
     end

@@ -9,31 +9,32 @@
    ========================================================================= */
 
 :root {
-  /* ─── Brand / Accent ──────────────────────────────────────────────────── */
-  --accent:        #0B5FAE;   /* основной — кнопки, ссылки, фокус */
-  --accent-hover:  #1B72C4;
-  --accent-soft:   #E6F0FB;   /* фон активной nav, soft-кнопки */
-  --accent-strong: #084B89;
+  /* ─── Brand / Accent — дневная палитра обложки RX (mvp-prod) ────────── */
+  --accent:        #13406d;   /* кнопки, как --create */
+  --accent-hover:  #0f3355;
+  --accent-soft:   #f2f7fe;   /* фон активной nav */
+  --accent-strong: #0f3355;
+  --link:          #121416;   /* ссылки и активный пункт: тот же чёрный, что и текст */
 
   /* ─── Surfaces ────────────────────────────────────────────────────────── */
-  --bg:            #F4F4F4;   /* фон страницы */
-  --surface:       #FFFFFF;   /* фон карточек */
-  --surface-2:     #F8F8F8;   /* вложенные блоки, dropzone */
-  --border:        #E0E0E0;
-  --border-strong: #C8C8C8;
+  --bg:            #f4f4f4;   /* фон страницы */
+  --surface:       #ffffff;   /* фон карточек */
+  --surface-2:     #f4f4f4;   /* вложенные блоки, dropzone */
+  --border:        #dfe0e3;
+  --border-strong: #c2c2c2;
 
   /* ─── Text ────────────────────────────────────────────────────────────── */
-  --text:          #000E20;
-  --title:         #05184A;   /* h2/h3 крупные */
-  --navy:          #000E20;   /* uppercase section-headings */
-  --muted:         #625F6A;   /* подписи, hints */
-  --subtle:        #9C9BA8;   /* placeholders, dividers */
+  --text:          #121416;
+  --title:         #121416;   /* h2/h3 крупные */
+  --navy:          #121416;   /* uppercase section-headings */
+  --muted:         #727272;   /* подписи, hints */
+  --subtle:        #bdbdbd;   /* placeholders, dividers */
 
   /* ─── Status ──────────────────────────────────────────────────────────── */
-  --green:         #3AC436;   --green-soft:  #E6F8E6;
-  --red:           #D32F2F;   --red-soft:    #FBE6E6;
-  --amber:         #F5A623;   --amber-soft:  #FFF1D6;
-  --blue:          #3C65CC;   --blue-soft:   #EEF2FF;
+  --green:         #2e9f0c;   --green-soft:  #eaf6e4;
+  --red:           #ff3333;   --red-soft:    #ffe7e7;
+  --amber:         #ff8600;   --amber-soft:  #fff4e6;
+  --blue:          #187fa9;   --blue-soft:   #f2f7fe;
 
   /* ─── Chrome ──────────────────────────────────────────────────────────── */
   --header-bg:     #FFFFFF;
@@ -43,10 +44,10 @@
 
   --sidebar-bg:          #FFFFFF;
   --sidebar-text:        #625F6A;
-  --sidebar-text-active: var(--accent);
+  --sidebar-text-active: var(--link);
   --sidebar-active-bg:   var(--accent-soft);
   --sidebar-border:      var(--border);
-  --sidebar-rail:        var(--accent);
+  --sidebar-rail:        var(--link);
 
   /* ─── Geometry ────────────────────────────────────────────────────────── */
   --radius:        10px;      /* карточки, dropdowns */
@@ -59,10 +60,10 @@
   --shadow-hover:  0 8px 24px rgba(1, 12, 28, .10);
 
   /* ─── Type ───────────────────────────────────────────────────────────── */
-  --font:          'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font:          'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, 'Helvetica Neue', Arial, sans-serif;
   --font-mono:     'JetBrains Mono', Consolas, 'Courier New', monospace;
                    /* mono НЕ использовать для кодов классификатора, ID, IP —
-                      они идут Inter + font-variant-numeric: tabular-nums.   */
+                      они идут основным шрифтом + font-variant-numeric: tabular-nums. */
 
   /* ─── Layout ─────────────────────────────────────────────────────────── */
   --header-h:           56px;

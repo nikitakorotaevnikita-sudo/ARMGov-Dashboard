@@ -3081,6 +3081,13 @@ partial class Program
 "  Строки при этом не теряются — таблица покажет все, а подпись скажет «10 из 53»;\n" +
 "— view: пожелание вида (bars | line | shares | kpi | table). Это ПОЖЕЛАНИЕ:\n" +
 "  окончательный вид выбирает интерфейс по типам колонок.\n" +
+"— keep: если итоговый текст про ПОДМНОЖЕСТВО строк SQL (конкретные ФИО или\n" +
+"  категории из более широкой выборки) — скопируй имена в chart.keep ТОЧНО как\n" +
+"  в столбце результата, в том порядке, в котором о них говоришь. Числа в keep\n" +
+"  не пиши: код возьмёт их из строк SQL, в том числе из предыдущих запросов\n" +
+"  этого прогона. Если текст — про весь результат (топ-10, рейтинг) — keep не\n" +
+"  заполняй. Не пиши имена, которых не было ни в одной таблице шагов: график\n" +
+"  их не выдумает. keep действует только при from=sql.\n" +
 "Значения ты НЕ переписываешь — их подставит код из фактического результата.\n" +
 "РАЗБИВКА ПО ПРОЦЕССАМ. У инструмента leaders, кроме итоговых inwork и overdue (это\n" +
 "сумма по всем процессам), есть плоские колонки на каждый процесс: overdue_poruchenia,\n" +
@@ -3206,6 +3213,7 @@ partial class Program
         object lastToolResult = null; string lastToolName = null;
         List<string> lastSqlCols = null, lastSqlTypes = null; List<object[]> lastSqlRows = null;
         bool lastSqlTruncated = false;
+        var sqlResults = new List<SqlQueryResult>();
         for (int n = 1; n <= AgentMaxSteps; n++)
         {
             if (sw.ElapsedMilliseconds > AgentBudgetMs) { truncated = true; break; }
@@ -3271,6 +3279,8 @@ partial class Program
                 // нужно и после блока разбора chart, чтобы решить про запасной путь ниже.
                 bool chartSpecified = false;
                 string chartFrom = null;
+                string[] keepRequested = null;
+                string[] keepMissing = null;
                 try
                 {
                     if (el.TryGetProperty("chart", out var ch) && ch.ValueKind == JsonValueKind.Object)
@@ -3289,6 +3299,12 @@ partial class Program
                         var colNames = ch.TryGetProperty("columns", out var cc) && cc.ValueKind == JsonValueKind.Array
                             ? cc.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()).ToArray()
                             : Array.Empty<string>();
+                        if (ch.TryGetProperty("keep", out var kv) && kv.ValueKind == JsonValueKind.Array)
+                            keepRequested = kv.EnumerateArray()
+                                .Where(x => x.ValueKind == JsonValueKind.String)
+                                .Select(x => x.GetString())
+                                .Where(s => !string.IsNullOrWhiteSpace(s))
+                                .ToArray();
 
                         // Хвост "tool:<имя>" обязан совпасть с ФАКТИЧЕСКИ последним вызванным
                         // инструментом: если за прогон модель дёрнула несколько инструментов,
@@ -3312,9 +3328,21 @@ partial class Program
                             // В предзагрузке лежит { overview, processes } — путь начинается с этих имён.
                             dataset = DatasetFromJson(doc2.RootElement, arr, colNames, "preload:" + arr, view, lim);
                         }
-                        else if (from == "sql" && lastSqlRows != null)
+                        else if (from == "sql")
                         {
-                            dataset = DatasetFromSqlResult(lastSqlCols, lastSqlTypes, lastSqlRows, lastSqlTruncated, view, lim);
+                            // keep: модель назвала подписи, числа — из всех успешных SQL
+                            // этого прогона. Пустой keep / нет поля — весь последний запрос.
+                            if (keepRequested != null && keepRequested.Length > 0)
+                            {
+                                var kept = SqlChartKeep.Build(sqlResults, colNames, keepRequested, view, lim);
+                                dataset = kept.Dataset;
+                                keepMissing = kept.KeepMissing;
+                                if (kept.DatasetError != null) datasetError = kept.DatasetError;
+                            }
+                            else if (lastSqlRows != null)
+                            {
+                                dataset = DatasetFromSqlResult(lastSqlCols, lastSqlTypes, lastSqlRows, lastSqlTruncated, view, lim);
+                            }
                         }
                     }
                     // Запасного пути здесь больше нет — и это не упрощение, а починка.
@@ -3328,9 +3356,9 @@ partial class Program
                     // «цифра на графике совпадает с цифрой в тексте» ломается именно так.
                     // Теперь: нет chart — нет графика. Экран к этому готов ("для этого
                     // вопроса графика нет"), а неправильная картинка хуже отсутствующей.
-                    if (dataset == null && chartSpecified && chartFrom != "sql")
+                    if (dataset == null && string.IsNullOrEmpty(datasetError) && chartSpecified && chartFrom != "sql")
                         datasetError = "chart.from=\"" + chartFrom + "\" указан, но датасет не собрался (проверь имя массива и совпадение tool: с реально вызванным инструментом)";
-                    else if (dataset == null && !chartSpecified && lastSqlRows != null)
+                    else if (dataset == null && string.IsNullOrEmpty(datasetError) && !chartSpecified && lastSqlRows != null)
                         datasetError = "модель не заполнила chart, хотя SQL-шаг выполнялся: график не строим, чтобы не показать результат постороннего запроса рядом с текстом про другие данные";
                 }
                 catch (Exception ex)
@@ -3345,6 +3373,7 @@ partial class Program
                 // По нему видно происхождение картинки, и на нём же стоит проверка smoke
                 // «график по SQL показан только по прямому указанию модели».
                 steps.Add(new { n, action, thought, chart = chartFrom, datasetError,
+                                keep = keepRequested, keepMissing,
                                 ms = (int)stepSw.ElapsedMilliseconds });
                 reply = text;
                 break;
@@ -3407,6 +3436,7 @@ partial class Program
                 {
                     var (cols, types, rows, ms, more) = SqlRun(eff, 50);
                     lastSqlCols = cols; lastSqlTypes = types; lastSqlRows = rows; lastSqlTruncated = more;
+                    sqlResults.Add(new SqlQueryResult { Cols = cols, Types = types, Rows = rows, Truncated = more });
                     msgs.Add(new { role = "user", content = "Результат запроса:\n" +
                         JsonSerializer.Serialize(new { cols, rows, truncated = more }) });
                     steps.Add(new { n, action, thought, sql = query, purpose = Str("purpose"),

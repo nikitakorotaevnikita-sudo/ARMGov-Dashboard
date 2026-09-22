@@ -879,9 +879,21 @@ else:
             # что попросила модель (null — не просила ничего).
             ans = [x for x in d.get("steps", []) if x.get("action") == "answer"]
             asked = ans[-1].get("chart") if ans else None
+            keep = ans[-1].get("keep") if ans else None
             agent_ok("график по SQL показан только по прямому указанию модели", d,
                      (ds.get("source") or "") != "sql" or asked == "sql",
                      "source=%s chart=%s" % (ds.get("source"), asked))
+            if keep:
+                agent_ok("keep в шаге answer — список строк", d,
+                         isinstance(keep, list) and all(isinstance(x, str) for x in keep),
+                         str(keep)[:120])
+                missing = ans[-1].get("keepMissing")
+                agent_ok("keepMissing — список или отсутствует", d,
+                         missing is None or isinstance(missing, list),
+                         str(missing)[:80])
+                agent_ok("при keep датасет не шире списка keep", d,
+                         len(ds_rows) <= len(keep),
+                         f"rows={len(ds_rows)} keep={len(keep)}")
             if len(preview) == 0:
                 # COUNT(*)-подобный запрос всегда возвращает одну строку, но модель могла
                 # выбрать другой запрос (например, группировку, давшую пустой результат) —
@@ -889,6 +901,11 @@ else:
                 # этом нельзя (требование п.7 — проверка не должна ничего утверждать молча).
                 AINOTE.append("регрессия датасет=факт: sql-шаг вернул 0 строк, сравнивать нечего")
                 print("  [ИИ?] регрессия датасет=факт: preview пуст — сравнение пропущено")
+            elif keep:
+                # keep собирает строки из ЛЮБЫХ успешных SQL шага, не только из последнего.
+                # Сверка с preview последнего запроса здесь ложно падала бы.
+                AINOTE.append("регрессия датасет=факт: keep задан, сверка с preview последнего SQL пропущена")
+                print("  [ИИ?] регрессия датасет=факт: keep — сверка с последним preview пропущена")
             else:
                 # preview в протоколе — первые 5 строк ТОГО ЖЕ SqlRun, что попал в датасет
                 # (Program.cs, ветка action=="sql": steps.Add(..., preview = rows.Take(5))).
